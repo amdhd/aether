@@ -30,6 +30,8 @@ jobs:
         run: ruff check .
 
       - name: Run tests
+        env:
+          ENCRYPTION_KEY: emM55ApyTqDYuS-DzU6XtvAoFagygTO6Apst62ENFZk=
         run: pytest -q
 
   frontend:

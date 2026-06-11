@@ -1,36 +1,37 @@
-from fastapi import APIRouter, Depends, HTTPException, status
-from sqlalchemy import or_, select
+from fastapi import APIRouter, Depends, Query, status
+from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.deps import get_current_user
+from app.api.deps import get_current_user, get_owned_or_404
 from app.db.session import get_db
 from app.models.note import Note
 from app.models.user import User
+from app.schemas.common import DEFAULT_PAGE_LIMIT, MAX_PAGE_LIMIT, Page
 from app.schemas.note import NoteCreate, NoteRead, NoteUpdate
 
 router = APIRouter(prefix="/notes", tags=["notes"])
 
 
 async def _get_owned_note(note_id: int, user: User, db: AsyncSession) -> Note:
-    note = await db.get(Note, note_id)
-    if note is None or note.user_id != user.id:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Note not found")
-    return note
+    return await get_owned_or_404(db, Note, note_id, user, "Note not found")
 
 
-@router.get("", response_model=list[NoteRead])
+@router.get("", response_model=Page[NoteRead])
 async def list_notes(
-    q: str | None = None,
+    q: str | None = Query(default=None, max_length=200),
+    limit: int = Query(default=DEFAULT_PAGE_LIMIT, ge=1, le=MAX_PAGE_LIMIT),
+    offset: int = Query(default=0, ge=0),
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
-) -> list[Note]:
-    stmt = select(Note).where(Note.user_id == current_user.id)
+) -> Page[NoteRead]:
+    base_stmt = select(Note).where(Note.user_id == current_user.id)
     if q:
         like = f"%{q}%"
-        stmt = stmt.where(or_(Note.title.ilike(like), Note.content.ilike(like)))
-    stmt = stmt.order_by(Note.updated_at.desc())
+        base_stmt = base_stmt.where(or_(Note.title.ilike(like), Note.content.ilike(like)))
+    total = await db.scalar(select(func.count()).select_from(base_stmt.subquery())) or 0
+    stmt = base_stmt.order_by(Note.updated_at.desc()).limit(limit).offset(offset)
     result = await db.scalars(stmt)
-    return list(result.all())
+    return Page[NoteRead](items=list(result.all()), total=total, limit=limit, offset=offset)
 
 
 @router.post("", response_model=NoteRead, status_code=status.HTTP_201_CREATED)

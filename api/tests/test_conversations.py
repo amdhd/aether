@@ -107,7 +107,7 @@ async def test_conversation_crud(client: AsyncClient, auth_headers: dict[str, st
 
     resp = await client.get("/api/v1/conversations", headers=auth_headers)
     assert resp.status_code == 200
-    assert len(resp.json()) == 1
+    assert len(resp.json()["items"]) == 1
 
     resp = await client.get(f"/api/v1/conversations/{conversation_id}", headers=auth_headers)
     assert resp.status_code == 200
@@ -324,7 +324,7 @@ async def test_chat_message_with_tool_call(
     assert "event: done" in body
 
     tasks_resp = await client.get("/api/v1/tasks", headers=auth_headers)
-    tasks = tasks_resp.json()
+    tasks = tasks_resp.json()["items"]
     assert len(tasks) == 1
     assert tasks[0]["title"] == "Buy milk"
 

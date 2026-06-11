@@ -5,6 +5,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import get_current_user
+from app.core.rate_limit import enforce_auth_rate_limit
 from app.core.security import (
     create_access_token,
     create_refresh_token,
@@ -20,7 +21,12 @@ from app.schemas.user import UserCreate, UserRead
 router = APIRouter(prefix="/auth", tags=["auth"])
 
 
-@router.post("/register", response_model=UserRead, status_code=status.HTTP_201_CREATED)
+@router.post(
+    "/register",
+    response_model=UserRead,
+    status_code=status.HTTP_201_CREATED,
+    dependencies=[Depends(enforce_auth_rate_limit("register"))],
+)
 async def register(user_in: UserCreate, db: AsyncSession = Depends(get_db)) -> User:
     existing = await db.scalar(select(User).where(User.email == user_in.email))
     if existing is not None:
@@ -37,7 +43,7 @@ async def register(user_in: UserCreate, db: AsyncSession = Depends(get_db)) -> U
     return user
 
 
-@router.post("/login", response_model=Token)
+@router.post("/login", response_model=Token, dependencies=[Depends(enforce_auth_rate_limit("login"))])
 async def login(
     form_data: OAuth2PasswordRequestForm = Depends(),
     db: AsyncSession = Depends(get_db),

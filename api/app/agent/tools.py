@@ -362,7 +362,8 @@ async def _list_notes(db: AsyncSession, user: User, args: dict[str, Any]) -> dic
 
 
 async def _search_notes(db: AsyncSession, user: User, args: dict[str, Any]) -> dict[str, Any]:
-    like = f"%{args['query']}%"
+    query = args["query"][:200]
+    like = f"%{query}%"
     stmt = (
         select(Note)
         .where(Note.user_id == user.id)

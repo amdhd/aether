@@ -12,13 +12,18 @@ import {
   streamChatMessage,
   updateConversation,
 } from '@/api/chat'
+import { ConfirmDialog } from '@/components/ConfirmDialog'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Skeleton } from '@/components/ui/skeleton'
 import { Textarea } from '@/components/ui/textarea'
+import { useCrudMutations } from '@/hooks/useCrudMutations'
 import { cn } from '@/lib/utils'
-import type { MessageRole, Persona } from '@/types'
+import type { Conversation, ConversationCreateInput, MessageRole, Persona } from '@/types'
+
+const CONVERSATIONS_PAGE_SIZE = 50
+const CONVERSATIONS_MAX_LIMIT = 100
 
 const PERSONA_LABELS: Record<Persona, string> = {
   productivity_coach: 'Productivity Coach',
@@ -87,14 +92,21 @@ export function ChatPage() {
   const [streamingReasoning, setStreamingReasoning] = useState('')
   const [streamingToolCalls, setStreamingToolCalls] = useState<string[]>([])
   const [errorMessage, setErrorMessage] = useState<string | null>(null)
+  const [conversationsLimit, setConversationsLimit] = useState(CONVERSATIONS_PAGE_SIZE)
+  const [deletingConversationId, setDeletingConversationId] = useState<number | null>(null)
   const scrollRef = useRef<HTMLDivElement>(null)
 
-  const { data: conversations, isLoading: conversationsLoading } = useQuery({
-    queryKey: ['conversations'],
-    queryFn: listConversations,
+  const { data: conversationsPage, isLoading: conversationsLoading } = useQuery({
+    queryKey: ['conversations', conversationsLimit],
+    queryFn: () => listConversations(conversationsLimit),
   })
+  const conversations = conversationsPage?.items ?? []
+  const canLoadMoreConversations =
+    conversationsPage !== undefined &&
+    conversations.length < conversationsPage.total &&
+    conversationsLimit < CONVERSATIONS_MAX_LIMIT
 
-  const activeId = selectedId ?? conversations?.[0]?.id ?? null
+  const activeId = selectedId ?? conversations[0]?.id ?? null
 
   const { data: conversation, isLoading: conversationLoading } = useQuery({
     queryKey: ['conversation', activeId],
@@ -102,22 +114,18 @@ export function ChatPage() {
     enabled: activeId !== null,
   })
 
-  const createMutation = useMutation({
-    mutationFn: () => createConversation(),
-    onSuccess: (created) => {
-      queryClient.invalidateQueries({ queryKey: ['conversations'] })
-      setSelectedId(created.id)
-    },
-  })
-
-  const deleteMutation = useMutation({
-    mutationFn: deleteConversation,
-    onSuccess: (_data, deletedId) => {
-      queryClient.invalidateQueries({ queryKey: ['conversations'] })
+  const { createMutation, deleteMutation } = useCrudMutations<Conversation, ConversationCreateInput>({
+    queryKey: ['conversations'],
+    create: createConversation,
+    update: updateConversation,
+    remove: deleteConversation,
+    onCreateSuccess: (created) => setSelectedId(created.id),
+    onDeleteSuccess: (deletedId) => {
       queryClient.removeQueries({ queryKey: ['conversation', deletedId] })
       if (activeId === deletedId) {
         setSelectedId(null)
       }
+      setDeletingConversationId(null)
     },
   })
 
@@ -134,9 +142,7 @@ export function ChatPage() {
   }, [conversation?.messages.length, streamingContent, pendingUserContent])
 
   const handleDelete = (id: number) => {
-    if (window.confirm('Delete this conversation?')) {
-      deleteMutation.mutate(id)
-    }
+    setDeletingConversationId(id)
   }
 
   const handleSend = async () => {
@@ -185,42 +191,54 @@ export function ChatPage() {
   return (
     <div className="flex h-[75vh] gap-4">
       <aside className="hidden w-64 flex-col gap-2 sm:flex">
-        <Button onClick={() => createMutation.mutate()} disabled={createMutation.isPending}>
+        <Button onClick={() => createMutation.mutate({})} disabled={createMutation.isPending}>
           <Plus className="h-4 w-4" />
           New chat
         </Button>
         <div className="flex-1 space-y-1 overflow-y-auto">
           {conversationsLoading ? (
             [...Array(3)].map((_, i) => <Skeleton key={i} className="h-10 w-full" />)
-          ) : (conversations ?? []).length === 0 ? (
+          ) : conversations.length === 0 ? (
             <p className="p-2 text-sm text-slate-400">No conversations yet.</p>
           ) : (
-            (conversations ?? []).map((c) => (
-              <div
-                key={c.id}
-                className={cn(
-                  'group flex items-center gap-1 rounded-md px-2 py-2 text-sm',
-                  c.id === activeId ? 'bg-brand-50 text-brand-700' : 'hover:bg-slate-100',
-                )}
-              >
-                <button className="flex-1 truncate text-left focus-ring" onClick={() => setSelectedId(c.id)}>
-                  {c.title}
-                </button>
-                <button
-                  aria-label={`Delete conversation ${c.title}`}
-                  className="opacity-0 focus-ring group-hover:opacity-100"
-                  onClick={() => handleDelete(c.id)}
+            <>
+              {conversations.map((c) => (
+                <div
+                  key={c.id}
+                  className={cn(
+                    'group flex items-center gap-1 rounded-md px-2 py-2 text-sm',
+                    c.id === activeId ? 'bg-brand-50 text-brand-700' : 'hover:bg-slate-100',
+                  )}
                 >
-                  <Trash2 className="h-3.5 w-3.5 text-slate-400 hover:text-red-600" />
-                </button>
-              </div>
-            ))
+                  <button className="flex-1 truncate text-left focus-ring" onClick={() => setSelectedId(c.id)}>
+                    {c.title}
+                  </button>
+                  <button
+                    aria-label={`Delete conversation ${c.title}`}
+                    className="opacity-0 focus-ring group-hover:opacity-100"
+                    onClick={() => handleDelete(c.id)}
+                  >
+                    <Trash2 className="h-3.5 w-3.5 text-slate-400 hover:text-red-600" />
+                  </button>
+                </div>
+              ))}
+              {canLoadMoreConversations && (
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  className="w-full"
+                  onClick={() => setConversationsLimit((prev) => Math.min(prev + CONVERSATIONS_PAGE_SIZE, CONVERSATIONS_MAX_LIMIT))}
+                >
+                  Load more
+                </Button>
+              )}
+            </>
           )}
         </div>
       </aside>
 
       <div className="flex flex-1 flex-col">
-        {(conversations ?? []).length > 0 && (
+        {conversations.length > 0 && (
           <Select
             value={activeId !== null ? String(activeId) : undefined}
             onValueChange={(value) => setSelectedId(Number(value))}
@@ -229,7 +247,7 @@ export function ChatPage() {
               <SelectValue placeholder="Select a conversation" />
             </SelectTrigger>
             <SelectContent>
-              {(conversations ?? []).map((c) => (
+              {conversations.map((c) => (
                 <SelectItem key={c.id} value={String(c.id)}>
                   {c.title}
                 </SelectItem>
@@ -247,7 +265,7 @@ export function ChatPage() {
             size="icon"
             className="shrink-0 sm:hidden"
             aria-label="New chat"
-            onClick={() => createMutation.mutate()}
+            onClick={() => createMutation.mutate({})}
             disabled={createMutation.isPending}
           >
             <Plus className="h-4 w-4" />
@@ -336,6 +354,15 @@ export function ChatPage() {
           </Button>
         </div>
       </div>
+
+      <ConfirmDialog
+        open={deletingConversationId !== null}
+        onOpenChange={(open) => !open && setDeletingConversationId(null)}
+        title="Delete this conversation?"
+        description="This action cannot be undone."
+        isConfirming={deleteMutation.isPending}
+        onConfirm={() => deletingConversationId !== null && deleteMutation.mutate(deletingConversationId)}
+      />
     </div>
   )
 }

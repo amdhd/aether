@@ -1,9 +1,13 @@
 import { API_PREFIX, apiFetch } from '@/lib/api'
-import type { Note, NoteCreateInput, NoteUpdateInput } from '@/types'
+import type { Note, NoteCreateInput, NoteUpdateInput, Page } from '@/types'
 
-export function listNotes(q?: string) {
-  const query = q ? `?q=${encodeURIComponent(q)}` : ''
-  return apiFetch<Note[]>(`${API_PREFIX}/notes${query}`)
+export function listNotes(q?: string, limit?: number, offset?: number) {
+  const params = new URLSearchParams()
+  if (q) params.set('q', q)
+  if (limit !== undefined) params.set('limit', String(limit))
+  if (offset !== undefined) params.set('offset', String(offset))
+  const query = params.toString() ? `?${params.toString()}` : ''
+  return apiFetch<Page<Note>>(`${API_PREFIX}/notes${query}`)
 }
 
 export function createNote(input: NoteCreateInput) {

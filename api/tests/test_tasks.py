@@ -16,7 +16,9 @@ async def test_task_crud(client: AsyncClient, auth_headers: dict[str, str]) -> N
 
     resp = await client.get("/api/v1/tasks", headers=auth_headers)
     assert resp.status_code == 200
-    assert len(resp.json()) == 1
+    page = resp.json()
+    assert page["total"] == 1
+    assert len(page["items"]) == 1
 
     resp = await client.get(f"/api/v1/tasks/{task_id}", headers=auth_headers)
     assert resp.status_code == 200
@@ -72,4 +74,4 @@ async def test_task_idor_protection(client: AsyncClient) -> None:
 
     resp = await client.get("/api/v1/tasks", headers=b_headers)
     assert resp.status_code == 200
-    assert resp.json() == []
+    assert resp.json()["items"] == []

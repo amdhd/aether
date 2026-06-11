@@ -1,12 +1,14 @@
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { useQuery } from '@tanstack/react-query'
 import { Plus } from 'lucide-react'
 import { useState } from 'react'
 
 import { createTask, deleteTask, listTasks, updateTask } from '@/api/tasks'
+import { ConfirmDialog } from '@/components/ConfirmDialog'
 import { Button } from '@/components/ui/button'
 import { Skeleton } from '@/components/ui/skeleton'
 import { TaskCard } from '@/components/tasks/TaskCard'
 import { TaskFormDialog } from '@/components/tasks/TaskFormDialog'
+import { useCrudMutations } from '@/hooks/useCrudMutations'
 import type { Task, TaskCreateInput, TaskStatus } from '@/types'
 
 const columns: { status: TaskStatus; label: string }[] = [
@@ -16,25 +18,19 @@ const columns: { status: TaskStatus; label: string }[] = [
 ]
 
 export function TasksPage() {
-  const queryClient = useQueryClient()
-  const { data: tasks, isLoading, isError } = useQuery({ queryKey: ['tasks'], queryFn: listTasks })
+  const { data, isLoading, isError } = useQuery({ queryKey: ['tasks'], queryFn: listTasks })
+  const tasks = data?.items ?? []
 
   const [dialogOpen, setDialogOpen] = useState(false)
   const [editingTask, setEditingTask] = useState<Task | null>(null)
+  const [deletingTask, setDeletingTask] = useState<Task | null>(null)
 
-  const createMutation = useMutation({
-    mutationFn: createTask,
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['tasks'] }),
-  })
-
-  const updateMutation = useMutation({
-    mutationFn: ({ id, input }: { id: number; input: TaskCreateInput }) => updateTask(id, input),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['tasks'] }),
-  })
-
-  const deleteMutation = useMutation({
-    mutationFn: deleteTask,
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['tasks'] }),
+  const { createMutation, updateMutation, deleteMutation } = useCrudMutations<Task, TaskCreateInput>({
+    queryKey: ['tasks'],
+    create: createTask,
+    update: updateTask,
+    remove: deleteTask,
+    onDeleteSuccess: () => setDeletingTask(null),
   })
 
   const openCreateDialog = () => {
@@ -69,9 +65,7 @@ export function TasksPage() {
   }
 
   const handleDelete = (task: Task) => {
-    if (window.confirm(`Delete "${task.title}"?`)) {
-      deleteMutation.mutate(task.id)
-    }
+    setDeletingTask(task)
   }
 
   return (
@@ -102,7 +96,7 @@ export function TasksPage() {
       ) : (
         <div className="grid gap-4 sm:grid-cols-3">
           {columns.map((column) => {
-            const columnTasks = (tasks ?? []).filter((task) => task.status === column.status)
+            const columnTasks = tasks.filter((task) => task.status === column.status)
             return (
               <div key={column.status} className="space-y-3">
                 <h2 className="flex items-center gap-2 text-sm font-semibold uppercase tracking-wide text-slate-500">
@@ -142,6 +136,15 @@ export function TasksPage() {
           isSubmitting={createMutation.isPending || updateMutation.isPending}
         />
       )}
+
+      <ConfirmDialog
+        open={deletingTask !== null}
+        onOpenChange={(open) => !open && setDeletingTask(null)}
+        title={`Delete "${deletingTask?.title}"?`}
+        description="This action cannot be undone."
+        isConfirming={deleteMutation.isPending}
+        onConfirm={() => deletingTask && deleteMutation.mutate(deletingTask.id)}
+      />
     </div>
   )
 }

@@ -5,10 +5,15 @@ import type {
   ConversationCreateInput,
   ConversationDetail,
   ConversationUpdateInput,
+  Page,
 } from '@/types'
 
-export function listConversations() {
-  return apiFetch<Conversation[]>(`${API_PREFIX}/conversations`)
+export function listConversations(limit?: number, offset?: number) {
+  const params = new URLSearchParams()
+  if (limit !== undefined) params.set('limit', String(limit))
+  if (offset !== undefined) params.set('offset', String(offset))
+  const query = params.toString() ? `?${params.toString()}` : ''
+  return apiFetch<Page<Conversation>>(`${API_PREFIX}/conversations${query}`)
 }
 
 export function createConversation(input: ConversationCreateInput = {}) {

@@ -1,3 +1,5 @@
+from typing import Protocol, TypeVar
+
 from fastapi import Depends, HTTPException, status
 from fastapi.security import OAuth2PasswordBearer
 from jose import JWTError
@@ -35,3 +37,20 @@ async def get_current_user(
     if user is None or user.token_version != token_version:
         raise credentials_exception
     return user
+
+
+class _OwnedModel(Protocol):
+    user_id: int
+
+
+ModelT = TypeVar("ModelT", bound=_OwnedModel)
+
+
+async def get_owned_or_404(db: AsyncSession, model: type[ModelT], obj_id: int, user: User, detail: str) -> ModelT:
+    """Fetch a row by primary key and verify it belongs to `user`, raising a
+    404 (not 403, to avoid leaking whether the id exists for another user) if
+    it doesn't exist or isn't owned by them."""
+    obj = await db.get(model, obj_id)
+    if obj is None or obj.user_id != user.id:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=detail)
+    return obj

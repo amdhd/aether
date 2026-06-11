@@ -1,7 +1,7 @@
 import time
 from collections import defaultdict, deque
 
-from fastapi import Depends, HTTPException, status
+from fastapi import Depends, HTTPException, Request, status
 
 from app.api.deps import get_current_user
 from app.core.config import settings
@@ -19,10 +19,15 @@ _request_log: dict[int, deque[float]] = defaultdict(deque)
 # tool calls (see MAX_TOOL_ITERATIONS).
 _tool_request_log: dict[tuple[int, str], deque[float]] = defaultdict(deque)
 
+# Per-(client IP, endpoint) sliding window for unauthenticated auth endpoints
+# (login/register), to slow down brute-force/enumeration attempts.
+_auth_request_log: dict[tuple[str, str], deque[float]] = defaultdict(deque)
+
 
 def reset_rate_limits() -> None:
     _request_log.clear()
     _tool_request_log.clear()
+    _auth_request_log.clear()
 
 
 async def enforce_chat_rate_limit(current_user: User = Depends(get_current_user)) -> User:
@@ -43,6 +48,32 @@ async def enforce_chat_rate_limit(current_user: User = Depends(get_current_user)
 
     timestamps.append(now)
     return current_user
+
+
+def enforce_auth_rate_limit(endpoint: str):
+    """Returns a dependency that rate-limits an unauthenticated auth endpoint
+    (login/register) per client IP, to slow down brute-force/enumeration."""
+
+    async def _dependency(request: Request) -> None:
+        limit = settings.AUTH_RATE_LIMIT_PER_MINUTE
+        client_ip = request.client.host if request.client else "unknown"
+        now = time.monotonic()
+        timestamps = _auth_request_log[(client_ip, endpoint)]
+
+        while timestamps and now - timestamps[0] >= WINDOW_SECONDS:
+            timestamps.popleft()
+
+        if len(timestamps) >= limit:
+            retry_after = max(1, int(WINDOW_SECONDS - (now - timestamps[0])))
+            raise HTTPException(
+                status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                detail="Too many attempts. Please try again shortly.",
+                headers={"Retry-After": str(retry_after)},
+            )
+
+        timestamps.append(now)
+
+    return _dependency
 
 
 def check_tool_rate_limit(user_id: int, tool_name: str, limit: int) -> bool:

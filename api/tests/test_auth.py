@@ -83,3 +83,16 @@ async def test_full_auth_flow(client: AsyncClient) -> None:
 async def test_refresh_with_invalid_token(client: AsyncClient) -> None:
     resp = await client.post("/api/v1/auth/refresh", json={"refresh_token": "not-a-real-token"})
     assert resp.status_code == 401
+
+
+async def test_login_rate_limit(client: AsyncClient) -> None:
+    from app.core.config import settings
+
+    payload = {"username": "nobody@example.com", "password": "wrong"}
+    for _ in range(settings.AUTH_RATE_LIMIT_PER_MINUTE):
+        resp = await client.post("/api/v1/auth/login", data=payload)
+        assert resp.status_code == 401
+
+    resp = await client.post("/api/v1/auth/login", data=payload)
+    assert resp.status_code == 429
+    assert "Retry-After" in resp.headers

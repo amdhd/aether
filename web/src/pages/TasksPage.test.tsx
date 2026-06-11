@@ -3,7 +3,7 @@ import { describe, expect, it, vi } from 'vitest'
 
 import * as tasksApi from '@/api/tasks'
 import { renderWithProviders } from '@/test/utils'
-import type { Task } from '@/types'
+import type { Page, Task } from '@/types'
 
 import { TasksPage } from './TasksPage'
 
@@ -32,9 +32,11 @@ const mockTasks: Task[] = [
   },
 ]
 
+const mockTasksPage: Page<Task> = { items: mockTasks, total: mockTasks.length, limit: 200, offset: 0 }
+
 describe('TasksPage', () => {
   it('renders tasks grouped into kanban columns', async () => {
-    vi.mocked(tasksApi.listTasks).mockResolvedValue(mockTasks)
+    vi.mocked(tasksApi.listTasks).mockResolvedValue(mockTasksPage)
 
     renderWithProviders(<TasksPage />)
 

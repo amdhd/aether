@@ -19,7 +19,7 @@ async def test_note_crud(client: AsyncClient, auth_headers: dict[str, str]) -> N
 
     resp = await client.get("/api/v1/notes", headers=auth_headers)
     assert resp.status_code == 200
-    assert len(resp.json()) == 1
+    assert len(resp.json()["items"]) == 1
 
     resp = await client.get(f"/api/v1/notes/{note_id}", headers=auth_headers)
     assert resp.status_code == 200
@@ -48,16 +48,17 @@ async def test_note_search(client: AsyncClient, auth_headers: dict[str, str]) ->
 
     resp = await client.get("/api/v1/notes", params={"q": "grocery"}, headers=auth_headers)
     assert resp.status_code == 200
-    results = resp.json()
+    results = resp.json()["items"]
     assert len(results) == 1
     assert results[0]["title"] == "Grocery list"
 
     resp = await client.get("/api/v1/notes", params={"q": "roadmap"}, headers=auth_headers)
-    assert len(resp.json()) == 1
-    assert resp.json()[0]["title"] == "Meeting notes"
+    results = resp.json()["items"]
+    assert len(results) == 1
+    assert results[0]["title"] == "Meeting notes"
 
     resp = await client.get("/api/v1/notes", params={"q": "nonexistent"}, headers=auth_headers)
-    assert resp.json() == []
+    assert resp.json()["items"] == []
 
 
 async def test_note_idor_protection(client: AsyncClient) -> None:

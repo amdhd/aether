@@ -1,7 +1,9 @@
 from functools import lru_cache
 
-from pydantic import field_validator
+from pydantic import field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+INSECURE_SECRET_KEY = "dev-secret-key-change-me"
 
 
 class Settings(BaseSettings):
@@ -10,6 +12,10 @@ class Settings(BaseSettings):
     # App
     PROJECT_NAME: str = "Aether"
     API_V1_PREFIX: str = "/api/v1"
+    # Set to "production" in deployed environments to enable strict checks
+    # (e.g. rejecting default/missing secrets) that would otherwise break
+    # local dev and CI, where these values are intentionally left unset.
+    ENVIRONMENT: str = "development"
 
     # Database
     DATABASE_URL: str = "sqlite+aiosqlite:///./aether.db"
@@ -27,7 +33,7 @@ class Settings(BaseSettings):
         return value
 
     # Auth / JWT
-    SECRET_KEY: str = "dev-secret-key-change-me"
+    SECRET_KEY: str = INSECURE_SECRET_KEY
     ALGORITHM: str = "HS256"
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 15
     REFRESH_TOKEN_EXPIRE_DAYS: int = 7
@@ -47,6 +53,7 @@ class Settings(BaseSettings):
     CHAT_RATE_LIMIT_PER_MINUTE: int = 20
     WEB_SEARCH_RATE_LIMIT_PER_MINUTE: int = 10
     CALENDAR_RATE_LIMIT_PER_MINUTE: int = 20
+    AUTH_RATE_LIMIT_PER_MINUTE: int = 10
 
     # Tools
     TAVILY_API_KEY: str = ""
@@ -57,6 +64,15 @@ class Settings(BaseSettings):
     GOOGLE_REDIRECT_URI: str = ""
     GOOGLE_OAUTH_SCOPES: str = "https://www.googleapis.com/auth/calendar"
     OAUTH_STATE_EXPIRE_MINUTES: int = 5
+
+    @model_validator(mode="after")
+    def _require_real_secrets_in_production(self) -> "Settings":
+        if self.ENVIRONMENT == "production":
+            if self.SECRET_KEY == INSECURE_SECRET_KEY:
+                raise ValueError("SECRET_KEY must be set to a real secret when ENVIRONMENT=production")
+            if not self.ENCRYPTION_KEY:
+                raise ValueError("ENCRYPTION_KEY must be set when ENVIRONMENT=production")
+        return self
 
 
 @lru_cache

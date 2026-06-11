@@ -1,24 +1,31 @@
+import { lazy, Suspense, type JSX } from 'react'
 import { createBrowserRouter, Navigate } from 'react-router-dom'
 
 import { AppShell } from '@/components/layout/AppShell'
+import { PageLoader } from '@/components/layout/PageLoader'
 import { ProtectedRoute } from '@/components/ProtectedRoute'
-import { AnalyticsPage } from '@/pages/AnalyticsPage'
-import { ChatPage } from '@/pages/ChatPage'
-import { DashboardPage } from '@/pages/DashboardPage'
-import { LoginPage } from '@/pages/LoginPage'
-import { NotesPage } from '@/pages/NotesPage'
-import { RegisterPage } from '@/pages/RegisterPage'
-import { SettingsPage } from '@/pages/SettingsPage'
-import { TasksPage } from '@/pages/TasksPage'
+
+const AnalyticsPage = lazy(() => import('@/pages/AnalyticsPage').then((m) => ({ default: m.AnalyticsPage })))
+const ChatPage = lazy(() => import('@/pages/ChatPage').then((m) => ({ default: m.ChatPage })))
+const DashboardPage = lazy(() => import('@/pages/DashboardPage').then((m) => ({ default: m.DashboardPage })))
+const LoginPage = lazy(() => import('@/pages/LoginPage').then((m) => ({ default: m.LoginPage })))
+const NotesPage = lazy(() => import('@/pages/NotesPage').then((m) => ({ default: m.NotesPage })))
+const RegisterPage = lazy(() => import('@/pages/RegisterPage').then((m) => ({ default: m.RegisterPage })))
+const SettingsPage = lazy(() => import('@/pages/SettingsPage').then((m) => ({ default: m.SettingsPage })))
+const TasksPage = lazy(() => import('@/pages/TasksPage').then((m) => ({ default: m.TasksPage })))
+
+function withSuspense(element: JSX.Element) {
+  return <Suspense fallback={<PageLoader />}>{element}</Suspense>
+}
 
 export const router = createBrowserRouter([
   {
     path: '/login',
-    element: <LoginPage />,
+    element: withSuspense(<LoginPage />),
   },
   {
     path: '/register',
-    element: <RegisterPage />,
+    element: withSuspense(<RegisterPage />),
   },
   {
     element: <ProtectedRoute />,
@@ -26,12 +33,12 @@ export const router = createBrowserRouter([
       {
         element: <AppShell />,
         children: [
-          { path: '/', element: <DashboardPage /> },
-          { path: '/chat', element: <ChatPage /> },
-          { path: '/tasks', element: <TasksPage /> },
-          { path: '/notes', element: <NotesPage /> },
-          { path: '/analytics', element: <AnalyticsPage /> },
-          { path: '/settings', element: <SettingsPage /> },
+          { path: '/', element: withSuspense(<DashboardPage />) },
+          { path: '/chat', element: withSuspense(<ChatPage />) },
+          { path: '/tasks', element: withSuspense(<TasksPage />) },
+          { path: '/notes', element: withSuspense(<NotesPage />) },
+          { path: '/analytics', element: withSuspense(<AnalyticsPage />) },
+          { path: '/settings', element: withSuspense(<SettingsPage />) },
         ],
       },
     ],

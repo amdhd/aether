@@ -13,6 +13,8 @@ services:
     healthCheckPath: /docs
     preDeployCommand: alembic upgrade head
     envVars:
+      - key: ENVIRONMENT
+        value: production
       - key: DATABASE_URL
         fromDatabase:
           name: aether-db

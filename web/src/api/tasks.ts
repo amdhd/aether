@@ -1,8 +1,8 @@
 import { API_PREFIX, apiFetch } from '@/lib/api'
-import type { Task, TaskCreateInput, TaskUpdateInput } from '@/types'
+import type { Page, Task, TaskCreateInput, TaskUpdateInput } from '@/types'
 
 export function listTasks() {
-  return apiFetch<Task[]>(`${API_PREFIX}/tasks`)
+  return apiFetch<Page<Task>>(`${API_PREFIX}/tasks`)
 }
 
 export function createTask(input: TaskCreateInput) {

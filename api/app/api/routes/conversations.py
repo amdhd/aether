@@ -1,15 +1,16 @@
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from fastapi.responses import StreamingResponse
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.agent.loop import stream_agent_response
-from app.api.deps import get_current_user
+from app.api.deps import get_current_user, get_owned_or_404
 from app.core.config import settings
 from app.core.rate_limit import enforce_chat_rate_limit
 from app.db.session import get_db
 from app.models.conversation import Conversation
 from app.models.user import User
+from app.schemas.common import DEFAULT_PAGE_LIMIT, MAX_PAGE_LIMIT, Page
 from app.schemas.conversation import (
     ChatMessageCreate,
     ConversationCreate,
@@ -22,24 +23,21 @@ router = APIRouter(prefix="/conversations", tags=["conversations"])
 
 
 async def _get_owned_conversation(conversation_id: int, user: User, db: AsyncSession) -> Conversation:
-    conversation = await db.get(Conversation, conversation_id)
-    if conversation is None or conversation.user_id != user.id:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Conversation not found")
-    return conversation
+    return await get_owned_or_404(db, Conversation, conversation_id, user, "Conversation not found")
 
 
-@router.get("", response_model=list[ConversationRead])
+@router.get("", response_model=Page[ConversationRead])
 async def list_conversations(
+    limit: int = Query(default=DEFAULT_PAGE_LIMIT, ge=1, le=MAX_PAGE_LIMIT),
+    offset: int = Query(default=0, ge=0),
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
-) -> list[Conversation]:
-    stmt = (
-        select(Conversation)
-        .where(Conversation.user_id == current_user.id)
-        .order_by(Conversation.updated_at.desc())
-    )
+) -> Page[ConversationRead]:
+    base_stmt = select(Conversation).where(Conversation.user_id == current_user.id)
+    total = await db.scalar(select(func.count()).select_from(base_stmt.subquery())) or 0
+    stmt = base_stmt.order_by(Conversation.updated_at.desc()).limit(limit).offset(offset)
     result = await db.scalars(stmt)
-    return list(result.all())
+    return Page[ConversationRead](items=list(result.all()), total=total, limit=limit, offset=offset)
 
 
 @router.post("", response_model=ConversationRead, status_code=status.HTTP_201_CREATED)

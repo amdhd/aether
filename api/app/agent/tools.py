@@ -16,10 +16,18 @@ from app.models.task import Task, TaskPriority, TaskStatus
 from app.models.user import User
 from app.services import google_oauth
 
-WEATHER_API_URL = "https://api.data.gov.my/weather/forecast"
+WEATHER_API_URL = "https://api.data.gov.my/weather/forecast/"
 WEATHER_CACHE_TTL_SECONDS = 3600
 TAVILY_API_URL = "https://api.tavily.com/search"
 CALENDAR_API_URL = "https://www.googleapis.com/calendar/v3"
+WEB_SEARCH_SNIPPET_MAX_CHARS = 500
+
+# data.gov.my's forecast districts don't include "Kuala Lumpur" itself, so map
+# the capital to a covered district within it to avoid a guaranteed no-match.
+LOCATION_ALIASES: dict[str, str] = {
+    "kuala lumpur": "kepong",
+    "kl": "kepong",
+}
 
 TOOL_SCHEMAS: list[dict[str, Any]] = [
     {
@@ -385,7 +393,9 @@ async def _fetch_weather_data() -> list[dict[str, Any]]:
 
 
 async def _get_weather(db: AsyncSession, user: User, args: dict[str, Any]) -> dict[str, Any]:
-    location = args["location"].strip().lower()
+    raw_location = args["location"].strip()
+    alias = LOCATION_ALIASES.get(raw_location.lower())
+    location = alias or raw_location.lower()
 
     try:
         forecasts = await _fetch_weather_data()
@@ -398,9 +408,9 @@ async def _get_weather(db: AsyncSession, user: User, args: dict[str, Any]) -> di
 
     if not matches:
         names = sorted({f["location"]["location_name"] for f in forecasts})
-        suggestions = get_close_matches(args["location"], names, n=5)
+        suggestions = get_close_matches(raw_location, names, n=5)
         return {
-            "error": f"No weather data found for '{args['location']}'.",
+            "error": f"No weather data found for '{raw_location}'.",
             "did_you_mean": suggestions or names[:5],
         }
 
@@ -408,7 +418,7 @@ async def _get_weather(db: AsyncSession, user: User, args: dict[str, Any]) -> di
     today = date.today().isoformat()
     forecast = next((f for f in matches if f["date"] >= today), matches[0])
 
-    return {
+    result = {
         "location": forecast["location"]["location_name"],
         "date": forecast["date"],
         "min_temp_c": forecast["min_temp"],
@@ -419,6 +429,9 @@ async def _get_weather(db: AsyncSession, user: User, args: dict[str, Any]) -> di
         "summary": forecast["summary_forecast"],
         "language": "ms",
     }
+    if alias:
+        result["note"] = f"data.gov.my has no '{raw_location}' station; showing the nearest covered area."
+    return result
 
 
 async def _web_search(db: AsyncSession, user: User, args: dict[str, Any]) -> dict[str, Any]:
@@ -447,11 +460,17 @@ async def _web_search(db: AsyncSession, user: User, args: dict[str, Any]) -> dic
         {
             "title": item.get("title"),
             "url": item.get("url"),
-            "content": item.get("content"),
+            "content": _truncate(item.get("content"), WEB_SEARCH_SNIPPET_MAX_CHARS),
         }
         for item in data.get("results", [])
     ]
     return {"query": args["query"], "results": results}
+
+
+def _truncate(text: str | None, max_chars: int) -> str | None:
+    if text is None or len(text) <= max_chars:
+        return text
+    return text[:max_chars].rstrip() + "..."
 
 
 async def _calendar_list_events(db: AsyncSession, user: User, args: dict[str, Any]) -> dict[str, Any]:

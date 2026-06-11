@@ -1,10 +1,17 @@
 from datetime import datetime
+from typing import TYPE_CHECKING
 
 from sqlalchemy import DateTime, String
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from sqlalchemy.sql import func
 
 from app.db.base import Base
+
+if TYPE_CHECKING:
+    from app.models.conversation import Conversation
+    from app.models.google_credential import GoogleCredential
+    from app.models.note import Note
+    from app.models.task import Task
 
 
 class User(Base):

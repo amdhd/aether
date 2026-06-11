@@ -28,7 +28,10 @@ class Settings(BaseSettings):
     # LLM (DeepSeek)
     DEEPSEEK_API_KEY: str = ""
     DEEPSEEK_BASE_URL: str = "https://api.deepseek.com"
-    DEEPSEEK_MODEL: str = "deepseek-chat"
+    DEEPSEEK_MODEL: str = "deepseek-v4-flash"
+
+    # Rate limiting
+    CHAT_RATE_LIMIT_PER_MINUTE: int = 20
 
     # Tools
     TAVILY_API_KEY: str = ""

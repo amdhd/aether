@@ -12,3 +12,4 @@ httpx==0.28.1
 cryptography==44.0.0
 email-validator==2.2.0
 greenlet==3.5.1
+openai==1.59.6

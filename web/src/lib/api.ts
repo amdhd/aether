@@ -1,7 +1,7 @@
 import { useAuthStore } from '@/store/auth'
 import type { Token } from '@/types'
 
-const API_URL = import.meta.env.VITE_API_URL ?? 'http://localhost:8000'
+export const API_URL = import.meta.env.VITE_API_URL ?? 'http://localhost:8000'
 export const API_PREFIX = '/api/v1'
 
 export class ApiError extends Error {
@@ -17,7 +17,7 @@ export class ApiError extends Error {
 
 let refreshPromise: Promise<string | null> | null = null
 
-async function refreshAccessToken(): Promise<string | null> {
+export async function refreshAccessToken(): Promise<string | null> {
   const { refreshToken, setTokens, logout } = useAuthStore.getState()
   if (!refreshToken) return null
 

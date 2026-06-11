@@ -5,6 +5,7 @@ from httpx import ASGITransport, AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.pool import StaticPool
 
+from app.core.rate_limit import reset_rate_limits
 from app.db.base import Base
 from app.db.session import get_db
 from app.main import app
@@ -29,6 +30,7 @@ app.dependency_overrides[get_db] = override_get_db
 async def setup_database() -> AsyncGenerator[None, None]:
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
+    reset_rate_limits()
     yield
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.drop_all)

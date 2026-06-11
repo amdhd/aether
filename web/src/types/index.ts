@@ -51,3 +51,44 @@ export interface NoteCreateInput {
 }
 
 export type NoteUpdateInput = Partial<NoteCreateInput>
+
+export type Persona = 'productivity_coach' | 'research_assistant' | 'casual_friend'
+export type MessageRole = 'user' | 'assistant' | 'tool'
+
+export interface ToolCall {
+  id: string
+  type: 'function'
+  function: {
+    name: string
+    arguments: string
+  }
+}
+
+export interface Conversation {
+  id: number
+  title: string
+  persona: Persona
+  created_at: string
+  updated_at: string
+}
+
+export interface ChatMessage {
+  id: number
+  role: MessageRole
+  content: string | null
+  reasoning_content: string | null
+  tool_calls: ToolCall[] | null
+  tool_name: string | null
+  created_at: string
+}
+
+export interface ConversationDetail extends Conversation {
+  messages: ChatMessage[]
+}
+
+export interface ConversationCreateInput {
+  title?: string
+  persona?: Persona
+}
+
+export type ConversationUpdateInput = Partial<ConversationCreateInput>

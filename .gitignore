@@ -1,0 +1,33 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+*.egg-info/
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Node
+node_modules/
+dist/
+.vite/
+
+# Env
+.env
+.env.local
+
+# Editor
+.vscode/
+.idea/
+.DS_Store
+
+# DB
+*.sqlite3
+*.db
+
+# Docker
+docker-compose.override.yml
+
+# Claude Code local settings
+.claude/settings.local.json

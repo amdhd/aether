@@ -1,0 +1,147 @@
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { Pencil, Plus, Search, Trash2 } from 'lucide-react'
+import { useState } from 'react'
+
+import { createNote, deleteNote, listNotes, updateNote } from '@/api/notes'
+import { Badge } from '@/components/ui/badge'
+import { Button } from '@/components/ui/button'
+import { Card, CardContent, CardFooter, CardHeader, CardTitle } from '@/components/ui/card'
+import { Input } from '@/components/ui/input'
+import { Skeleton } from '@/components/ui/skeleton'
+import { NoteFormDialog } from '@/components/notes/NoteFormDialog'
+import { useDebounce } from '@/hooks/useDebounce'
+import type { Note, NoteCreateInput } from '@/types'
+
+export function NotesPage() {
+  const queryClient = useQueryClient()
+  const [search, setSearch] = useState('')
+  const debouncedSearch = useDebounce(search, 300)
+
+  const { data: notes, isLoading, isError } = useQuery({
+    queryKey: ['notes', debouncedSearch],
+    queryFn: () => listNotes(debouncedSearch || undefined),
+  })
+
+  const [dialogOpen, setDialogOpen] = useState(false)
+  const [editingNote, setEditingNote] = useState<Note | null>(null)
+
+  const createMutation = useMutation({
+    mutationFn: createNote,
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['notes'] }),
+  })
+
+  const updateMutation = useMutation({
+    mutationFn: ({ id, input }: { id: number; input: NoteCreateInput }) => updateNote(id, input),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['notes'] }),
+  })
+
+  const deleteMutation = useMutation({
+    mutationFn: deleteNote,
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['notes'] }),
+  })
+
+  const openCreateDialog = () => {
+    setEditingNote(null)
+    setDialogOpen(true)
+  }
+
+  const openEditDialog = (note: Note) => {
+    setEditingNote(note)
+    setDialogOpen(true)
+  }
+
+  const handleSubmit = async (input: NoteCreateInput) => {
+    if (editingNote) {
+      await updateMutation.mutateAsync({ id: editingNote.id, input })
+    } else {
+      await createMutation.mutateAsync(input)
+    }
+  }
+
+  const handleDelete = (note: Note) => {
+    if (window.confirm(`Delete "${note.title}"?`)) {
+      deleteMutation.mutate(note.id)
+    }
+  }
+
+  return (
+    <div className="space-y-6">
+      <div className="flex items-center justify-between">
+        <div>
+          <h1 className="text-2xl font-bold tracking-tight">Notes</h1>
+          <p className="text-slate-500">Capture ideas and search through them later.</p>
+        </div>
+        <Button onClick={openCreateDialog}>
+          <Plus className="h-4 w-4" />
+          New note
+        </Button>
+      </div>
+
+      <div className="relative max-w-sm">
+        <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
+        <Input
+          type="search"
+          placeholder="Search notes..."
+          aria-label="Search notes"
+          className="pl-9"
+          value={search}
+          onChange={(e) => setSearch(e.target.value)}
+        />
+      </div>
+
+      {isError && <p className="text-sm text-red-600">Failed to load notes. Please try again.</p>}
+
+      {isLoading ? (
+        <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+          {[...Array(3)].map((_, i) => (
+            <Skeleton key={i} className="h-40 w-full" />
+          ))}
+        </div>
+      ) : (notes ?? []).length === 0 ? (
+        <p className="rounded-card border border-dashed border-slate-200 p-8 text-center text-sm text-slate-400">
+          {debouncedSearch ? 'No notes match your search.' : 'No notes yet. Create your first one.'}
+        </p>
+      ) : (
+        <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+          {(notes ?? []).map((note) => (
+            <Card key={note.id} className="flex flex-col">
+              <CardHeader className="pb-2">
+                <CardTitle className="text-sm">{note.title}</CardTitle>
+              </CardHeader>
+              <CardContent className="flex-1 space-y-2 pb-2">
+                {note.content && <p className="line-clamp-4 text-sm text-slate-600">{note.content}</p>}
+                {note.tags.length > 0 && (
+                  <div className="flex flex-wrap gap-1">
+                    {note.tags.map((tag) => (
+                      <Badge key={tag} variant="secondary">
+                        {tag}
+                      </Badge>
+                    ))}
+                  </div>
+                )}
+              </CardContent>
+              <CardFooter className="justify-end gap-1">
+                <Button variant="ghost" size="icon" aria-label={`Edit ${note.title}`} onClick={() => openEditDialog(note)}>
+                  <Pencil className="h-4 w-4" />
+                </Button>
+                <Button variant="ghost" size="icon" aria-label={`Delete ${note.title}`} onClick={() => handleDelete(note)}>
+                  <Trash2 className="h-4 w-4" />
+                </Button>
+              </CardFooter>
+            </Card>
+          ))}
+        </div>
+      )}
+
+      {dialogOpen && (
+        <NoteFormDialog
+          open={dialogOpen}
+          onOpenChange={setDialogOpen}
+          note={editingNote}
+          onSubmit={handleSubmit}
+          isSubmitting={createMutation.isPending || updateMutation.isPending}
+        />
+      )}
+    </div>
+  )
+}

@@ -2,30 +2,95 @@
 
 An AI personal assistant web app: FastAPI + async SQLAlchemy backend, React +
 TypeScript frontend, with a DeepSeek-powered tool-calling agent for managing
-tasks, notes, and (eventually) your calendar.
+your tasks, notes, calendar, and more.
 
-> Status: Week 1 (project scaffold, auth, Task/Note CRUD) complete. See
-> `AETHER_AI_AGENT_PROMPT.md` for the full project spec and milestone plan.
+> Status: Weeks 1-4 complete. See `AETHER_AI_AGENT_PROMPT.md` for the full
+> project spec and milestone plan.
+
+## Features
+
+- **Chat** with a DeepSeek-powered assistant, streamed over SSE with markdown
+  rendering and visible "thinking"/tool-call traces.
+- **Personas** — switch the assistant's tone per conversation (productivity
+  coach, research assistant, casual friend).
+- **Tools** the assistant can call on your behalf: create/update/list tasks
+  and notes, get the weather (data.gov.my), web search (Tavily), and manage
+  your Google Calendar.
+- **Memory** — long conversations are automatically summarized so context
+  doesn't grow unbounded.
+- **Tasks** — a kanban-style board (To do / Doing / Done) with priorities and
+  due dates.
+- **Notes** — searchable notes with tags.
+- **Analytics dashboard** — messages and token usage per day, tool-usage
+  breakdown, and lifetime totals.
+- **Auth** — JWT access/refresh tokens, register/login/logout.
+- **Rate limiting** on chat and external-API tools (web search, calendar).
 
 ## Stack
 
 - **Backend**: Python 3.12, FastAPI, SQLAlchemy 2.0 (async), Alembic, Postgres
   (SQLite for tests), Pydantic v2, JWT auth.
 - **Frontend**: React 19, TypeScript, Vite, Tailwind CSS v4, shadcn/ui-style
-  components, TanStack Query, Zustand.
+  components, TanStack Query, Recharts, Zustand.
 
 ## Getting started
 
-1. Copy `.env.example` to `.env` and fill in any values you have (defaults
-   work for local development without external API keys).
-2. Start everything with Docker Compose:
+### Prerequisites
 
-   ```sh
-   docker compose up --build
-   ```
+- Docker and Docker Compose
+- (Optional, for running outside Docker) Python 3.12 and Node 20+
 
-   - API: http://localhost:8000 (docs at `/docs`)
-   - Frontend: http://localhost:5173
+### 1. Configure environment variables
+
+From the project root:
+
+```sh
+cp .env.example .env
+```
+
+Open `.env` and fill in the values you have. The app runs locally without any
+external API keys — `DEEPSEEK_API_KEY`, `TAVILY_API_KEY`, and the
+`GOOGLE_CLIENT_*` Google Calendar credentials only need to be set to use the
+chat assistant, web search tool, and calendar integration respectively.
+
+For `SECRET_KEY` and `ENCRYPTION_KEY`, generate real values rather than using
+the placeholders:
+
+```sh
+python3 -c "import secrets; print(secrets.token_urlsafe(64))"          # SECRET_KEY
+python3 -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"  # ENCRYPTION_KEY
+```
+
+> Note: `docker-compose.yml` reads this `.env` from the project **root** (not
+> `api/.env`). The root `.env` file is gitignored.
+
+### 2. Start everything with Docker Compose
+
+```sh
+docker compose up --build
+```
+
+- API: http://localhost:8000 (interactive docs at `/docs`)
+- Frontend: http://localhost:5173
+
+The first time you run this, apply database migrations:
+
+```sh
+docker compose exec api alembic upgrade head
+```
+
+Register an account at http://localhost:5173/register and start chatting.
+
+## Screenshots
+
+Add screenshots of the chat, tasks board, and analytics dashboard to
+`docs/screenshots/` and reference them here, e.g.:
+
+```md
+![Chat view](docs/screenshots/chat.png)
+![Tasks board](docs/screenshots/tasks.png)
+![Analytics dashboard](docs/screenshots/analytics.png)
+```
 
 ## Running tests
 
@@ -34,6 +99,7 @@ Backend:
 ```sh
 cd api
 pip install -r requirements-dev.txt
+ruff check .
 pytest
 ```
 
@@ -44,5 +110,24 @@ cd web
 npm install
 npm run lint
 npm run build
-npx vitest run
+npm run test
 ```
+
+Both suites run automatically on every push/PR via GitHub Actions
+(`.github/workflows/ci.yml`).
+
+## Deployment
+
+A production deployment typically looks like:
+
+- **API + Postgres**: deploy `api/` (Docker image) plus a managed Postgres
+  database to [Railway](https://railway.app) or [Render](https://render.com).
+  Set the same environment variables as `.env.example`, pointing
+  `DATABASE_URL` at the managed Postgres instance and `FRONTEND_ORIGIN` /
+  `GOOGLE_REDIRECT_URI` at your deployed URLs. Run
+  `alembic upgrade head` as a release/start command.
+- **Frontend**: deploy `web/` to [Vercel](https://vercel.com) (or any static
+  host) with `VITE_API_URL` set to your deployed API URL.
+
+See `render.yaml` and `web/vercel.json` for ready-to-use starting
+configurations for Render and Vercel.

@@ -220,6 +220,23 @@ export function ChatPage() {
       </aside>
 
       <div className="flex flex-1 flex-col">
+        {(conversations ?? []).length > 0 && (
+          <Select
+            value={activeId !== null ? String(activeId) : undefined}
+            onValueChange={(value) => setSelectedId(Number(value))}
+          >
+            <SelectTrigger aria-label="Select conversation" className="mb-2 sm:hidden">
+              <SelectValue placeholder="Select a conversation" />
+            </SelectTrigger>
+            <SelectContent>
+              {(conversations ?? []).map((c) => (
+                <SelectItem key={c.id} value={String(c.id)}>
+                  {c.title}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        )}
         <div className="mb-3 flex items-center justify-between gap-2 border-b border-slate-200 pb-3">
           <div className="min-w-0">
             <h1 className="truncate text-lg font-semibold">{conversation?.title ?? 'Chat'}</h1>
@@ -240,7 +257,7 @@ export function ChatPage() {
               value={conversation.persona}
               onValueChange={(value) => personaMutation.mutate({ id: conversation.id, persona: value as Persona })}
             >
-              <SelectTrigger className="w-48 shrink-0">
+              <SelectTrigger aria-label="Assistant persona" className="w-48 shrink-0">
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
@@ -305,11 +322,16 @@ export function ChatPage() {
             onChange={(e) => setDraft(e.target.value)}
             onKeyDown={handleKeyDown}
             placeholder={activeId === null ? 'Start a new conversation first' : 'Message Aether...'}
+            aria-label="Message"
             disabled={activeId === null || isStreaming}
             className="min-h-[44px] flex-1 resize-none"
             rows={1}
           />
-          <Button onClick={() => void handleSend()} disabled={activeId === null || !draft.trim() || isStreaming}>
+          <Button
+            aria-label="Send message"
+            onClick={() => void handleSend()}
+            disabled={activeId === null || !draft.trim() || isStreaming}
+          >
             <Send className="h-4 w-4" />
           </Button>
         </div>

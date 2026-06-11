@@ -1,9 +1,13 @@
+from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 
 import pytest
 from httpx import AsyncClient
 
 from app.core.config import settings
+from app.models.conversation import Conversation
+from app.models.message import Message, MessageRole
+from tests.conftest import TestingSessionLocal
 
 
 def _content_chunk(text: str) -> SimpleNamespace:
@@ -48,25 +52,42 @@ class _FakeStream:
             yield chunk
 
 
+def _summary_response(text: str) -> SimpleNamespace:
+    return SimpleNamespace(choices=[SimpleNamespace(message=SimpleNamespace(content=text))])
+
+
 class _FakeCompletions:
-    def __init__(self, responses: list[list[SimpleNamespace]]) -> None:
+    def __init__(self, responses: list[list[SimpleNamespace]], summary: SimpleNamespace | None = None) -> None:
         self._responses = responses
+        self._summary = summary
         self.call_count = 0
+        self.summary_calls: list[dict] = []
+        self.stream_calls: list[dict] = []
 
     async def create(self, **kwargs):
+        if kwargs.get("stream") is False:
+            self.summary_calls.append(kwargs)
+            return self._summary or _summary_response("Summary.")
         chunks = self._responses[self.call_count]
         self.call_count += 1
+        self.stream_calls.append(kwargs)
         return _FakeStream(chunks)
 
 
 class _FakeClient:
-    def __init__(self, responses: list[list[SimpleNamespace]]) -> None:
-        self.chat = SimpleNamespace(completions=_FakeCompletions(responses))
+    def __init__(self, responses: list[list[SimpleNamespace]], summary: SimpleNamespace | None = None) -> None:
+        self.chat = SimpleNamespace(completions=_FakeCompletions(responses, summary))
 
 
-def _patch_deepseek(monkeypatch: pytest.MonkeyPatch, responses: list[list[SimpleNamespace]]) -> None:
+def _patch_deepseek(
+    monkeypatch: pytest.MonkeyPatch,
+    responses: list[list[SimpleNamespace]],
+    summary: SimpleNamespace | None = None,
+) -> _FakeClient:
     monkeypatch.setattr(settings, "DEEPSEEK_API_KEY", "test-key")
-    monkeypatch.setattr("app.agent.loop.get_deepseek_client", lambda: _FakeClient(responses))
+    fake_client = _FakeClient(responses, summary)
+    monkeypatch.setattr("app.agent.loop.get_deepseek_client", lambda: fake_client)
+    return fake_client
 
 
 async def test_conversation_requires_auth(client: AsyncClient) -> None:
@@ -128,7 +149,11 @@ async def test_conversation_idor_protection(client: AsyncClient) -> None:
     assert resp.status_code == 404
 
 
-async def test_chat_message_requires_deepseek_key(client: AsyncClient, auth_headers: dict[str, str]) -> None:
+async def test_chat_message_requires_deepseek_key(
+    client: AsyncClient, auth_headers: dict[str, str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(settings, "DEEPSEEK_API_KEY", "")
+
     create_resp = await client.post("/api/v1/conversations", json={}, headers=auth_headers)
     conversation_id = create_resp.json()["id"]
 
@@ -167,10 +192,58 @@ async def test_chat_message_simple_response(
     assert convo["title"] == "Hi"
 
 
+async def test_chat_message_summarizes_old_history(
+    client: AsyncClient, auth_headers: dict[str, str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    fake_client = _patch_deepseek(
+        monkeypatch,
+        responses=[[_content_chunk("Sure thing!"), _usage_chunk(10, 5)]],
+        summary=_summary_response("The user and assistant discussed a long topic."),
+    )
+
+    create_resp = await client.post("/api/v1/conversations", json={}, headers=auth_headers)
+    conversation_id = create_resp.json()["id"]
+
+    # Seed 15 messages of 5000 chars each. With the new user message, that's
+    # 16 unsummarized messages; folding all but the last 10 (6 messages)
+    # yields 30000 chars, comfortably over the 24000-char threshold.
+    base_time = datetime.now(timezone.utc)
+    async with TestingSessionLocal() as session:
+        for i in range(15):
+            session.add(
+                Message(
+                    conversation_id=conversation_id,
+                    role=MessageRole.user if i % 2 == 0 else MessageRole.assistant,
+                    content="x" * 5000,
+                    created_at=base_time + timedelta(seconds=i),
+                )
+            )
+        await session.commit()
+
+    resp = await client.post(
+        f"/api/v1/conversations/{conversation_id}/messages", json={"content": "Hi"}, headers=auth_headers
+    )
+    assert resp.status_code == 200
+
+    async with TestingSessionLocal() as session:
+        conversation = await session.get(Conversation, conversation_id)
+        assert conversation.memory_summary == "The user and assistant discussed a long topic."
+        assert conversation.memory_summarized_until_id is not None
+
+    # 6 of the 16 pre-existing/new messages get folded into the summary; the
+    # remaining 9 seeded messages + the new "Hi" message stay verbatim.
+    final_messages = fake_client.chat.completions.stream_calls[0]["messages"]
+    folded_content = "x" * 5000
+    kept_count = sum(1 for m in final_messages if m.get("content") == folded_content)
+    assert kept_count == 9
+    assert any("Summary of earlier conversation" in (m.get("content") or "") for m in final_messages)
+
+
 async def test_chat_message_rate_limit(
     client: AsyncClient, auth_headers: dict[str, str], monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setattr(settings, "CHAT_RATE_LIMIT_PER_MINUTE", 2)
+    monkeypatch.setattr(settings, "DEEPSEEK_API_KEY", "")
 
     create_resp = await client.post("/api/v1/conversations", json={}, headers=auth_headers)
     conversation_id = create_resp.json()["id"]

@@ -46,3 +46,27 @@ def create_refresh_token(subject: str, token_version: int) -> str:
 
 def decode_token(token: str) -> dict[str, Any]:
     return jwt.decode(token, settings.SECRET_KEY, algorithms=[settings.ALGORITHM])
+
+
+def create_oauth_state_token(user_id: int) -> str:
+    """Short-lived, signed token used as the OAuth `state` param. Binds the
+    callback (an unauthenticated browser redirect) back to the user who
+    initiated the flow and protects against CSRF, since it can't be forged
+    without SECRET_KEY."""
+    now = datetime.now(timezone.utc)
+    to_encode: dict[str, Any] = {
+        "sub": str(user_id),
+        "type": "oauth_state",
+        "iat": now,
+        "exp": now + timedelta(minutes=settings.OAUTH_STATE_EXPIRE_MINUTES),
+    }
+    return jwt.encode(to_encode, settings.SECRET_KEY, algorithm=settings.ALGORITHM)
+
+
+def verify_oauth_state_token(token: str) -> int:
+    """Returns the user id encoded in an OAuth state token, or raises
+    jose.JWTError / ValueError if it's invalid, expired, or the wrong type."""
+    payload = jwt.decode(token, settings.SECRET_KEY, algorithms=[settings.ALGORITHM])
+    if payload.get("type") != "oauth_state":
+        raise ValueError("Invalid state token type")
+    return int(payload["sub"])

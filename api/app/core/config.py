@@ -32,15 +32,18 @@ class Settings(BaseSettings):
 
     # Rate limiting
     CHAT_RATE_LIMIT_PER_MINUTE: int = 20
+    WEB_SEARCH_RATE_LIMIT_PER_MINUTE: int = 10
+    CALENDAR_RATE_LIMIT_PER_MINUTE: int = 20
 
     # Tools
     TAVILY_API_KEY: str = ""
-    OPENWEATHER_API_KEY: str = ""
 
     # Google Calendar OAuth
     GOOGLE_CLIENT_ID: str = ""
     GOOGLE_CLIENT_SECRET: str = ""
     GOOGLE_REDIRECT_URI: str = ""
+    GOOGLE_OAUTH_SCOPES: str = "https://www.googleapis.com/auth/calendar"
+    OAUTH_STATE_EXPIRE_MINUTES: int = 5
 
 
 @lru_cache

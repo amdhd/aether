@@ -7,6 +7,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.agent.client import get_deepseek_client
+from app.agent.memory import maybe_summarize_history
 from app.agent.personas import get_system_prompt
 from app.agent.tools import TOOL_SCHEMAS, call_tool
 from app.core.config import settings
@@ -50,9 +51,10 @@ async def _build_context(db: AsyncSession, conversation: Conversation) -> list[d
             }
         )
 
-    history = await db.scalars(
-        select(Message).where(Message.conversation_id == conversation.id).order_by(Message.created_at)
-    )
+    history_stmt = select(Message).where(Message.conversation_id == conversation.id).order_by(Message.id)
+    if conversation.memory_summarized_until_id:
+        history_stmt = history_stmt.where(Message.id > conversation.memory_summarized_until_id)
+    history = await db.scalars(history_stmt)
     for message in history.all():
         messages.append(_message_to_api(message))
     return messages
@@ -81,6 +83,7 @@ async def stream_agent_response(
     await db.commit()
 
     client = get_deepseek_client()
+    await maybe_summarize_history(db, conversation, client)
     messages = await _build_context(db, conversation)
 
     for _ in range(MAX_TOOL_ITERATIONS):

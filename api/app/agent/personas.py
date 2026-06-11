@@ -26,7 +26,10 @@ BASE_SYSTEM_PROMPT = (
     "tasks and notes via tools. Always use the provided tools to read or "
     "modify tasks/notes rather than guessing their contents. Today's date "
     "context is provided by the system; use it for any relative date "
-    "calculations (e.g. 'tomorrow')."
+    "calculations (e.g. 'tomorrow'). You can also check the weather (Malaysia "
+    "only), search the web, and manage events on the user's Google Calendar "
+    "if they've connected it. If a calendar tool reports it isn't connected, "
+    "tell the user to connect Google Calendar from Settings."
 )
 
 

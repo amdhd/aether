@@ -22,3 +22,6 @@ class User(Base):
     conversations: Mapped[list["Conversation"]] = relationship(
         back_populates="user", cascade="all, delete-orphan"
     )
+    google_credential: Mapped["GoogleCredential | None"] = relationship(
+        back_populates="user", cascade="all, delete-orphan", uselist=False
+    )

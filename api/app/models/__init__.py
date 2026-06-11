@@ -1,4 +1,5 @@
 from app.models.conversation import Conversation, Persona
+from app.models.google_credential import GoogleCredential
 from app.models.message import Message, MessageRole
 from app.models.note import Note
 from app.models.task import Task
@@ -14,4 +15,5 @@ __all__ = [
     "Message",
     "MessageRole",
     "UsageLog",
+    "GoogleCredential",
 ]

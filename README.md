@@ -4,8 +4,9 @@ An AI personal assistant web app: FastAPI + async SQLAlchemy backend, React +
 TypeScript frontend, with a DeepSeek-powered tool-calling agent for managing
 your tasks, notes, calendar, and more.
 
-> Status: Weeks 1-4 complete. See `AETHER_AI_AGENT_PROMPT.md` for the full
-> project spec and milestone plan.
+A full-stack project: streaming chat, a tool-calling agent, JWT auth, OAuth
+integrations, background-free async I/O end to end, and a test suite + CI on
+both the backend and frontend.
 
 ## Features
 
@@ -131,3 +132,23 @@ A production deployment typically looks like:
 
 See `render.yaml` and `web/vercel.json` for ready-to-use starting
 configurations for Render and Vercel.
+
+### Google Calendar OAuth in production
+
+The Google integration works out of the box for local development, where the
+redirect URI points at `localhost`. To make it work on a deployed domain:
+
+1. **Update the environment variables** to your production URLs:
+   - `GOOGLE_REDIRECT_URI` → `https://<your-api-domain>/api/v1/integrations/google/callback`
+   - `FRONTEND_ORIGIN` → `https://<your-frontend-domain>`
+2. **Register the redirect URI in the Google Cloud Console**: under
+   *APIs & Services → Credentials → your OAuth 2.0 Client ID*, add the exact
+   production `GOOGLE_REDIRECT_URI` above to **Authorized redirect URIs**. It
+   must match character-for-character or Google will reject the callback.
+3. **Publish the OAuth consent screen** (or add testers): a new OAuth app
+   starts in *Testing* mode and only allows accounts listed as test users.
+   Either add the accounts you'll sign in with as test users, or submit the
+   app for verification to allow any Google account.
+
+The same applies to any other origins (`localhost:5173`) referenced in the
+consent screen's *Authorized JavaScript origins*.

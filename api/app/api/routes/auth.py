@@ -1,24 +1,50 @@
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Cookie, Depends, HTTPException, Response, status
 from fastapi.security import OAuth2PasswordRequestForm
-from jose import JWTError
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import get_current_user
+from app.core.config import settings
 from app.core.rate_limit import enforce_auth_rate_limit
-from app.core.security import (
-    create_access_token,
-    create_refresh_token,
-    decode_token,
-    hash_password,
-    verify_password,
-)
+from app.core.security import hash_password, verify_password
 from app.db.session import get_db
 from app.models.user import User
-from app.schemas.auth import Token, TokenRefreshRequest
+from app.schemas.auth import AccessToken
 from app.schemas.user import UserCreate, UserRead
+from app.services import refresh_tokens
+from app.services.refresh_tokens import IssuedTokens, RefreshError
 
 router = APIRouter(prefix="/auth", tags=["auth"])
+
+# Scope the refresh cookie to the auth endpoints so it is never attached to
+# ordinary API requests, shrinking its exposure.
+_COOKIE_PATH = f"{settings.API_V1_PREFIX}/auth"
+
+
+def _set_refresh_cookie(response: Response, refresh_token: str) -> None:
+    response.set_cookie(
+        key=settings.REFRESH_COOKIE_NAME,
+        value=refresh_token,
+        max_age=settings.REFRESH_TOKEN_EXPIRE_DAYS * 24 * 3600,
+        httponly=True,
+        secure=settings.REFRESH_COOKIE_SECURE,
+        samesite=settings.REFRESH_COOKIE_SAMESITE,
+        domain=settings.REFRESH_COOKIE_DOMAIN or None,
+        path=_COOKIE_PATH,
+    )
+
+
+def _clear_refresh_cookie(response: Response) -> None:
+    response.delete_cookie(
+        key=settings.REFRESH_COOKIE_NAME,
+        domain=settings.REFRESH_COOKIE_DOMAIN or None,
+        path=_COOKIE_PATH,
+    )
+
+
+def _token_response(response: Response, tokens: IssuedTokens) -> AccessToken:
+    _set_refresh_cookie(response, tokens.refresh_token)
+    return AccessToken(access_token=tokens.access_token)
 
 
 @router.post(
@@ -43,11 +69,12 @@ async def register(user_in: UserCreate, db: AsyncSession = Depends(get_db)) -> U
     return user
 
 
-@router.post("/login", response_model=Token, dependencies=[Depends(enforce_auth_rate_limit("login"))])
+@router.post("/login", response_model=AccessToken, dependencies=[Depends(enforce_auth_rate_limit("login"))])
 async def login(
+    response: Response,
     form_data: OAuth2PasswordRequestForm = Depends(),
     db: AsyncSession = Depends(get_db),
-) -> Token:
+) -> AccessToken:
     user = await db.scalar(select(User).where(User.email == form_data.username))
     if user is None or not verify_password(form_data.password, user.password_hash):
         raise HTTPException(
@@ -55,44 +82,38 @@ async def login(
             detail="Incorrect email or password",
             headers={"WWW-Authenticate": "Bearer"},
         )
-    return Token(
-        access_token=create_access_token(str(user.id), user.token_version),
-        refresh_token=create_refresh_token(str(user.id), user.token_version),
-    )
+    tokens = await refresh_tokens.issue_token_pair(db, user)
+    return _token_response(response, tokens)
 
 
-@router.post("/refresh", response_model=Token)
-async def refresh(payload: TokenRefreshRequest, db: AsyncSession = Depends(get_db)) -> Token:
-    invalid_token_exception = HTTPException(
-        status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid refresh token"
-    )
+@router.post("/refresh", response_model=AccessToken)
+async def refresh(
+    response: Response,
+    refresh_token: str | None = Cookie(default=None, alias=settings.REFRESH_COOKIE_NAME),
+    db: AsyncSession = Depends(get_db),
+) -> AccessToken:
+    if not refresh_token:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED, detail="Missing refresh token"
+        )
     try:
-        decoded = decode_token(payload.refresh_token)
-        if decoded.get("type") != "refresh":
-            raise invalid_token_exception
-        user_id = decoded["sub"]
-        token_version = decoded["ver"]
-    except (JWTError, KeyError):
-        raise invalid_token_exception
-
-    user = await db.get(User, int(user_id))
-    if user is None or user.token_version != token_version:
-        raise invalid_token_exception
-
-    return Token(
-        access_token=create_access_token(str(user.id), user.token_version),
-        refresh_token=create_refresh_token(str(user.id), user.token_version),
-    )
+        tokens = await refresh_tokens.rotate_refresh_token(db, refresh_token)
+    except RefreshError:
+        _clear_refresh_cookie(response)
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid refresh token"
+        )
+    return _token_response(response, tokens)
 
 
 @router.post("/logout", status_code=status.HTTP_204_NO_CONTENT)
 async def logout(
+    response: Response,
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> None:
-    current_user.token_version += 1
-    db.add(current_user)
-    await db.commit()
+    await refresh_tokens.revoke_all_for_user(db, current_user)
+    _clear_refresh_cookie(response)
 
 
 @router.get("/me", response_model=UserRead)

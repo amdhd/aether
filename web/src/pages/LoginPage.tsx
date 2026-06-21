@@ -11,7 +11,7 @@ import { useAuthStore } from '@/store/auth'
 
 export function LoginPage() {
   const navigate = useNavigate()
-  const setTokens = useAuthStore((state) => state.setTokens)
+  const setAccessToken = useAuthStore((state) => state.setAccessToken)
   const setUser = useAuthStore((state) => state.setUser)
 
   const [email, setEmail] = useState('')
@@ -25,7 +25,7 @@ export function LoginPage() {
     setIsSubmitting(true)
     try {
       const tokens = await login({ email, password })
-      setTokens(tokens.access_token, tokens.refresh_token)
+      setAccessToken(tokens.access_token)
       const user = await getMe()
       setUser(user)
       navigate('/')

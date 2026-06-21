@@ -11,7 +11,7 @@ import { useAuthStore } from '@/store/auth'
 
 export function RegisterPage() {
   const navigate = useNavigate()
-  const setTokens = useAuthStore((state) => state.setTokens)
+  const setAccessToken = useAuthStore((state) => state.setAccessToken)
   const setUser = useAuthStore((state) => state.setUser)
 
   const [name, setName] = useState('')
@@ -27,7 +27,7 @@ export function RegisterPage() {
     try {
       await register({ name, email, password })
       const tokens = await login({ email, password })
-      setTokens(tokens.access_token, tokens.refresh_token)
+      setAccessToken(tokens.access_token)
       const user = await getMe()
       setUser(user)
       navigate('/')

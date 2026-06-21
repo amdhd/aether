@@ -20,6 +20,7 @@ def _create_token(
     token_version: int,
     expires_delta: timedelta,
     token_type: Literal["access", "refresh"],
+    extra_claims: dict[str, Any] | None = None,
 ) -> str:
     now = datetime.now(timezone.utc)
     to_encode: dict[str, Any] = {
@@ -29,6 +30,8 @@ def _create_token(
         "iat": now,
         "exp": now + expires_delta,
     }
+    if extra_claims:
+        to_encode.update(extra_claims)
     return jwt.encode(to_encode, settings.SECRET_KEY, algorithm=settings.ALGORITHM)
 
 
@@ -38,9 +41,15 @@ def create_access_token(subject: str, token_version: int) -> str:
     )
 
 
-def create_refresh_token(subject: str, token_version: int) -> str:
+def create_refresh_token(subject: str, token_version: int, jti: str, family_id: str) -> str:
+    """A refresh token carries a unique `jti` and a `fam` (family id) so the
+    server can rotate it on each use and detect replay of a revoked token."""
     return _create_token(
-        subject, token_version, timedelta(days=settings.REFRESH_TOKEN_EXPIRE_DAYS), "refresh"
+        subject,
+        token_version,
+        timedelta(days=settings.REFRESH_TOKEN_EXPIRE_DAYS),
+        "refresh",
+        extra_claims={"jti": jti, "fam": family_id},
     )
 
 

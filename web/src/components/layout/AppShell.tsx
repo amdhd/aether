@@ -18,14 +18,11 @@ const navItems = [
 export function AppShell() {
   const navigate = useNavigate()
   const user = useAuthStore((state) => state.user)
-  const refreshToken = useAuthStore((state) => state.refreshToken)
   const logout = useAuthStore((state) => state.logout)
 
   const handleLogout = async () => {
     try {
-      if (refreshToken) {
-        await logoutRequest(refreshToken)
-      }
+      await logoutRequest()
     } catch {
       // ignore network errors on logout
     } finally {

@@ -6,7 +6,7 @@ from typing import Any
 from urllib.parse import quote
 
 import httpx
-from sqlalchemy import or_, select
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
@@ -15,6 +15,7 @@ from app.models.note import Note
 from app.models.task import Task, TaskPriority, TaskStatus
 from app.models.user import User
 from app.services import google_oauth
+from app.services.note_search import refresh_note_embedding, search_notes
 
 WEATHER_API_URL = "https://api.data.gov.my/weather/forecast/"
 WEATHER_CACHE_TTL_SECONDS = 3600
@@ -151,7 +152,11 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
         "type": "function",
         "function": {
             "name": "search_notes",
-            "description": "Search the user's notes by title or content.",
+            "description": (
+                "Semantically search the user's notes by meaning, not just exact "
+                "keywords. Use this to recall what the user has written about a "
+                "topic before answering from your own knowledge."
+            ),
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -350,6 +355,7 @@ async def _create_note(db: AsyncSession, user: User, args: dict[str, Any]) -> di
         tags=args.get("tags") or [],
     )
     db.add(note)
+    await refresh_note_embedding(db, note)
     await db.commit()
     await db.refresh(note)
     return {"note": _serialize_note(note)}
@@ -363,15 +369,8 @@ async def _list_notes(db: AsyncSession, user: User, args: dict[str, Any]) -> dic
 
 async def _search_notes(db: AsyncSession, user: User, args: dict[str, Any]) -> dict[str, Any]:
     query = args["query"][:200]
-    like = f"%{query}%"
-    stmt = (
-        select(Note)
-        .where(Note.user_id == user.id)
-        .where(or_(Note.title.ilike(like), Note.content.ilike(like)))
-        .order_by(Note.updated_at.desc())
-    )
-    result = await db.scalars(stmt)
-    return {"notes": [_serialize_note(note) for note in result.all()]}
+    notes = await search_notes(db, user, query, limit=5)
+    return {"notes": [_serialize_note(note) for note in notes]}
 
 
 _weather_cache: dict[str, Any] = {"data": None, "fetched_at": 0.0}

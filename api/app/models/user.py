@@ -11,6 +11,7 @@ if TYPE_CHECKING:
     from app.models.conversation import Conversation
     from app.models.google_credential import GoogleCredential
     from app.models.note import Note
+    from app.models.refresh_token import RefreshToken
     from app.models.task import Task
 
 
@@ -31,4 +32,7 @@ class User(Base):
     )
     google_credential: Mapped["GoogleCredential | None"] = relationship(
         back_populates="user", cascade="all, delete-orphan", uselist=False
+    )
+    refresh_tokens: Mapped[list["RefreshToken"]] = relationship(
+        back_populates="user", cascade="all, delete-orphan"
     )

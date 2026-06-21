@@ -1,5 +1,9 @@
 from httpx import AsyncClient
 
+from app.core.config import settings
+
+COOKIE = settings.REFRESH_COOKIE_NAME
+
 
 async def test_register_and_login(client: AsyncClient) -> None:
     resp = await client.post(
@@ -19,8 +23,10 @@ async def test_register_and_login(client: AsyncClient) -> None:
     assert resp.status_code == 200
     tokens = resp.json()
     assert "access_token" in tokens
-    assert "refresh_token" in tokens
     assert tokens["token_type"] == "bearer"
+    # The refresh token must NOT be exposed in the body; it is an HttpOnly cookie.
+    assert "refresh_token" not in tokens
+    assert resp.cookies.get(COOKIE)
 
 
 async def test_register_duplicate_email(client: AsyncClient) -> None:
@@ -53,41 +59,71 @@ async def test_full_auth_flow(client: AsyncClient) -> None:
         "/api/v1/auth/login",
         data={"username": "carol@example.com", "password": "supersecret123"},
     )
-    tokens = login_resp.json()
+    access_token = login_resp.json()["access_token"]
 
     me_resp = await client.get(
-        "/api/v1/auth/me", headers={"Authorization": f"Bearer {tokens['access_token']}"}
+        "/api/v1/auth/me", headers={"Authorization": f"Bearer {access_token}"}
     )
     assert me_resp.status_code == 200
     assert me_resp.json()["email"] == "carol@example.com"
 
-    refresh_resp = await client.post(
-        "/api/v1/auth/refresh", json={"refresh_token": tokens["refresh_token"]}
-    )
+    # The refresh cookie is sent automatically by the client's cookie jar.
+    refresh_resp = await client.post("/api/v1/auth/refresh")
     assert refresh_resp.status_code == 200
-    new_tokens = refresh_resp.json()
-    assert new_tokens["access_token"]
+    new_access = refresh_resp.json()["access_token"]
+    assert new_access
 
     logout_resp = await client.post(
-        "/api/v1/auth/logout", headers={"Authorization": f"Bearer {new_tokens['access_token']}"}
+        "/api/v1/auth/logout", headers={"Authorization": f"Bearer {new_access}"}
     )
     assert logout_resp.status_code == 204
 
     # access token issued before logout is now invalid (token_version incremented)
     me_resp2 = await client.get(
-        "/api/v1/auth/me", headers={"Authorization": f"Bearer {new_tokens['access_token']}"}
+        "/api/v1/auth/me", headers={"Authorization": f"Bearer {new_access}"}
     )
     assert me_resp2.status_code == 401
 
 
-async def test_refresh_with_invalid_token(client: AsyncClient) -> None:
-    resp = await client.post("/api/v1/auth/refresh", json={"refresh_token": "not-a-real-token"})
+async def test_refresh_rotates_and_detects_reuse(client: AsyncClient) -> None:
+    await client.post(
+        "/api/v1/auth/register",
+        json={"email": "dave@example.com", "name": "Dave", "password": "supersecret123"},
+    )
+    await client.post(
+        "/api/v1/auth/login",
+        data={"username": "dave@example.com", "password": "supersecret123"},
+    )
+    stolen = client.cookies.get(COOKIE)
+
+    # Legitimate rotation: the presented token is consumed, a new one is issued.
+    first = await client.post("/api/v1/auth/refresh")
+    assert first.status_code == 200
+    rotated = client.cookies.get(COOKIE)
+    assert rotated != stolen
+
+    # Replaying the now-revoked original token is treated as theft -> 401.
+    client.cookies.clear()
+    replay = await client.post("/api/v1/auth/refresh", cookies={COOKIE: stolen})
+    assert replay.status_code == 401
+
+    # ...and the whole family is burned, so the legitimately rotated token dies too.
+    client.cookies.clear()
+    after = await client.post("/api/v1/auth/refresh", cookies={COOKIE: rotated})
+    assert after.status_code == 401
+
+
+async def test_refresh_without_cookie(client: AsyncClient) -> None:
+    resp = await client.post("/api/v1/auth/refresh")
+    assert resp.status_code == 401
+
+
+async def test_refresh_with_invalid_cookie(client: AsyncClient) -> None:
+    resp = await client.post("/api/v1/auth/refresh", cookies={COOKIE: "not-a-real-token"})
     assert resp.status_code == 401
 
 
 async def test_login_rate_limit(client: AsyncClient) -> None:
-    from app.core.config import settings
-
     payload = {"username": "nobody@example.com", "password": "wrong"}
     for _ in range(settings.AUTH_RATE_LIMIT_PER_MINUTE):
         resp = await client.post("/api/v1/auth/login", data=payload)

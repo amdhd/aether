@@ -21,10 +21,16 @@ both the backend and frontend.
   doesn't grow unbounded.
 - **Tasks** — a kanban-style board (To do / Doing / Done) with priorities and
   due dates.
-- **Notes** — searchable notes with tags.
+- **Notes** — notes with tags and **semantic search**: notes are embedded
+  (OpenAI `text-embedding-3-small`) and stored in Postgres via **pgvector**, so
+  the assistant retrieves by meaning, not just keywords. Falls back to a keyword
+  scan when no embedding key is configured.
 - **Analytics dashboard** — messages and token usage per day, tool-usage
   breakdown, and lifetime totals.
-- **Auth** — JWT access/refresh tokens, register/login/logout.
+- **Auth** — short-lived JWT access tokens kept in memory, plus refresh tokens
+  delivered as **HttpOnly cookies** (not readable by JS). Refresh tokens
+  **rotate on every use** with **reuse detection**: replaying a rotated token
+  revokes the whole token family.
 - **Rate limiting** on chat and external-API tools (web search, calendar).
 
 ## Stack

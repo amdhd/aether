@@ -1,6 +1,8 @@
 services:
   db:
-    image: postgres:16-alpine
+    # pgvector-enabled Postgres so the semantic note-search migration can
+    # `CREATE EXTENSION vector`. Drop-in replacement for postgres:16.
+    image: pgvector/pgvector:pg16
     restart: unless-stopped
     environment:
       POSTGRES_USER: ${POSTGRES_USER:-aether}

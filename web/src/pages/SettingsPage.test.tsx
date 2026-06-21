@@ -15,7 +15,7 @@ const mockUser: User = { id: 1, email: 'a@example.com', name: 'Ada Lovelace', cr
 
 describe('SettingsPage', () => {
   afterEach(() => {
-    useAuthStore.setState({ accessToken: null, refreshToken: null, user: null })
+    useAuthStore.setState({ accessToken: null, user: null, bootstrapped: false })
   })
 
   it('shows the current user account info', async () => {

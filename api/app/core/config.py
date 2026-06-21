@@ -38,6 +38,16 @@ class Settings(BaseSettings):
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 15
     REFRESH_TOKEN_EXPIRE_DAYS: int = 7
 
+    # Refresh-token cookie. The refresh token is delivered as an HttpOnly cookie
+    # (never readable by JS) instead of a response body, so XSS can't exfiltrate
+    # it. In production the frontend and API often live on different domains
+    # (e.g. Vercel + Render), which makes this a cross-site cookie: set
+    # REFRESH_COOKIE_SAMESITE=none and REFRESH_COOKIE_SECURE=true there.
+    REFRESH_COOKIE_NAME: str = "refresh_token"
+    REFRESH_COOKIE_SECURE: bool = False
+    REFRESH_COOKIE_SAMESITE: str = "lax"  # "lax" for same-site dev, "none" cross-site prod
+    REFRESH_COOKIE_DOMAIN: str = ""  # e.g. ".example.com" to share across subdomains
+
     # Encryption (Fernet key for OAuth tokens at rest)
     ENCRYPTION_KEY: str = ""
 
@@ -57,6 +67,13 @@ class Settings(BaseSettings):
 
     # Tools
     TAVILY_API_KEY: str = ""
+
+    # Embeddings (semantic note search / RAG). Optional: when OPENAI_API_KEY is
+    # unset, note embeddings are skipped and semantic search falls back to a
+    # keyword scan, so local dev and CI keep working without a key.
+    OPENAI_API_KEY: str = ""
+    EMBEDDING_MODEL: str = "text-embedding-3-small"
+    EMBEDDING_DIMENSIONS: int = 1536
 
     # Google Calendar OAuth
     GOOGLE_CLIENT_ID: str = ""

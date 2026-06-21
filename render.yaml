@@ -29,11 +29,21 @@ services:
         value: "15"
       - key: REFRESH_TOKEN_EXPIRE_DAYS
         value: "7"
+      # Refresh cookie: cross-site (Vercel frontend + Render API) needs Secure
+      # cookies with SameSite=None so the browser will send them.
+      - key: REFRESH_COOKIE_SECURE
+        value: "true"
+      - key: REFRESH_COOKIE_SAMESITE
+        value: none
       - key: FRONTEND_ORIGIN
         sync: false
       - key: DEEPSEEK_API_KEY
         sync: false
       - key: TAVILY_API_KEY
+        sync: false
+      # Semantic note search. Render's managed Postgres supports pgvector; the
+      # migration runs CREATE EXTENSION vector automatically.
+      - key: OPENAI_API_KEY
         sync: false
       - key: GOOGLE_CLIENT_ID
         sync: false

@@ -8,6 +8,7 @@ from app.models.note import Note
 from app.models.user import User
 from app.schemas.common import DEFAULT_PAGE_LIMIT, MAX_PAGE_LIMIT, Page
 from app.schemas.note import NoteCreate, NoteRead, NoteUpdate
+from app.services.note_search import refresh_note_embedding
 
 router = APIRouter(prefix="/notes", tags=["notes"])
 
@@ -42,6 +43,7 @@ async def create_note(
 ) -> Note:
     note = Note(**note_in.model_dump(), user_id=current_user.id)
     db.add(note)
+    await refresh_note_embedding(db, note)
     await db.commit()
     await db.refresh(note)
     return note
@@ -64,8 +66,11 @@ async def update_note(
     db: AsyncSession = Depends(get_db),
 ) -> Note:
     note = await _get_owned_note(note_id, current_user, db)
-    for field, value in note_in.model_dump(exclude_unset=True).items():
+    fields = note_in.model_dump(exclude_unset=True)
+    for field, value in fields.items():
         setattr(note, field, value)
+    if "title" in fields or "content" in fields:
+        await refresh_note_embedding(db, note)
     await db.commit()
     await db.refresh(note)
     return note

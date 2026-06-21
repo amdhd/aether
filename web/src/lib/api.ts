@@ -1,5 +1,5 @@
 import { useAuthStore } from '@/store/auth'
-import type { Token } from '@/types'
+import type { AccessToken } from '@/types'
 
 export const API_URL = import.meta.env.VITE_API_URL ?? 'http://localhost:8000'
 export const API_PREFIX = '/api/v1'
@@ -18,23 +18,23 @@ export class ApiError extends Error {
 let refreshPromise: Promise<string | null> | null = null
 
 export async function refreshAccessToken(): Promise<string | null> {
-  const { refreshToken, setTokens, logout } = useAuthStore.getState()
-  if (!refreshToken) return null
+  const { setAccessToken, logout } = useAuthStore.getState()
 
+  // The refresh token rides along as an HttpOnly cookie (credentials:'include'),
+  // so there is nothing to read from the store or send in the body.
   if (!refreshPromise) {
     refreshPromise = (async () => {
       try {
         const res = await fetch(`${API_URL}${API_PREFIX}/auth/refresh`, {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ refresh_token: refreshToken }),
+          credentials: 'include',
         })
         if (!res.ok) {
           logout()
           return null
         }
-        const data: Token = await res.json()
-        setTokens(data.access_token, data.refresh_token)
+        const data: AccessToken = await res.json()
+        setAccessToken(data.access_token)
         return data.access_token
       } catch {
         logout()
@@ -46,6 +46,19 @@ export async function refreshAccessToken(): Promise<string | null> {
   }
 
   return refreshPromise
+}
+
+/**
+ * On app load, try to exchange the refresh cookie for an access token. Resolves
+ * to the access token (logged in) or null (no/expired session). Marks the auth
+ * store as bootstrapped so route guards can stop showing a loader.
+ */
+export async function bootstrapAuth(): Promise<string | null> {
+  try {
+    return await refreshAccessToken()
+  } finally {
+    useAuthStore.getState().setBootstrapped(true)
+  }
 }
 
 interface RequestOptions extends Omit<RequestInit, 'body'> {
@@ -66,6 +79,7 @@ export async function apiFetch<T>(path: string, options: RequestOptions = {}): P
     }
     return fetch(`${API_URL}${path}`, {
       ...rest,
+      credentials: 'include',
       headers: finalHeaders,
       body: body !== undefined ? JSON.stringify(body) : undefined,
     })

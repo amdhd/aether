@@ -1,29 +1,29 @@
 import { create } from 'zustand'
-import { persist } from 'zustand/middleware'
 
 import type { User } from '@/types'
 
 interface AuthState {
+  // Access token is held in memory only — never in localStorage — so an XSS
+  // payload can't read it. The refresh token lives in an HttpOnly cookie the
+  // browser manages; on page load we silently exchange it for a new access
+  // token (see bootstrapAuth in lib/api).
   accessToken: string | null
-  refreshToken: string | null
   user: User | null
-  setTokens: (accessToken: string, refreshToken: string) => void
+  // False until the initial silent refresh on app load has completed, so routes
+  // don't bounce to /login before we know whether there's a valid session.
+  bootstrapped: boolean
+  setAccessToken: (accessToken: string | null) => void
   setUser: (user: User | null) => void
+  setBootstrapped: (bootstrapped: boolean) => void
   logout: () => void
 }
 
-export const useAuthStore = create<AuthState>()(
-  persist(
-    (set) => ({
-      accessToken: null,
-      refreshToken: null,
-      user: null,
-      setTokens: (accessToken, refreshToken) => set({ accessToken, refreshToken }),
-      setUser: (user) => set({ user }),
-      logout: () => set({ accessToken: null, refreshToken: null, user: null }),
-    }),
-    {
-      name: 'aether-auth',
-    },
-  ),
-)
+export const useAuthStore = create<AuthState>()((set) => ({
+  accessToken: null,
+  user: null,
+  bootstrapped: false,
+  setAccessToken: (accessToken) => set({ accessToken }),
+  setUser: (user) => set({ user }),
+  setBootstrapped: (bootstrapped) => set({ bootstrapped }),
+  logout: () => set({ accessToken: null, user: null }),
+}))

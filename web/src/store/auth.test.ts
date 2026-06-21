@@ -8,39 +8,39 @@ const mockUser: User = { id: 1, email: 'a@example.com', name: 'A', created_at: '
 
 describe('useAuthStore', () => {
   beforeEach(() => {
-    useAuthStore.setState({ accessToken: null, refreshToken: null, user: null })
+    useAuthStore.setState({ accessToken: null, user: null, bootstrapped: false })
   })
 
   it('starts with no session', () => {
     const state = useAuthStore.getState()
     expect(state.accessToken).toBeNull()
-    expect(state.refreshToken).toBeNull()
     expect(state.user).toBeNull()
+    expect(state.bootstrapped).toBe(false)
   })
 
-  it('setTokens stores access and refresh tokens', () => {
-    useAuthStore.getState().setTokens('access-123', 'refresh-456')
-
-    const state = useAuthStore.getState()
-    expect(state.accessToken).toBe('access-123')
-    expect(state.refreshToken).toBe('refresh-456')
+  it('setAccessToken stores the access token in memory', () => {
+    useAuthStore.getState().setAccessToken('access-123')
+    expect(useAuthStore.getState().accessToken).toBe('access-123')
   })
 
   it('setUser stores the current user', () => {
     useAuthStore.getState().setUser(mockUser)
-
     expect(useAuthStore.getState().user).toEqual(mockUser)
   })
 
-  it('logout clears tokens and user', () => {
-    useAuthStore.getState().setTokens('access-123', 'refresh-456')
+  it('setBootstrapped flips the bootstrap flag', () => {
+    useAuthStore.getState().setBootstrapped(true)
+    expect(useAuthStore.getState().bootstrapped).toBe(true)
+  })
+
+  it('logout clears the access token and user', () => {
+    useAuthStore.getState().setAccessToken('access-123')
     useAuthStore.getState().setUser(mockUser)
 
     useAuthStore.getState().logout()
 
     const state = useAuthStore.getState()
     expect(state.accessToken).toBeNull()
-    expect(state.refreshToken).toBeNull()
     expect(state.user).toBeNull()
   })
 })

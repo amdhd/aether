@@ -78,8 +78,12 @@ export function AppShell() {
           </div>
         </header>
 
+        <main className="flex-1 p-4 pb-24 sm:p-6">
+          <Outlet />
+        </main>
+
         <nav
-          className="flex gap-1 overflow-x-auto border-b border-border bg-surface px-2 py-2 sm:hidden"
+          className="fixed inset-x-0 bottom-0 z-40 grid grid-cols-6 border-t border-border bg-surface pb-[env(safe-area-inset-bottom)] sm:hidden"
           aria-label="Primary"
         >
           {navItems.map(({ to, label, icon: Icon, end }) => (
@@ -89,22 +93,18 @@ export function AppShell() {
               end={end}
               className={({ isActive }) =>
                 cn(
-                  'flex items-center gap-2 whitespace-nowrap rounded-md px-3 py-1.5 text-sm font-medium focus-ring',
+                  'flex flex-col items-center justify-center gap-0.5 py-2 text-[11px] font-medium transition-colors focus-ring',
                   isActive
-                    ? 'bg-brand-50 text-brand-700 dark:bg-brand-500/15 dark:text-brand-200'
-                    : 'text-muted-foreground hover:bg-surface-muted hover:text-foreground',
+                    ? 'text-brand-700 dark:text-brand-300'
+                    : 'text-muted-foreground hover:text-foreground',
                 )
               }
             >
-              <Icon className="h-4 w-4" />
+              <Icon className="h-5 w-5" />
               {label}
             </NavLink>
           ))}
         </nav>
-
-        <main className="flex-1 p-4 sm:p-6">
-          <Outlet />
-        </main>
       </div>
     </div>
   )

@@ -3,6 +3,7 @@ import { NavLink, Outlet, useNavigate } from 'react-router-dom'
 
 import { Button } from '@/components/ui/button'
 import { ThemeToggle } from '@/components/ThemeToggle'
+import { UserAvatar } from '@/components/UserAvatar'
 import { useAuthStore } from '@/store/auth'
 import { logout as logoutRequest } from '@/api/auth'
 import { cn } from '@/lib/utils'
@@ -57,9 +58,15 @@ export function AppShell() {
           ))}
         </nav>
         <div className="mt-auto border-t border-border pt-4">
-          <div className="mb-2 flex items-center justify-between gap-2 px-2">
-            {user && <p className="truncate text-sm text-muted-foreground">{user.email}</p>}
-            <ThemeToggle className="shrink-0" />
+          <div className="mb-3 flex items-center gap-3 px-1">
+            {user && <UserAvatar name={user.name} />}
+            {user && (
+              <div className="min-w-0 flex-1">
+                <p className="truncate text-sm font-medium text-foreground">{user.name}</p>
+                <p className="truncate text-xs text-muted-foreground">{user.email}</p>
+              </div>
+            )}
+            <ThemeToggle className="ml-auto shrink-0" />
           </div>
           <Button variant="outline" className="w-full" onClick={handleLogout}>
             Log out

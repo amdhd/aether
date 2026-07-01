@@ -33,7 +33,7 @@ const PERSONA_LABELS: Record<Persona, string> = {
 
 function MessageContent({ content }: { content: string }) {
   return (
-    <div className="text-sm leading-relaxed [&_a]:text-brand-600 [&_a]:underline [&_code]:rounded [&_code]:bg-slate-200 [&_code]:px-1 [&_code]:py-0.5 [&_code]:text-xs [&_ol]:mb-2 [&_ol]:list-decimal [&_ol]:pl-5 [&_p:last-child]:mb-0 [&_p]:mb-2 [&_pre]:mb-2 [&_pre]:overflow-x-auto [&_pre]:rounded-md [&_pre]:bg-slate-900 [&_pre]:p-3 [&_pre]:text-slate-50 [&_pre_code]:bg-transparent [&_pre_code]:p-0 [&_ul]:mb-2 [&_ul]:list-disc [&_ul]:pl-5">
+    <div className="text-sm leading-relaxed [&_a]:text-brand-600 [&_a]:underline [&_code]:rounded [&_code]:bg-surface-muted [&_code]:px-1 [&_code]:py-0.5 [&_code]:text-xs [&_ol]:mb-2 [&_ol]:list-decimal [&_ol]:pl-5 [&_p:last-child]:mb-0 [&_p]:mb-2 [&_pre]:mb-2 [&_pre]:overflow-x-auto [&_pre]:rounded-md [&_pre]:bg-slate-900 [&_pre]:p-3 [&_pre]:text-slate-50 [&_pre_code]:bg-transparent [&_pre_code]:p-0 [&_ul]:mb-2 [&_ul]:list-disc [&_ul]:pl-5">
       <ReactMarkdown remarkPlugins={[remarkGfm]}>{content}</ReactMarkdown>
     </div>
   )
@@ -41,7 +41,7 @@ function MessageContent({ content }: { content: string }) {
 
 function ThinkingBlock({ content }: { content: string }) {
   return (
-    <details className="mb-2 rounded-md border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-500">
+    <details className="mb-2 rounded-md border border-border bg-surface-muted px-3 py-2 text-xs text-muted-foreground">
       <summary className="flex cursor-pointer items-center gap-1.5 font-medium">
         <Brain className="h-3.5 w-3.5" />
         Thinking
@@ -66,7 +66,7 @@ function ChatBubble({
       <div
         className={cn(
           'max-w-[85%] rounded-lg px-3 py-2',
-          isUser ? 'whitespace-pre-wrap bg-brand-600 text-sm text-white' : 'bg-slate-100 text-slate-900',
+          isUser ? 'whitespace-pre-wrap bg-brand-600 text-sm text-white' : 'bg-surface-muted text-foreground',
         )}
       >
         {isUser ? (
@@ -199,7 +199,7 @@ export function ChatPage() {
           {conversationsLoading ? (
             [...Array(3)].map((_, i) => <Skeleton key={i} className="h-10 w-full" />)
           ) : conversations.length === 0 ? (
-            <p className="p-2 text-sm text-slate-400">No conversations yet.</p>
+            <p className="p-2 text-sm text-muted-foreground">No conversations yet.</p>
           ) : (
             <>
               {conversations.map((c) => (
@@ -207,7 +207,9 @@ export function ChatPage() {
                   key={c.id}
                   className={cn(
                     'group flex items-center gap-1 rounded-md px-2 py-2 text-sm',
-                    c.id === activeId ? 'bg-brand-50 text-brand-700' : 'hover:bg-slate-100',
+                    c.id === activeId
+                      ? 'bg-brand-50 text-brand-700 dark:bg-brand-500/15 dark:text-brand-200'
+                      : 'hover:bg-surface-muted',
                   )}
                 >
                   <button className="flex-1 truncate text-left focus-ring" onClick={() => setSelectedId(c.id)}>
@@ -218,7 +220,7 @@ export function ChatPage() {
                     className="opacity-0 focus-ring group-hover:opacity-100"
                     onClick={() => handleDelete(c.id)}
                   >
-                    <Trash2 className="h-3.5 w-3.5 text-slate-400 hover:text-red-600" />
+                    <Trash2 className="h-3.5 w-3.5 text-muted-foreground hover:text-red-600" />
                   </button>
                 </div>
               ))}
@@ -255,10 +257,10 @@ export function ChatPage() {
             </SelectContent>
           </Select>
         )}
-        <div className="mb-3 flex items-center justify-between gap-2 border-b border-slate-200 pb-3">
+        <div className="mb-3 flex items-center justify-between gap-2 border-b border-border pb-3">
           <div className="min-w-0">
             <h1 className="truncate text-lg font-semibold">{conversation?.title ?? 'Chat'}</h1>
-            <p className="text-sm text-slate-500">Your AI assistant.</p>
+            <p className="text-sm text-muted-foreground">Your AI assistant.</p>
           </div>
           <Button
             variant="outline"
@@ -289,9 +291,9 @@ export function ChatPage() {
           )}
         </div>
 
-        <div ref={scrollRef} className="flex-1 space-y-4 overflow-y-auto rounded-card border border-slate-200 bg-white p-4">
+        <div ref={scrollRef} className="flex-1 space-y-4 overflow-y-auto rounded-card border border-border bg-surface p-4">
           {activeId === null ? (
-            <p className="text-sm text-slate-400">Start a new conversation to begin chatting with Aether.</p>
+            <p className="text-sm text-muted-foreground">Start a new conversation to begin chatting with Aether.</p>
           ) : conversationLoading ? (
             <div className="space-y-3">
               {[...Array(3)].map((_, i) => (
@@ -301,7 +303,7 @@ export function ChatPage() {
           ) : (
             <>
               {visibleMessages.length === 0 && pendingUserContent === null && (
-                <p className="text-sm text-slate-400">Send a message to get started.</p>
+                <p className="text-sm text-muted-foreground">Send a message to get started.</p>
               )}
               {visibleMessages.map((message) => (
                 <ChatBubble
@@ -325,7 +327,7 @@ export function ChatPage() {
                   ) : streamingReasoning ? (
                     <ChatBubble role="assistant" content="" reasoningContent={streamingReasoning} />
                   ) : (
-                    <p className="text-sm text-slate-400">Aether is thinking…</p>
+                    <p className="text-sm text-muted-foreground">Aether is thinking…</p>
                   )}
                 </div>
               )}

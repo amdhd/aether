@@ -73,7 +73,7 @@ export function TasksPage() {
       <div className="flex items-center justify-between">
         <div>
           <h1 className="text-2xl font-bold tracking-tight">Tasks</h1>
-          <p className="text-slate-500">Organize your work across to do, doing, and done.</p>
+          <p className="text-muted-foreground">Organize your work across to do, doing, and done.</p>
         </div>
         <Button onClick={openCreateDialog}>
           <Plus className="h-4 w-4" />
@@ -99,15 +99,15 @@ export function TasksPage() {
             const columnTasks = tasks.filter((task) => task.status === column.status)
             return (
               <div key={column.status} className="space-y-3">
-                <h2 className="flex items-center gap-2 text-sm font-semibold uppercase tracking-wide text-slate-500">
+                <h2 className="flex items-center gap-2 text-sm font-semibold uppercase tracking-wide text-muted-foreground">
                   {column.label}
-                  <span className="rounded-full bg-slate-100 px-2 py-0.5 text-xs font-medium text-slate-600">
+                  <span className="rounded-full bg-surface-muted px-2 py-0.5 text-xs font-medium text-muted-foreground">
                     {columnTasks.length}
                   </span>
                 </h2>
                 <div className="space-y-3">
                   {columnTasks.length === 0 && (
-                    <p className="rounded-card border border-dashed border-slate-200 p-4 text-center text-sm text-slate-400">
+                    <p className="rounded-card border border-dashed border-border p-4 text-center text-sm text-muted-foreground">
                       No tasks
                     </p>
                   )}

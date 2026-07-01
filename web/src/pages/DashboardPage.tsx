@@ -10,7 +10,7 @@ export function DashboardPage() {
     <div className="space-y-6">
       <div>
         <h1 className="text-2xl font-bold tracking-tight">Welcome back{user ? `, ${user.name}` : ''}</h1>
-        <p className="text-slate-500">Here&apos;s a quick look at your assistant.</p>
+        <p className="text-muted-foreground">Here&apos;s a quick look at your assistant.</p>
       </div>
 
       <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">

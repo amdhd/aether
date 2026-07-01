@@ -47,7 +47,7 @@ export function SettingsPage() {
     <div className="space-y-6">
       <div>
         <h1 className="text-2xl font-bold tracking-tight">Settings</h1>
-        <p className="text-slate-500">Manage your account and integrations.</p>
+        <p className="text-muted-foreground">Manage your account and integrations.</p>
       </div>
       <Card>
         <CardHeader>
@@ -80,7 +80,7 @@ export function SettingsPage() {
 
           <div className="flex items-center gap-3">
             {googleStatusLoading ? (
-              <span className="text-sm text-slate-500">Checking status...</span>
+              <span className="text-sm text-muted-foreground">Checking status...</span>
             ) : googleStatus?.connected ? (
               <Badge variant="success">Connected</Badge>
             ) : (

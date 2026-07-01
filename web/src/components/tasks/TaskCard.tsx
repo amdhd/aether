@@ -29,8 +29,8 @@ export function TaskCard({ task, onStatusChange, onEdit, onDelete }: TaskCardPro
         </div>
       </CardHeader>
       <CardContent className="space-y-2 pb-2">
-        {task.description && <p className="text-sm text-slate-600">{task.description}</p>}
-        {task.due_date && <p className="text-xs text-slate-400">Due {task.due_date}</p>}
+        {task.description && <p className="text-sm text-muted-foreground">{task.description}</p>}
+        {task.due_date && <p className="text-xs text-muted-foreground">Due {task.due_date}</p>}
       </CardContent>
       <CardFooter className="flex items-center justify-between gap-2">
         <Select value={task.status} onValueChange={(value) => onStatusChange(value as TaskStatus)}>

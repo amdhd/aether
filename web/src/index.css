@@ -1,5 +1,8 @@
 @import "tailwindcss";
 
+/* Class-based dark mode: toggled by adding `.dark` to <html>. */
+@custom-variant dark (&:where(.dark, .dark *));
+
 @theme {
   --font-sans: "Inter", ui-sans-serif, system-ui, -apple-system, sans-serif;
 
@@ -17,6 +20,36 @@
   --radius-card: 0.75rem;
 }
 
+/* Semantic surface/text tokens. The `inline` indirection lets the same
+   utilities (bg-surface, text-foreground, …) resolve to different raw values
+   in light vs dark mode via the variables redefined on :root / .dark below. */
+@theme inline {
+  --color-background: var(--background);
+  --color-surface: var(--surface);
+  --color-surface-muted: var(--surface-muted);
+  --color-foreground: var(--foreground);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-border: var(--border);
+}
+
+:root {
+  --background: #f8fafc; /* slate-50 */
+  --surface: #ffffff;
+  --surface-muted: #f1f5f9; /* slate-100 */
+  --foreground: #0f172a; /* slate-900 */
+  --muted-foreground: #64748b; /* slate-500 */
+  --border: #e2e8f0; /* slate-200 */
+}
+
+.dark {
+  --background: #020617; /* slate-950 */
+  --surface: #0f172a; /* slate-900 */
+  --surface-muted: #1e293b; /* slate-800 */
+  --foreground: #f8fafc; /* slate-50 */
+  --muted-foreground: #94a3b8; /* slate-400 */
+  --border: #1e293b; /* slate-800 */
+}
+
 @layer base {
   html,
   body,
@@ -25,16 +58,16 @@
   }
 
   body {
-    @apply bg-slate-50 text-slate-900 font-sans antialiased;
+    @apply bg-background text-foreground font-sans antialiased;
   }
 
   * {
-    @apply border-slate-200;
+    @apply border-border;
   }
 }
 
 @layer utilities {
   .focus-ring {
-    @apply outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-2;
+    @apply outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-2 focus-visible:ring-offset-background;
   }
 }

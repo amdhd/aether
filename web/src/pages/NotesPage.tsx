@@ -68,7 +68,7 @@ export function NotesPage() {
       <div className="flex items-center justify-between">
         <div>
           <h1 className="text-2xl font-bold tracking-tight">Notes</h1>
-          <p className="text-slate-500">Capture ideas and search through them later.</p>
+          <p className="text-muted-foreground">Capture ideas and search through them later.</p>
         </div>
         <Button onClick={openCreateDialog}>
           <Plus className="h-4 w-4" />
@@ -77,7 +77,7 @@ export function NotesPage() {
       </div>
 
       <div className="relative max-w-sm">
-        <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
+        <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
         <Input
           type="search"
           placeholder="Search notes..."
@@ -100,7 +100,7 @@ export function NotesPage() {
           ))}
         </div>
       ) : notes.length === 0 ? (
-        <p className="rounded-card border border-dashed border-slate-200 p-8 text-center text-sm text-slate-400">
+        <p className="rounded-card border border-dashed border-border p-8 text-center text-sm text-muted-foreground">
           {debouncedSearch ? 'No notes match your search.' : 'No notes yet. Create your first one.'}
         </p>
       ) : (
@@ -111,7 +111,7 @@ export function NotesPage() {
                 <CardTitle className="text-sm">{note.title}</CardTitle>
               </CardHeader>
               <CardContent className="flex-1 space-y-2 pb-2">
-                {note.content && <p className="line-clamp-4 text-sm text-slate-600">{note.content}</p>}
+                {note.content && <p className="line-clamp-4 text-sm text-muted-foreground">{note.content}</p>}
                 {note.tags.length > 0 && (
                   <div className="flex flex-wrap gap-1">
                     {note.tags.map((tag) => (

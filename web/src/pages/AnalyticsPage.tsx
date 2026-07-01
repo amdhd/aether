@@ -18,6 +18,7 @@ import type { PieLabelRenderProps } from 'recharts'
 import { getAnalyticsSummary, type ToolUsageCount } from '@/api/analytics'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Skeleton } from '@/components/ui/skeleton'
+import { useThemeStore } from '@/store/theme'
 
 const TOOL_COLORS = ['#4f46e5', '#0ea5e9', '#22c55e', '#f59e0b', '#ef4444', '#a855f7']
 
@@ -32,6 +33,12 @@ function renderToolLabel(props: PieLabelRenderProps): string {
 }
 
 export function AnalyticsPage() {
+  const isDark = useThemeStore((state) => state.theme === 'dark')
+  const gridStroke = isDark ? '#1e293b' : '#e2e8f0'
+  const tooltipStyle = isDark
+    ? { backgroundColor: '#0f172a', border: '1px solid #1e293b', borderRadius: 8, color: '#f8fafc' }
+    : undefined
+
   const { data, isLoading, isError } = useQuery({
     queryKey: ['analytics', 'summary'],
     queryFn: () => getAnalyticsSummary(14),
@@ -43,7 +50,7 @@ export function AnalyticsPage() {
     <div className="space-y-6">
       <div>
         <h1 className="text-2xl font-bold tracking-tight">Analytics</h1>
-        <p className="text-slate-500">Insights into your conversations and tool usage.</p>
+        <p className="text-muted-foreground">Insights into your conversations and tool usage.</p>
       </div>
 
       {isError && <p className="text-sm text-red-600">Failed to load analytics. Please try again.</p>}
@@ -62,7 +69,7 @@ export function AnalyticsPage() {
           <Skeleton className="h-72 w-full" />
         </div>
       ) : !data ? null : !hasData ? (
-        <p className="rounded-card border border-dashed border-slate-200 p-8 text-center text-sm text-slate-400">
+        <p className="rounded-card border border-dashed border-border p-8 text-center text-sm text-muted-foreground">
           No activity yet. Start chatting with Aether to see your usage stats here.
         </p>
       ) : (
@@ -99,10 +106,10 @@ export function AnalyticsPage() {
               <CardContent className="h-72">
                 <ResponsiveContainer width="100%" height="100%">
                   <BarChart data={data.messages_per_day}>
-                    <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#e2e8f0" />
+                    <CartesianGrid strokeDasharray="3 3" vertical={false} stroke={gridStroke} />
                     <XAxis dataKey="date" tickFormatter={formatShortDate} fontSize={12} stroke="#94a3b8" />
                     <YAxis allowDecimals={false} fontSize={12} stroke="#94a3b8" />
-                    <Tooltip labelFormatter={formatShortDate} />
+                    <Tooltip labelFormatter={formatShortDate} contentStyle={tooltipStyle} />
                     <Bar dataKey="count" name="Messages" fill="#4f46e5" radius={[4, 4, 0, 0]} />
                   </BarChart>
                 </ResponsiveContainer>
@@ -117,10 +124,10 @@ export function AnalyticsPage() {
               <CardContent className="h-72">
                 <ResponsiveContainer width="100%" height="100%">
                   <BarChart data={data.tokens_per_day}>
-                    <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#e2e8f0" />
+                    <CartesianGrid strokeDasharray="3 3" vertical={false} stroke={gridStroke} />
                     <XAxis dataKey="date" tickFormatter={formatShortDate} fontSize={12} stroke="#94a3b8" />
                     <YAxis allowDecimals={false} fontSize={12} stroke="#94a3b8" />
-                    <Tooltip labelFormatter={formatShortDate} />
+                    <Tooltip labelFormatter={formatShortDate} contentStyle={tooltipStyle} />
                     <Legend />
                     <Bar
                       dataKey="prompt_tokens"
@@ -149,7 +156,7 @@ export function AnalyticsPage() {
             </CardHeader>
             <CardContent className="h-72">
               {data.tool_usage.length === 0 ? (
-                <div className="flex h-full items-center justify-center text-sm text-slate-400">
+                <div className="flex h-full items-center justify-center text-sm text-muted-foreground">
                   <Wrench className="mr-2 h-4 w-4" />
                   No tool calls yet.
                 </div>
@@ -169,7 +176,7 @@ export function AnalyticsPage() {
                         <Cell key={entry.tool_name} fill={TOOL_COLORS[index % TOOL_COLORS.length]} />
                       ))}
                     </Pie>
-                    <Tooltip />
+                    <Tooltip contentStyle={tooltipStyle} />
                     <Legend />
                   </PieChart>
                 </ResponsiveContainer>
@@ -190,7 +197,7 @@ function StatCard({ icon, label, value }: { icon: React.ReactNode; label: string
           {icon}
         </div>
         <div>
-          <p className="text-xs text-slate-500">{label}</p>
+          <p className="text-xs text-muted-foreground">{label}</p>
           <p className="text-lg font-semibold leading-tight">{value}</p>
         </div>
       </CardContent>

@@ -1,6 +1,7 @@
-import { useQuery } from '@tanstack/react-query'
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Plus } from 'lucide-react'
 import { useState } from 'react'
+import { toast } from 'sonner'
 
 import { createTask, deleteTask, listTasks, updateTask } from '@/api/tasks'
 import { ConfirmDialog } from '@/components/ConfirmDialog'
@@ -9,7 +10,7 @@ import { Skeleton } from '@/components/ui/skeleton'
 import { TaskCard } from '@/components/tasks/TaskCard'
 import { TaskFormDialog } from '@/components/tasks/TaskFormDialog'
 import { useCrudMutations } from '@/hooks/useCrudMutations'
-import type { Task, TaskCreateInput, TaskStatus } from '@/types'
+import type { Page, Task, TaskCreateInput, TaskStatus } from '@/types'
 
 const columns: { status: TaskStatus; label: string }[] = [
   { status: 'todo', label: 'To do' },
@@ -17,8 +18,11 @@ const columns: { status: TaskStatus; label: string }[] = [
   { status: 'done', label: 'Done' },
 ]
 
+const TASKS_KEY = ['tasks']
+
 export function TasksPage() {
-  const { data, isLoading, isError } = useQuery({ queryKey: ['tasks'], queryFn: listTasks })
+  const queryClient = useQueryClient()
+  const { data, isLoading, isError } = useQuery({ queryKey: TASKS_KEY, queryFn: listTasks })
   const tasks = data?.items ?? []
 
   const [dialogOpen, setDialogOpen] = useState(false)
@@ -26,12 +30,34 @@ export function TasksPage() {
   const [deletingTask, setDeletingTask] = useState<Task | null>(null)
 
   const { createMutation, updateMutation, deleteMutation } = useCrudMutations<Task, TaskCreateInput>({
-    queryKey: ['tasks'],
+    queryKey: TASKS_KEY,
     create: createTask,
     update: updateTask,
     remove: deleteTask,
     entityName: 'Task',
     onDeleteSuccess: () => setDeletingTask(null),
+  })
+
+  // Moving a card between columns updates the board immediately and rolls back
+  // if the server rejects it, so the kanban feels instant.
+  const statusMutation = useMutation({
+    mutationFn: ({ task, status }: { task: Task; status: TaskStatus }) =>
+      updateTask(task.id, { status }),
+    onMutate: async ({ task, status }) => {
+      await queryClient.cancelQueries({ queryKey: TASKS_KEY })
+      const previous = queryClient.getQueryData<Page<Task>>(TASKS_KEY)
+      queryClient.setQueryData<Page<Task>>(TASKS_KEY, (old) =>
+        old
+          ? { ...old, items: old.items.map((t) => (t.id === task.id ? { ...t, status } : t)) }
+          : old,
+      )
+      return { previous }
+    },
+    onError: (_err, _vars, context) => {
+      if (context?.previous) queryClient.setQueryData(TASKS_KEY, context.previous)
+      toast.error("Couldn't move task. Please try again.")
+    },
+    onSettled: () => queryClient.invalidateQueries({ queryKey: TASKS_KEY }),
   })
 
   const openCreateDialog = () => {
@@ -53,16 +79,7 @@ export function TasksPage() {
   }
 
   const handleStatusChange = (task: Task, status: TaskStatus) => {
-    updateMutation.mutate({
-      id: task.id,
-      input: {
-        title: task.title,
-        description: task.description,
-        due_date: task.due_date,
-        priority: task.priority,
-        status,
-      },
-    })
+    statusMutation.mutate({ task, status })
   }
 
   const handleDelete = (task: Task) => {

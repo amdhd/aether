@@ -141,8 +141,10 @@ export function ChatPage() {
     scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: 'smooth' })
   }, [conversation?.messages.length, streamingContent, pendingUserContent])
 
-  const handleDelete = (id: number) => {
-    setDeletingConversationId(id)
+  const resetStreamingState = () => {
+    setStreamingContent('')
+    setStreamingReasoning('')
+    setStreamingToolCalls([])
   }
 
   const handleSend = async () => {
@@ -151,9 +153,7 @@ export function ChatPage() {
 
     setDraft('')
     setPendingUserContent(content)
-    setStreamingContent('')
-    setStreamingReasoning('')
-    setStreamingToolCalls([])
+    resetStreamingState()
     setErrorMessage(null)
     setIsStreaming(true)
 
@@ -171,9 +171,7 @@ export function ChatPage() {
       await queryClient.invalidateQueries({ queryKey: ['conversations'] })
       setIsStreaming(false)
       setPendingUserContent(null)
-      setStreamingContent('')
-      setStreamingReasoning('')
-      setStreamingToolCalls([])
+      resetStreamingState()
     }
   }
 
@@ -218,7 +216,7 @@ export function ChatPage() {
                   <button
                     aria-label={`Delete conversation ${c.title}`}
                     className="opacity-0 focus-ring group-hover:opacity-100"
-                    onClick={() => handleDelete(c.id)}
+                    onClick={() => setDeletingConversationId(c.id)}
                   >
                     <Trash2 className="h-3.5 w-3.5 text-muted-foreground hover:text-red-600" />
                   </button>

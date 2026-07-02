@@ -59,12 +59,14 @@ export function AppShell() {
         </nav>
         <div className="mt-auto border-t border-border pt-4">
           <div className="mb-3 flex items-center gap-3 px-1">
-            {user && <UserAvatar name={user.name} />}
             {user && (
-              <div className="min-w-0 flex-1">
-                <p className="truncate text-sm font-medium text-foreground">{user.name}</p>
-                <p className="truncate text-xs text-muted-foreground">{user.email}</p>
-              </div>
+              <>
+                <UserAvatar name={user.name} />
+                <div className="min-w-0 flex-1">
+                  <p className="truncate text-sm font-medium text-foreground">{user.name}</p>
+                  <p className="truncate text-xs text-muted-foreground">{user.email}</p>
+                </div>
+              </>
             )}
             <ThemeToggle className="ml-auto shrink-0" />
           </div>

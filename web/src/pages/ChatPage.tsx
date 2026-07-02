@@ -119,6 +119,8 @@ export function ChatPage() {
     create: createConversation,
     update: updateConversation,
     remove: deleteConversation,
+    entityName: 'Conversation',
+    toastSuccess: false,
     onCreateSuccess: (created) => setSelectedId(created.id),
     onDeleteSuccess: (deletedId) => {
       queryClient.removeQueries({ queryKey: ['conversation', deletedId] })

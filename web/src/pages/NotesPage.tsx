@@ -38,6 +38,7 @@ export function NotesPage() {
     create: createNote,
     update: updateNote,
     remove: deleteNote,
+    entityName: 'Note',
     onDeleteSuccess: () => setDeletingNote(null),
   })
 

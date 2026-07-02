@@ -30,6 +30,7 @@ export function TasksPage() {
     create: createTask,
     update: updateTask,
     remove: deleteTask,
+    entityName: 'Task',
     onDeleteSuccess: () => setDeletingTask(null),
   })
 

@@ -1,10 +1,11 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { Plus } from 'lucide-react'
+import { ClipboardList, Plus } from 'lucide-react'
 import { useState } from 'react'
 import { toast } from 'sonner'
 
 import { createTask, deleteTask, listTasks, updateTask } from '@/api/tasks'
 import { ConfirmDialog } from '@/components/ConfirmDialog'
+import { EmptyState } from '@/components/EmptyState'
 import { Button } from '@/components/ui/button'
 import { Skeleton } from '@/components/ui/skeleton'
 import { TaskCard } from '@/components/tasks/TaskCard'
@@ -111,6 +112,18 @@ export function TasksPage() {
             </div>
           ))}
         </div>
+      ) : tasks.length === 0 ? (
+        <EmptyState
+          icon={<ClipboardList className="h-6 w-6" />}
+          title="No tasks yet"
+          description="Create your first task to start organizing your work."
+          action={
+            <Button onClick={openCreateDialog}>
+              <Plus className="h-4 w-4" />
+              New task
+            </Button>
+          }
+        />
       ) : (
         <div className="grid gap-4 sm:grid-cols-3">
           {columns.map((column) => {

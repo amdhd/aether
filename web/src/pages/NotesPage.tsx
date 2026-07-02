@@ -1,9 +1,10 @@
 import { useQuery } from '@tanstack/react-query'
-import { Pencil, Plus, Search, Trash2 } from 'lucide-react'
+import { NotebookPen, Pencil, Plus, Search, Trash2 } from 'lucide-react'
 import { useState } from 'react'
 
 import { createNote, deleteNote, listNotes, updateNote } from '@/api/notes'
 import { ConfirmDialog } from '@/components/ConfirmDialog'
+import { EmptyState } from '@/components/EmptyState'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardFooter, CardHeader, CardTitle } from '@/components/ui/card'
@@ -101,9 +102,25 @@ export function NotesPage() {
           ))}
         </div>
       ) : notes.length === 0 ? (
-        <p className="rounded-card border border-dashed border-border p-8 text-center text-sm text-muted-foreground">
-          {debouncedSearch ? 'No notes match your search.' : 'No notes yet. Create your first one.'}
-        </p>
+        debouncedSearch ? (
+          <EmptyState
+            icon={<Search className="h-6 w-6" />}
+            title="No matching notes"
+            description={`Nothing matches “${debouncedSearch}”. Try a different search.`}
+          />
+        ) : (
+          <EmptyState
+            icon={<NotebookPen className="h-6 w-6" />}
+            title="No notes yet"
+            description="Capture your first idea and search through it later."
+            action={
+              <Button onClick={openCreateDialog}>
+                <Plus className="h-4 w-4" />
+                New note
+              </Button>
+            }
+          />
+        )
       ) : (
         <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
           {notes.map((note) => (

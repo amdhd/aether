@@ -473,13 +473,21 @@ def _truncate(text: str | None, max_chars: int) -> str | None:
     return text[:max_chars].rstrip() + "..."
 
 
-async def _calendar_list_events(db: AsyncSession, user: User, args: dict[str, Any]) -> dict[str, Any]:
+async def _calendar_guard(db: AsyncSession, user: User) -> tuple[str | None, dict[str, Any] | None]:
+    """Return (access_token, None) when the user can call Google Calendar, or
+    (None, error) when Calendar isn't connected or the rate limit is reached."""
     access_token = await google_oauth.get_valid_access_token(db, user)
     if access_token is None:
-        return {"error": "Google Calendar is not connected. Connect it from Settings."}
-
+        return None, {"error": "Google Calendar is not connected. Connect it from Settings."}
     if not check_tool_rate_limit(user.id, "calendar", settings.CALENDAR_RATE_LIMIT_PER_MINUTE):
-        return {"error": "Calendar rate limit reached for this minute. Try again shortly."}
+        return None, {"error": "Calendar rate limit reached for this minute. Try again shortly."}
+    return access_token, None
+
+
+async def _calendar_list_events(db: AsyncSession, user: User, args: dict[str, Any]) -> dict[str, Any]:
+    access_token, error = await _calendar_guard(db, user)
+    if error:
+        return error
 
     max_results = min(max(int(args.get("max_results") or 10), 1), 50)
     params = {
@@ -515,12 +523,9 @@ async def _calendar_list_events(db: AsyncSession, user: User, args: dict[str, An
 
 
 async def _calendar_create_event(db: AsyncSession, user: User, args: dict[str, Any]) -> dict[str, Any]:
-    access_token = await google_oauth.get_valid_access_token(db, user)
-    if access_token is None:
-        return {"error": "Google Calendar is not connected. Connect it from Settings."}
-
-    if not check_tool_rate_limit(user.id, "calendar", settings.CALENDAR_RATE_LIMIT_PER_MINUTE):
-        return {"error": "Calendar rate limit reached for this minute. Try again shortly."}
+    access_token, error = await _calendar_guard(db, user)
+    if error:
+        return error
 
     body: dict[str, Any] = {
         "summary": args["summary"],
@@ -556,12 +561,9 @@ async def _calendar_create_event(db: AsyncSession, user: User, args: dict[str, A
 
 
 async def _calendar_delete_event(db: AsyncSession, user: User, args: dict[str, Any]) -> dict[str, Any]:
-    access_token = await google_oauth.get_valid_access_token(db, user)
-    if access_token is None:
-        return {"error": "Google Calendar is not connected. Connect it from Settings."}
-
-    if not check_tool_rate_limit(user.id, "calendar", settings.CALENDAR_RATE_LIMIT_PER_MINUTE):
-        return {"error": "Calendar rate limit reached for this minute. Try again shortly."}
+    access_token, error = await _calendar_guard(db, user)
+    if error:
+        return error
 
     event_id = quote(str(args["event_id"]), safe="")
 

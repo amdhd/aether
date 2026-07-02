@@ -19,6 +19,16 @@ from app.models.user import User
 MAX_TOOL_ITERATIONS = 5
 
 
+def _usage_log(user: User, conversation: Conversation, usage: dict[str, int]) -> UsageLog:
+    return UsageLog(
+        user_id=user.id,
+        conversation_id=conversation.id,
+        model=settings.DEEPSEEK_MODEL,
+        prompt_tokens=usage["prompt_tokens"],
+        completion_tokens=usage["completion_tokens"],
+    )
+
+
 def _message_to_api(message: Message) -> dict[str, Any]:
     out: dict[str, Any] = {"role": message.role.value, "content": message.content}
     if message.tool_calls:
@@ -153,15 +163,7 @@ async def stream_agent_response(
             )
             db.add(assistant_msg)
             if usage:
-                db.add(
-                    UsageLog(
-                        user_id=user.id,
-                        conversation_id=conversation.id,
-                        model=settings.DEEPSEEK_MODEL,
-                        prompt_tokens=usage["prompt_tokens"],
-                        completion_tokens=usage["completion_tokens"],
-                    )
-                )
+                db.add(_usage_log(user, conversation, usage))
             await db.commit()
             messages.append(_message_to_api(assistant_msg))
 
@@ -196,15 +198,7 @@ async def stream_agent_response(
         db.add(assistant_msg)
 
         if usage:
-            db.add(
-                UsageLog(
-                    user_id=user.id,
-                    conversation_id=conversation.id,
-                    model=settings.DEEPSEEK_MODEL,
-                    prompt_tokens=usage["prompt_tokens"],
-                    completion_tokens=usage["completion_tokens"],
-                )
-            )
+            db.add(_usage_log(user, conversation, usage))
 
         if conversation.title == "New conversation":
             conversation.title = user_message.strip()[:60] or "New conversation"

@@ -6,16 +6,19 @@
 @theme {
   --font-sans: "Inter", ui-sans-serif, system-ui, -apple-system, sans-serif;
 
-  --color-brand-50: #eef2ff;
-  --color-brand-100: #e0e7ff;
-  --color-brand-200: #c7d2fe;
-  --color-brand-300: #a5b4fc;
-  --color-brand-400: #818cf8;
-  --color-brand-500: #6366f1;
-  --color-brand-600: #4f46e5;
-  --color-brand-700: #4338ca;
-  --color-brand-800: #3730a3;
-  --color-brand-900: #312e81;
+  /* Monochrome accent scale (neutral zinc). Kept under the `brand-*` names so
+     existing utilities resolve without churn; the app now reads black/white
+     rather than indigo. */
+  --color-brand-50: #f4f4f5;
+  --color-brand-100: #e4e4e7;
+  --color-brand-200: #d4d4d8;
+  --color-brand-300: #d4d4d8;
+  --color-brand-400: #a1a1aa;
+  --color-brand-500: #71717a;
+  --color-brand-600: #18181b;
+  --color-brand-700: #18181b;
+  --color-brand-800: #27272a;
+  --color-brand-900: #18181b;
 
   --radius-card: 0.75rem;
 }
@@ -33,21 +36,21 @@
 }
 
 :root {
-  --background: #f8fafc; /* slate-50 */
+  --background: #fafafa; /* zinc-50 */
   --surface: #ffffff;
-  --surface-muted: #f1f5f9; /* slate-100 */
-  --foreground: #0f172a; /* slate-900 */
-  --muted-foreground: #64748b; /* slate-500 */
-  --border: #e2e8f0; /* slate-200 */
+  --surface-muted: #f4f4f5; /* zinc-100 */
+  --foreground: #18181b; /* zinc-900 */
+  --muted-foreground: #71717a; /* zinc-500 */
+  --border: #e4e4e7; /* zinc-200 */
 }
 
 .dark {
-  --background: #020617; /* slate-950 */
-  --surface: #0f172a; /* slate-900 */
-  --surface-muted: #1e293b; /* slate-800 */
-  --foreground: #f8fafc; /* slate-50 */
-  --muted-foreground: #94a3b8; /* slate-400 */
-  --border: #1e293b; /* slate-800 */
+  --background: #161616; /* neutral near-black */
+  --surface: #1f1f1f;
+  --surface-muted: #2a2a2a;
+  --foreground: #f4f4f5; /* zinc-100 */
+  --muted-foreground: #a1a1aa; /* zinc-400 */
+  --border: #2e2e2e;
 }
 
 @layer base {

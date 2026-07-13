@@ -13,6 +13,7 @@ from app.models.user import User
 
 AUTHORIZATION_URL = "https://accounts.google.com/o/oauth2/v2/auth"
 TOKEN_URL = "https://oauth2.googleapis.com/token"
+REVOKE_URL = "https://oauth2.googleapis.com/revoke"
 
 # Refresh slightly ahead of actual expiry to avoid using a token that expires
 # mid-request.
@@ -96,6 +97,32 @@ async def upsert_credential(db: AsyncSession, user: User, token_data: dict[str, 
     await db.commit()
     await db.refresh(credential)
     return credential
+
+
+async def revoke_credential(db: AsyncSession, user: User) -> None:
+    """Disconnect Google Calendar: revoke the grant at Google, then delete the
+    stored credential. Revoking the refresh token invalidates the whole grant
+    (access + refresh) server-side, so a merely-local delete can't leave a live
+    token behind. Google/network errors are swallowed — a transient failure
+    there must not block the user from disconnecting locally."""
+    credential = await get_credential(db, user)
+    if credential is None:
+        return
+
+    try:
+        token = decrypt_token(credential.refresh_token_encrypted)
+    except Exception:
+        token = None
+
+    if token:
+        try:
+            async with httpx.AsyncClient(timeout=10.0) as client:
+                await client.post(REVOKE_URL, data={"token": token})
+        except httpx.HTTPError:
+            pass
+
+    await db.delete(credential)
+    await db.commit()
 
 
 async def get_valid_access_token(db: AsyncSession, user: User) -> str | None:

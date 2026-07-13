@@ -1,4 +1,5 @@
 import json
+import time
 from collections.abc import AsyncGenerator
 from datetime import datetime, timezone
 from typing import Any
@@ -11,10 +12,13 @@ from app.agent.memory import maybe_summarize_history
 from app.agent.personas import get_system_prompt
 from app.agent.tools import TOOL_SCHEMAS, call_tool
 from app.core.config import settings
+from app.core.logging import get_logger
 from app.models.conversation import Conversation
 from app.models.message import Message, MessageRole
 from app.models.usage_log import UsageLog
 from app.models.user import User
+
+logger = get_logger(__name__)
 
 MAX_TOOL_ITERATIONS = 5
 
@@ -107,6 +111,7 @@ async def stream_agent_response(
         # time this generator runs, an unhandled exception would just truncate
         # the SSE stream with no signal to the client, so surface it as an
         # explicit `error` event instead.
+        started_at = time.monotonic()
         try:
             stream = await client.chat.completions.create(
                 model=settings.DEEPSEEK_MODEL,
@@ -147,10 +152,27 @@ async def stream_agent_response(
                             if tc.function.arguments:
                                 entry["arguments"] += tc.function.arguments
         except Exception:
+            logger.exception(
+                "llm.turn.failed user_id=%s conversation_id=%s latency_ms=%d",
+                user.id,
+                conversation.id,
+                int((time.monotonic() - started_at) * 1000),
+            )
             yield _sse_event(
                 "error", {"message": "The assistant hit an error while responding. Please try again."}
             )
             return
+
+        logger.info(
+            "llm.turn user_id=%s conversation_id=%s prompt_tokens=%s completion_tokens=%s "
+            "tool_calls=%d latency_ms=%d",
+            user.id,
+            conversation.id,
+            usage["prompt_tokens"] if usage else None,
+            usage["completion_tokens"] if usage else None,
+            len(tool_call_chunks),
+            int((time.monotonic() - started_at) * 1000),
+        )
 
         content = "".join(content_parts) or None
         reasoning = "".join(reasoning_parts) or None
@@ -179,13 +201,15 @@ async def stream_agent_response(
             messages.append(_message_to_api(assistant_msg))
 
             for tool_call in tool_calls:
-                yield _sse_event("tool_call", {"name": tool_call["function"]["name"]})
+                tool_name = tool_call["function"]["name"]
+                yield _sse_event("tool_call", {"name": tool_name})
                 try:
                     arguments = json.loads(tool_call["function"]["arguments"] or "{}")
                 except json.JSONDecodeError:
                     arguments = {}
 
-                tool_result = await call_tool(tool_call["function"]["name"], arguments, db, user)
+                logger.info("tool.call user_id=%s tool=%s", user.id, tool_name)
+                tool_result = await call_tool(tool_name, arguments, db, user)
 
                 tool_msg = Message(
                     conversation_id=conversation.id,

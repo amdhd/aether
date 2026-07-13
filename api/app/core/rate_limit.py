@@ -50,13 +50,25 @@ async def enforce_chat_rate_limit(current_user: User = Depends(get_current_user)
     return current_user
 
 
+def _client_ip(request: Request) -> str:
+    """Best-effort originating client IP. Behind a trusted proxy the socket peer
+    is the proxy, so the real client is the first entry of X-Forwarded-For.
+    Only honored when TRUST_PROXY_HEADERS is set, since the header is otherwise
+    attacker-controlled and would let anyone forge a fresh IP per request."""
+    if settings.TRUST_PROXY_HEADERS:
+        forwarded = request.headers.get("x-forwarded-for")
+        if forwarded:
+            return forwarded.split(",")[0].strip()
+    return request.client.host if request.client else "unknown"
+
+
 def enforce_auth_rate_limit(endpoint: str):
     """Returns a dependency that rate-limits an unauthenticated auth endpoint
     (login/register) per client IP, to slow down brute-force/enumeration."""
 
     async def _dependency(request: Request) -> None:
         limit = settings.AUTH_RATE_LIMIT_PER_MINUTE
-        client_ip = request.client.host if request.client else "unknown"
+        client_ip = _client_ip(request)
         now = time.monotonic()
         timestamps = _auth_request_log[(client_ip, endpoint)]
 

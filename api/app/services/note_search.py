@@ -9,6 +9,7 @@ a case-insensitive keyword scan so the feature still returns sensible results.
 from sqlalchemy import or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.config import settings
 from app.models.note import Note
 from app.models.user import User
 from app.services import embeddings
@@ -43,10 +44,15 @@ async def search_notes(db: AsyncSession, user: User, query: str, limit: int = 5)
     if _is_postgres(db) and embeddings.embeddings_enabled():
         query_vector = await embeddings.embed_text(query)
         if query_vector is not None:
+            # Drop notes past the relevance floor so the agent isn't handed
+            # near-random matches when nothing in the user's notes is actually
+            # about the query; if that leaves nothing, fall back to keywords.
+            distance = Note.embedding.cosine_distance(query_vector)
             stmt = (
                 select(Note)
                 .where(Note.user_id == user.id, Note.embedding.is_not(None))
-                .order_by(Note.embedding.cosine_distance(query_vector))
+                .where(distance <= settings.NOTE_SEARCH_MAX_DISTANCE)
+                .order_by(distance)
                 .limit(limit)
             )
             results = list((await db.scalars(stmt)).all())

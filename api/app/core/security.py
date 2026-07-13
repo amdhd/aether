@@ -15,6 +15,19 @@ def verify_password(plain_password: str, hashed_password: str) -> bool:
     return bcrypt.checkpw(plain_password.encode("utf-8"), hashed_password.encode("utf-8"))
 
 
+# A precomputed hash of a throwaway password. When a login names an account that
+# doesn't exist, we still run a bcrypt comparison against this so the request
+# takes the same time as one for a real user, defeating account enumeration via
+# response-timing differences.
+_DUMMY_PASSWORD_HASH = hash_password("timing-equalization-placeholder")
+
+
+def fake_verify_password() -> None:
+    """Run a bcrypt verify that always fails, to equalize the timing of a login
+    for a non-existent user with one for a real user."""
+    verify_password("timing-equalization-placeholder", _DUMMY_PASSWORD_HASH)
+
+
 def _create_token(
     subject: str,
     token_version: int,

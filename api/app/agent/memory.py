@@ -5,6 +5,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.config import settings
 from app.models.conversation import Conversation
 from app.models.message import Message, MessageRole
+from app.models.usage_log import UsageLog
 
 # Keep this many of the most recent messages verbatim in context.
 KEEP_RECENT_MESSAGES = 10
@@ -20,6 +21,19 @@ SUMMARY_SYSTEM_PROMPT = (
     "without access to the original messages. Write the summary in plain "
     "prose, third person, a few short paragraphs at most."
 )
+
+
+def _message_char_len(message: Message) -> int:
+    """Approximate the context-window footprint of a message. Counts not just
+    the visible content but the reasoning trace and serialized tool-call
+    arguments too, since in a tool-heavy chat those dominate the token count and
+    a content-only estimate would under-trigger summarization."""
+    size = len(message.content or "") + len(message.reasoning_content or "")
+    if message.tool_calls:
+        for call in message.tool_calls:
+            function = call.get("function", {})
+            size += len(function.get("name", "")) + len(function.get("arguments", ""))
+    return size
 
 
 def _format_message_for_summary(message: Message) -> str:
@@ -45,7 +59,7 @@ async def maybe_summarize_history(db: AsyncSession, conversation: Conversation, 
         return
 
     to_fold = unsummarized[:-KEEP_RECENT_MESSAGES]
-    if sum(len(m.content or "") for m in to_fold) < SUMMARIZE_CHAR_THRESHOLD:
+    if sum(_message_char_len(m) for m in to_fold) < SUMMARIZE_CHAR_THRESHOLD:
         return
 
     transcript = "\n".join(_format_message_for_summary(m) for m in to_fold)
@@ -65,6 +79,20 @@ async def maybe_summarize_history(db: AsyncSession, conversation: Conversation, 
     summary = response.choices[0].message.content
     if not summary:
         return
+
+    # The summarization call itself burns tokens; meter it so usage analytics
+    # reflect true cost rather than only the user-facing completions.
+    usage = getattr(response, "usage", None)
+    if usage is not None:
+        db.add(
+            UsageLog(
+                user_id=conversation.user_id,
+                conversation_id=conversation.id,
+                model=settings.DEEPSEEK_MODEL,
+                prompt_tokens=usage.prompt_tokens,
+                completion_tokens=usage.completion_tokens,
+            )
+        )
 
     conversation.memory_summary = summary
     conversation.memory_summarized_until_id = to_fold[-1].id

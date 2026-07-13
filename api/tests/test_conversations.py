@@ -239,6 +239,34 @@ async def test_chat_message_summarizes_old_history(
     assert any("Summary of earlier conversation" in (m.get("content") or "") for m in final_messages)
 
 
+async def test_chat_message_streams_error_on_llm_failure(
+    client: AsyncClient, auth_headers: dict[str, str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(settings, "DEEPSEEK_API_KEY", "test-key")
+
+    class _BoomCompletions:
+        async def create(self, **kwargs):
+            raise RuntimeError("upstream 503")
+
+    boom_client = SimpleNamespace(chat=SimpleNamespace(completions=_BoomCompletions()))
+    monkeypatch.setattr("app.agent.loop.get_deepseek_client", lambda: boom_client)
+
+    create_resp = await client.post("/api/v1/conversations", json={}, headers=auth_headers)
+    conversation_id = create_resp.json()["id"]
+
+    resp = await client.post(
+        f"/api/v1/conversations/{conversation_id}/messages", json={"content": "Hi"}, headers=auth_headers
+    )
+    # The response starts streaming (200) but the upstream failure is surfaced
+    # to the client as an explicit SSE error event rather than a silent cutoff.
+    assert resp.status_code == 200
+    assert "event: error" in resp.text
+
+    # The user's message is still persisted even though the assistant failed.
+    detail = await client.get(f"/api/v1/conversations/{conversation_id}", headers=auth_headers)
+    assert [m["role"] for m in detail.json()["messages"]] == ["user"]
+
+
 async def test_chat_message_rate_limit(
     client: AsyncClient, auth_headers: dict[str, str], monkeypatch: pytest.MonkeyPatch
 ) -> None:

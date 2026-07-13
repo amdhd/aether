@@ -97,49 +97,60 @@ async def stream_agent_response(
     messages = await _build_context(db, conversation)
 
     for _ in range(MAX_TOOL_ITERATIONS):
-        stream = await client.chat.completions.create(
-            model=settings.DEEPSEEK_MODEL,
-            messages=messages,
-            tools=TOOL_SCHEMAS,
-            stream=True,
-            stream_options={"include_usage": True},
-            extra_body={"thinking": {"type": "enabled"}},
-        )
-
         content_parts: list[str] = []
         reasoning_parts: list[str] = []
         tool_call_chunks: dict[int, dict[str, str]] = {}
         usage: dict[str, int] | None = None
 
-        async for chunk in stream:
-            if chunk.usage:
-                usage = {
-                    "prompt_tokens": chunk.usage.prompt_tokens,
-                    "completion_tokens": chunk.usage.completion_tokens,
-                }
-            if not chunk.choices:
-                continue
+        # The upstream call and the token stream can fail mid-flight (provider
+        # 5xx, network drop). Because response headers are already sent by the
+        # time this generator runs, an unhandled exception would just truncate
+        # the SSE stream with no signal to the client, so surface it as an
+        # explicit `error` event instead.
+        try:
+            stream = await client.chat.completions.create(
+                model=settings.DEEPSEEK_MODEL,
+                messages=messages,
+                tools=TOOL_SCHEMAS,
+                stream=True,
+                stream_options={"include_usage": True},
+                extra_body={"thinking": {"type": "enabled"}},
+            )
 
-            delta = chunk.choices[0].delta
+            async for chunk in stream:
+                if chunk.usage:
+                    usage = {
+                        "prompt_tokens": chunk.usage.prompt_tokens,
+                        "completion_tokens": chunk.usage.completion_tokens,
+                    }
+                if not chunk.choices:
+                    continue
 
-            if getattr(delta, "reasoning_content", None):
-                reasoning_parts.append(delta.reasoning_content)
-                yield _sse_event("reasoning", {"content": delta.reasoning_content})
+                delta = chunk.choices[0].delta
 
-            if delta.content:
-                content_parts.append(delta.content)
-                yield _sse_event("token", {"content": delta.content})
+                if getattr(delta, "reasoning_content", None):
+                    reasoning_parts.append(delta.reasoning_content)
+                    yield _sse_event("reasoning", {"content": delta.reasoning_content})
 
-            if delta.tool_calls:
-                for tc in delta.tool_calls:
-                    entry = tool_call_chunks.setdefault(tc.index, {"id": "", "name": "", "arguments": ""})
-                    if tc.id:
-                        entry["id"] = tc.id
-                    if tc.function:
-                        if tc.function.name:
-                            entry["name"] += tc.function.name
-                        if tc.function.arguments:
-                            entry["arguments"] += tc.function.arguments
+                if delta.content:
+                    content_parts.append(delta.content)
+                    yield _sse_event("token", {"content": delta.content})
+
+                if delta.tool_calls:
+                    for tc in delta.tool_calls:
+                        entry = tool_call_chunks.setdefault(tc.index, {"id": "", "name": "", "arguments": ""})
+                        if tc.id:
+                            entry["id"] = tc.id
+                        if tc.function:
+                            if tc.function.name:
+                                entry["name"] += tc.function.name
+                            if tc.function.arguments:
+                                entry["arguments"] += tc.function.arguments
+        except Exception:
+            yield _sse_event(
+                "error", {"message": "The assistant hit an error while responding. Please try again."}
+            )
+            return
 
         content = "".join(content_parts) or None
         reasoning = "".join(reasoning_parts) or None

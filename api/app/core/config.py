@@ -64,6 +64,11 @@ class Settings(BaseSettings):
     WEB_SEARCH_RATE_LIMIT_PER_MINUTE: int = 10
     CALENDAR_RATE_LIMIT_PER_MINUTE: int = 20
     AUTH_RATE_LIMIT_PER_MINUTE: int = 10
+    # Behind a trusted reverse proxy (Render, Vercel, nginx) the socket peer is
+    # the proxy, so per-IP auth rate limiting must read the client IP from the
+    # X-Forwarded-For header instead. Only enable this when a proxy you control
+    # sets that header — otherwise clients can spoof it. Left off in local dev.
+    TRUST_PROXY_HEADERS: bool = False
 
     # Tools
     TAVILY_API_KEY: str = ""
@@ -74,6 +79,11 @@ class Settings(BaseSettings):
     OPENAI_API_KEY: str = ""
     EMBEDDING_MODEL: str = "text-embedding-3-small"
     EMBEDDING_DIMENSIONS: int = 1536
+    # Relevance floor for semantic note search: notes whose cosine distance to
+    # the query exceeds this are treated as unrelated and dropped, so the agent
+    # isn't fed near-random notes when nothing actually matches. Range 0..2;
+    # ~0.6 keeps clearly-related notes for text-embedding-3-small. Tunable.
+    NOTE_SEARCH_MAX_DISTANCE: float = 0.6
 
     # Google Calendar OAuth
     GOOGLE_CLIENT_ID: str = ""

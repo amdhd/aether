@@ -1,3 +1,4 @@
+import pytest
 from httpx import AsyncClient
 
 from app.core.config import settings
@@ -132,3 +133,59 @@ async def test_login_rate_limit(client: AsyncClient) -> None:
     resp = await client.post("/api/v1/auth/login", data=payload)
     assert resp.status_code == 429
     assert "Retry-After" in resp.headers
+
+
+async def test_login_unknown_user_runs_dummy_verify(
+    client: AsyncClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # A login for a non-existent account must still run a bcrypt comparison, so
+    # its timing matches a real account with a wrong password (no enumeration).
+    calls = {"n": 0}
+    monkeypatch.setattr(
+        "app.api.routes.auth.fake_verify_password", lambda: calls.__setitem__("n", calls["n"] + 1)
+    )
+
+    resp = await client.post(
+        "/api/v1/auth/login", data={"username": "ghost@example.com", "password": "whatever"}
+    )
+    assert resp.status_code == 401
+    assert calls["n"] == 1
+
+
+async def test_auth_rate_limit_uses_forwarded_ip_when_trusted(
+    client: AsyncClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(settings, "TRUST_PROXY_HEADERS", True)
+    payload = {"username": "nobody@example.com", "password": "wrong"}
+
+    for _ in range(settings.AUTH_RATE_LIMIT_PER_MINUTE):
+        resp = await client.post(
+            "/api/v1/auth/login", data=payload, headers={"X-Forwarded-For": "1.1.1.1"}
+        )
+        assert resp.status_code == 401
+    limited = await client.post(
+        "/api/v1/auth/login", data=payload, headers={"X-Forwarded-For": "1.1.1.1"}
+    )
+    assert limited.status_code == 429
+
+    # A different forwarded client IP gets its own bucket.
+    other = await client.post(
+        "/api/v1/auth/login", data=payload, headers={"X-Forwarded-For": "2.2.2.2"}
+    )
+    assert other.status_code == 401
+
+
+async def test_auth_rate_limit_ignores_forwarded_ip_when_untrusted(client: AsyncClient) -> None:
+    # TRUST_PROXY_HEADERS is off by default, so a spoofed X-Forwarded-For must
+    # not let a caller escape the limit by rotating the header value.
+    payload = {"username": "nobody@example.com", "password": "wrong"}
+    for _ in range(settings.AUTH_RATE_LIMIT_PER_MINUTE):
+        resp = await client.post(
+            "/api/v1/auth/login", data=payload, headers={"X-Forwarded-For": "1.1.1.1"}
+        )
+        assert resp.status_code == 401
+
+    resp = await client.post(
+        "/api/v1/auth/login", data=payload, headers={"X-Forwarded-For": "9.9.9.9"}
+    )
+    assert resp.status_code == 429

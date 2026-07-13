@@ -9,7 +9,7 @@ from sqlalchemy.pool import NullPool, StaticPool
 
 from app.core.rate_limit import reset_rate_limits
 from app.db.base import Base
-from app.db.session import get_db
+from app.db.session import get_db, get_session_factory
 from app.main import app
 
 # Default to an in-memory SQLite DB (fast, keyless — mirrors local dev/CI). Set
@@ -40,6 +40,9 @@ async def override_get_db() -> AsyncGenerator[AsyncSession, None]:
 
 
 app.dependency_overrides[get_db] = override_get_db
+# The streaming chat endpoint owns its own session via the factory; point it at
+# the test engine so streamed writes land in the test DB, not the real one.
+app.dependency_overrides[get_session_factory] = lambda: TestingSessionLocal
 
 
 @pytest_asyncio.fixture(autouse=True)

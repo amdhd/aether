@@ -1,13 +1,13 @@
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from fastapi.responses import StreamingResponse
 from sqlalchemy import func, select
-from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.agent.loop import stream_agent_response
 from app.api.deps import get_current_user, get_owned_or_404
 from app.core.config import settings
 from app.core.rate_limit import enforce_chat_rate_limit
-from app.db.session import get_db
+from app.db.session import get_db, get_session_factory
 from app.models.conversation import Conversation
 from app.models.user import User
 from app.schemas.common import DEFAULT_PAGE_LIMIT, MAX_PAGE_LIMIT, Page
@@ -96,6 +96,7 @@ async def send_message(
     message_in: ChatMessageCreate,
     current_user: User = Depends(enforce_chat_rate_limit),
     db: AsyncSession = Depends(get_db),
+    session_factory: async_sessionmaker[AsyncSession] = Depends(get_session_factory),
 ) -> StreamingResponse:
     if not settings.DEEPSEEK_API_KEY:
         raise HTTPException(
@@ -103,10 +104,12 @@ async def send_message(
             detail="DEEPSEEK_API_KEY is not configured on the server.",
         )
 
+    # Ownership check runs in the request session; the stream then opens its own
+    # session (via session_factory) that lives for the length of the response.
     conversation = await _get_owned_conversation(conversation_id, current_user, db)
 
     return StreamingResponse(
-        stream_agent_response(db, current_user, conversation, message_in.content),
+        stream_agent_response(session_factory, current_user, conversation.id, message_in.content),
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )

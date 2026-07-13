@@ -1,9 +1,9 @@
-from collections import Counter
 from datetime import datetime, timedelta, timezone
 
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.sql.elements import ColumnElement
 
 from app.api.deps import get_current_user
 from app.db.session import get_db
@@ -24,10 +24,14 @@ router = APIRouter(prefix="/analytics", tags=["analytics"])
 MAX_DAYS = 90
 
 
-def _to_utc_date(value: datetime) -> str:
-    if value.tzinfo is None:
-        value = value.replace(tzinfo=timezone.utc)
-    return value.astimezone(timezone.utc).date().isoformat()
+def _utc_date_col(column: ColumnElement[datetime], dialect: str) -> ColumnElement[str]:
+    """A 'YYYY-MM-DD' UTC-date expression for grouping, per backend. Timestamps
+    are always stored as UTC; Postgres timestamptz must be pinned to UTC before
+    truncation so the result doesn't drift with the session timezone, while
+    SQLite stores naive UTC strings that strftime reads directly."""
+    if dialect == "postgresql":
+        return func.to_char(func.timezone("UTC", column), "YYYY-MM-DD")
+    return func.strftime("%Y-%m-%d", column)
 
 
 @router.get("/summary", response_model=AnalyticsSummary)
@@ -36,30 +40,48 @@ async def get_analytics_summary(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> AnalyticsSummary:
+    dialect = db.get_bind().dialect.name
     today = datetime.now(timezone.utc).date()
     day_keys = [(today - timedelta(days=i)).isoformat() for i in range(days - 1, -1, -1)]
-    earliest_day = day_keys[0]
-
-    message_dates_stmt = (
-        select(Message.created_at)
-        .join(Conversation, Message.conversation_id == Conversation.id)
-        .where(Conversation.user_id == current_user.id, Message.role == MessageRole.user)
+    earliest_dt = datetime.combine(
+        today - timedelta(days=days - 1), datetime.min.time(), tzinfo=timezone.utc
     )
-    message_counts: Counter[str] = Counter()
-    for created_at in (await db.scalars(message_dates_stmt)).all():
-        key = _to_utc_date(created_at)
-        if key >= earliest_day:
-            message_counts[key] += 1
 
-    usage_stmt = select(UsageLog.created_at, UsageLog.prompt_tokens, UsageLog.completion_tokens).where(
-        UsageLog.user_id == current_user.id
+    # Aggregate per-day in the database (GROUP BY the UTC date) rather than
+    # streaming every row into Python and counting there, so memory stays flat
+    # regardless of how much history a user has.
+    message_day = _utc_date_col(Message.created_at, dialect)
+    message_counts_stmt = (
+        select(message_day, func.count())
+        .join(Conversation, Message.conversation_id == Conversation.id)
+        .where(
+            Conversation.user_id == current_user.id,
+            Message.role == MessageRole.user,
+            Message.created_at >= earliest_dt,
+        )
+        .group_by(message_day)
+    )
+    message_counts: dict[str, int] = {
+        day: count for day, count in (await db.execute(message_counts_stmt)).all()
+    }
+
+    usage_day = _utc_date_col(UsageLog.created_at, dialect)
+    usage_stmt = (
+        select(
+            usage_day,
+            func.coalesce(func.sum(UsageLog.prompt_tokens), 0),
+            func.coalesce(func.sum(UsageLog.completion_tokens), 0),
+        )
+        .where(UsageLog.user_id == current_user.id, UsageLog.created_at >= earliest_dt)
+        .group_by(usage_day)
     )
     token_buckets: dict[str, dict[str, int]] = {k: {"prompt_tokens": 0, "completion_tokens": 0} for k in day_keys}
-    for created_at, prompt_tokens, completion_tokens in (await db.execute(usage_stmt)).all():
-        key = _to_utc_date(created_at)
-        if key in token_buckets:
-            token_buckets[key]["prompt_tokens"] += prompt_tokens
-            token_buckets[key]["completion_tokens"] += completion_tokens
+    for day, prompt_tokens, completion_tokens in (await db.execute(usage_stmt)).all():
+        if day in token_buckets:
+            token_buckets[day] = {
+                "prompt_tokens": int(prompt_tokens),
+                "completion_tokens": int(completion_tokens),
+            }
 
     tool_usage_stmt = (
         select(Message.tool_name, func.count())

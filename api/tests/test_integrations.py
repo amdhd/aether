@@ -128,6 +128,114 @@ async def test_google_disconnect(
     assert status_resp.json() == {"connected": False}
 
 
+async def test_google_disconnect_revokes_grant_at_google(
+    client: AsyncClient, auth_headers: dict[str, str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from app.core.security import decode_token
+
+    token = auth_headers["Authorization"].split(" ", 1)[1]
+    user_id = int(decode_token(token)["sub"])
+    state = create_oauth_state_token(user_id)
+
+    async def fake_exchange_code(code: str) -> dict:
+        return {
+            "access_token": "access-123",
+            "refresh_token": "refresh-456",
+            "expires_in": 3600,
+            "scope": settings.GOOGLE_OAUTH_SCOPES,
+        }
+
+    monkeypatch.setattr(google_oauth, "exchange_code", fake_exchange_code)
+    await client.get(
+        "/api/v1/integrations/google/callback",
+        params={"code": "auth-code", "state": state},
+        follow_redirects=False,
+    )
+
+    # Capture the outbound revoke call instead of hitting Google.
+    posted: dict = {}
+
+    class _FakeResp:
+        def raise_for_status(self) -> None:
+            pass
+
+    class _FakeAsyncClient:
+        def __init__(self, *args, **kwargs) -> None:
+            pass
+
+        async def __aenter__(self) -> "_FakeAsyncClient":
+            return self
+
+        async def __aexit__(self, *args) -> bool:
+            return False
+
+        async def post(self, url: str, data: dict | None = None, **kwargs) -> _FakeResp:
+            posted["url"] = url
+            posted["token"] = (data or {}).get("token")
+            return _FakeResp()
+
+    monkeypatch.setattr(google_oauth.httpx, "AsyncClient", _FakeAsyncClient)
+
+    resp = await client.delete("/api/v1/integrations/google/disconnect", headers=auth_headers)
+    assert resp.status_code == 204
+
+    # The stored refresh token was revoked at Google, not just deleted locally.
+    assert posted["url"] == google_oauth.REVOKE_URL
+    assert posted["token"] == "refresh-456"
+
+    status_resp = await client.get("/api/v1/integrations/google/status", headers=auth_headers)
+    assert status_resp.json() == {"connected": False}
+
+
+async def test_google_disconnect_when_google_revoke_fails_still_disconnects(
+    client: AsyncClient, auth_headers: dict[str, str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import httpx
+
+    from app.core.security import decode_token
+
+    token = auth_headers["Authorization"].split(" ", 1)[1]
+    user_id = int(decode_token(token)["sub"])
+    state = create_oauth_state_token(user_id)
+
+    async def fake_exchange_code(code: str) -> dict:
+        return {
+            "access_token": "access-123",
+            "refresh_token": "refresh-456",
+            "expires_in": 3600,
+            "scope": settings.GOOGLE_OAUTH_SCOPES,
+        }
+
+    monkeypatch.setattr(google_oauth, "exchange_code", fake_exchange_code)
+    await client.get(
+        "/api/v1/integrations/google/callback",
+        params={"code": "auth-code", "state": state},
+        follow_redirects=False,
+    )
+
+    class _BoomAsyncClient:
+        def __init__(self, *args, **kwargs) -> None:
+            pass
+
+        async def __aenter__(self) -> "_BoomAsyncClient":
+            return self
+
+        async def __aexit__(self, *args) -> bool:
+            return False
+
+        async def post(self, *args, **kwargs):
+            raise httpx.ConnectError("google down")
+
+    monkeypatch.setattr(google_oauth.httpx, "AsyncClient", _BoomAsyncClient)
+
+    # A transient Google failure must not block the local disconnect.
+    resp = await client.delete("/api/v1/integrations/google/disconnect", headers=auth_headers)
+    assert resp.status_code == 204
+
+    status_resp = await client.get("/api/v1/integrations/google/status", headers=auth_headers)
+    assert status_resp.json() == {"connected": False}
+
+
 async def test_get_valid_access_token_refreshes_when_expired(
     client: AsyncClient, auth_headers: dict[str, str], monkeypatch: pytest.MonkeyPatch
 ) -> None:

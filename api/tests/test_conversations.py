@@ -1,3 +1,4 @@
+import logging
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 
@@ -88,6 +89,21 @@ def _patch_deepseek(
     fake_client = _FakeClient(responses, summary)
     monkeypatch.setattr("app.agent.loop.get_deepseek_client", lambda: fake_client)
     return fake_client
+
+
+class _ListHandler(logging.Handler):
+    def __init__(self) -> None:
+        super().__init__()
+        self.records: list[logging.LogRecord] = []
+
+    def emit(self, record: logging.LogRecord) -> None:
+        self.records.append(record)
+
+
+def _capture_app_logs() -> _ListHandler:
+    handler = _ListHandler()
+    logging.getLogger("app").addHandler(handler)
+    return handler
 
 
 async def test_conversation_requires_auth(client: AsyncClient) -> None:
@@ -251,12 +267,17 @@ async def test_chat_message_streams_error_on_llm_failure(
     boom_client = SimpleNamespace(chat=SimpleNamespace(completions=_BoomCompletions()))
     monkeypatch.setattr("app.agent.loop.get_deepseek_client", lambda: boom_client)
 
-    create_resp = await client.post("/api/v1/conversations", json={}, headers=auth_headers)
-    conversation_id = create_resp.json()["id"]
+    log_handler = _capture_app_logs()
+    try:
+        create_resp = await client.post("/api/v1/conversations", json={}, headers=auth_headers)
+        conversation_id = create_resp.json()["id"]
 
-    resp = await client.post(
-        f"/api/v1/conversations/{conversation_id}/messages", json={"content": "Hi"}, headers=auth_headers
-    )
+        resp = await client.post(
+            f"/api/v1/conversations/{conversation_id}/messages", json={"content": "Hi"}, headers=auth_headers
+        )
+    finally:
+        logging.getLogger("app").removeHandler(log_handler)
+
     # The response starts streaming (200) but the upstream failure is surfaced
     # to the client as an explicit SSE error event rather than a silent cutoff.
     assert resp.status_code == 200
@@ -265,6 +286,41 @@ async def test_chat_message_streams_error_on_llm_failure(
     # The user's message is still persisted even though the assistant failed.
     detail = await client.get(f"/api/v1/conversations/{conversation_id}", headers=auth_headers)
     assert [m["role"] for m in detail.json()["messages"]] == ["user"]
+
+    # The failure is logged for observability.
+    assert any("llm.turn.failed" in r.getMessage() for r in log_handler.records)
+
+
+async def test_chat_message_logs_turn_and_tool_call(
+    client: AsyncClient, auth_headers: dict[str, str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _patch_deepseek(
+        monkeypatch,
+        responses=[
+            [
+                _tool_call_chunk(0, "call_1", "create_task", '{"title": "Buy milk"}'),
+                _usage_chunk(20, 8),
+            ],
+            [_content_chunk("Done."), _usage_chunk(30, 12)],
+        ],
+    )
+
+    log_handler = _capture_app_logs()
+    try:
+        create_resp = await client.post("/api/v1/conversations", json={}, headers=auth_headers)
+        conversation_id = create_resp.json()["id"]
+        resp = await client.post(
+            f"/api/v1/conversations/{conversation_id}/messages",
+            json={"content": "Add a task to buy milk"},
+            headers=auth_headers,
+        )
+        assert resp.status_code == 200
+    finally:
+        logging.getLogger("app").removeHandler(log_handler)
+
+    messages = [r.getMessage() for r in log_handler.records]
+    assert any("tool.call" in m and "tool=create_task" in m for m in messages)
+    assert any("llm.turn " in m and "tool_calls=1" in m for m in messages)
 
 
 async def test_chat_message_rate_limit(

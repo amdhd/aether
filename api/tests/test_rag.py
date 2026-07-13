@@ -1,3 +1,5 @@
+from types import SimpleNamespace
+
 import pytest
 
 from app.models.note import Note
@@ -43,6 +45,37 @@ async def test_search_falls_back_to_keyword(user: User) -> None:
         await db.commit()
         results = await note_search.search_notes(db, user, "Tokyo", limit=5)
         assert [n.title for n in results] == ["Travel plan"]
+
+
+async def test_semantic_below_relevance_floor_falls_back_to_keyword(
+    user: User, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # When every note is past the relevance floor, the semantic query returns
+    # nothing and search must fall back to the keyword scan rather than return
+    # empty. We simulate the (Postgres-only) semantic path returning no rows.
+    async with TestingSessionLocal() as db:
+        db.add(Note(user_id=user.id, title="Travel plan", content="flights to Tokyo"))
+        await db.commit()
+
+        monkeypatch.setattr(note_search, "_is_postgres", lambda _db: True)
+        monkeypatch.setattr(note_search.embeddings, "embeddings_enabled", lambda: True)
+        monkeypatch.setattr(note_search.embeddings, "embed_text", lambda _t: _async([0.1] * 8))
+
+        real_scalars = db.scalars
+        calls = {"n": 0}
+
+        async def fake_scalars(stmt):
+            calls["n"] += 1
+            if calls["n"] == 1:
+                # Semantic query: everything filtered out by the distance floor.
+                return SimpleNamespace(all=lambda: [])
+            return await real_scalars(stmt)
+
+        monkeypatch.setattr(db, "scalars", fake_scalars)
+
+        results = await note_search.search_notes(db, user, "Tokyo", limit=5)
+        assert [n.title for n in results] == ["Travel plan"]
+        assert calls["n"] == 2  # semantic attempted, then keyword fallback ran
 
 
 def _async(value):

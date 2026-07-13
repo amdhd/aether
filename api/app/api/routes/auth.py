@@ -6,7 +6,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.api.deps import get_current_user
 from app.core.config import settings
 from app.core.rate_limit import enforce_auth_rate_limit
-from app.core.security import hash_password, verify_password
+from app.core.security import fake_verify_password, hash_password, verify_password
 from app.db.session import get_db
 from app.models.user import User
 from app.schemas.auth import AccessToken
@@ -76,7 +76,14 @@ async def login(
     db: AsyncSession = Depends(get_db),
 ) -> AccessToken:
     user = await db.scalar(select(User).where(User.email == form_data.username))
-    if user is None or not verify_password(form_data.password, user.password_hash):
+    # Run a bcrypt comparison on both branches so a missing account and a wrong
+    # password are indistinguishable by timing (prevents email enumeration).
+    if user is None:
+        fake_verify_password()
+        password_ok = False
+    else:
+        password_ok = verify_password(form_data.password, user.password_hash)
+    if user is None or not password_ok:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Incorrect email or password",

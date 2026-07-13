@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { Brain, Plus, Send, Trash2, Wrench } from 'lucide-react'
+import { ChevronRight, Plus, Send, Trash2 } from 'lucide-react'
 import { useEffect, useRef, useState, type KeyboardEvent } from 'react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
@@ -13,11 +13,9 @@ import {
   updateConversation,
 } from '@/api/chat'
 import { ConfirmDialog } from '@/components/ConfirmDialog'
-import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Skeleton } from '@/components/ui/skeleton'
-import { Textarea } from '@/components/ui/textarea'
 import { useCrudMutations } from '@/hooks/useCrudMutations'
 import { cn } from '@/lib/utils'
 import type { Conversation, ConversationCreateInput, MessageRole, Persona } from '@/types'
@@ -31,9 +29,12 @@ const PERSONA_LABELS: Record<Persona, string> = {
   casual_friend: 'Casual Friend',
 }
 
+const PROSE =
+  'text-[15px] leading-7 [&_a]:font-medium [&_a]:text-foreground [&_a]:underline [&_a]:underline-offset-2 [&_code]:rounded [&_code]:bg-surface-muted [&_code]:px-1.5 [&_code]:py-0.5 [&_code]:text-[13px] [&_h1]:mb-2 [&_h1]:mt-4 [&_h1]:text-lg [&_h1]:font-semibold [&_h2]:mb-2 [&_h2]:mt-4 [&_h2]:text-base [&_h2]:font-semibold [&_h3]:mb-1.5 [&_h3]:mt-3 [&_h3]:font-semibold [&_li]:mb-1 [&_ol]:mb-3 [&_ol]:list-decimal [&_ol]:pl-5 [&_p:last-child]:mb-0 [&_p]:mb-3 [&_pre]:mb-3 [&_pre]:overflow-x-auto [&_pre]:rounded-lg [&_pre]:border [&_pre]:border-border [&_pre]:bg-surface-muted [&_pre]:p-3 [&_pre]:text-[13px] [&_pre_code]:bg-transparent [&_pre_code]:p-0 [&_ul]:mb-3 [&_ul]:list-disc [&_ul]:pl-5'
+
 function MessageContent({ content }: { content: string }) {
   return (
-    <div className="text-sm leading-relaxed [&_a]:text-brand-600 [&_a]:underline [&_code]:rounded [&_code]:bg-surface-muted [&_code]:px-1 [&_code]:py-0.5 [&_code]:text-xs [&_ol]:mb-2 [&_ol]:list-decimal [&_ol]:pl-5 [&_p:last-child]:mb-0 [&_p]:mb-2 [&_pre]:mb-2 [&_pre]:overflow-x-auto [&_pre]:rounded-md [&_pre]:bg-slate-900 [&_pre]:p-3 [&_pre]:text-slate-50 [&_pre_code]:bg-transparent [&_pre_code]:p-0 [&_ul]:mb-2 [&_ul]:list-disc [&_ul]:pl-5">
+    <div className={PROSE}>
       <ReactMarkdown remarkPlugins={[remarkGfm]}>{content}</ReactMarkdown>
     </div>
   )
@@ -41,17 +42,17 @@ function MessageContent({ content }: { content: string }) {
 
 function ThinkingBlock({ content }: { content: string }) {
   return (
-    <details className="mb-2 rounded-md border border-border bg-surface-muted px-3 py-2 text-xs text-muted-foreground">
-      <summary className="flex cursor-pointer items-center gap-1.5 font-medium">
-        <Brain className="h-3.5 w-3.5" />
-        Thinking
+    <details className="group/think mb-3 text-sm text-muted-foreground">
+      <summary className="inline-flex cursor-pointer list-none items-center gap-1 font-medium text-muted-foreground transition-colors hover:text-foreground focus-ring">
+        <ChevronRight className="h-3.5 w-3.5 transition-transform group-open/think:rotate-90" />
+        Thought process
       </summary>
-      <p className="mt-2 whitespace-pre-wrap">{content}</p>
+      <p className="mt-2 whitespace-pre-wrap border-l border-border pl-3 leading-6">{content}</p>
     </details>
   )
 }
 
-function ChatBubble({
+function Message({
   role,
   content,
   reasoningContent,
@@ -60,23 +61,27 @@ function ChatBubble({
   content: string
   reasoningContent?: string | null
 }) {
-  const isUser = role === 'user'
+  if (role === 'user') {
+    return (
+      <div className="flex justify-end">
+        <div className="max-w-[80%] whitespace-pre-wrap rounded-2xl rounded-br-sm bg-surface-muted px-4 py-2.5 text-[15px] leading-7">
+          {content}
+        </div>
+      </div>
+    )
+  }
+
   return (
-    <div className={cn('flex', isUser ? 'justify-end' : 'justify-start')}>
+    <div className="flex gap-3">
       <div
-        className={cn(
-          'max-w-[85%] rounded-lg px-3 py-2',
-          isUser ? 'whitespace-pre-wrap bg-brand-600 text-sm text-white' : 'bg-surface-muted text-foreground',
-        )}
+        aria-hidden
+        className="mt-0.5 flex h-7 w-7 shrink-0 select-none items-center justify-center rounded-full bg-foreground text-[13px] font-semibold text-background"
       >
-        {isUser ? (
-          content
-        ) : (
-          <>
-            {reasoningContent && <ThinkingBlock content={reasoningContent} />}
-            <MessageContent content={content} />
-          </>
-        )}
+        A
+      </div>
+      <div className="min-w-0 flex-1 pt-0.5">
+        {reasoningContent && <ThinkingBlock content={reasoningContent} />}
+        <MessageContent content={content} />
       </div>
     </div>
   )
@@ -187,29 +192,35 @@ export function ChatPage() {
   const visibleMessages = (conversation?.messages ?? []).filter(
     (message) => message.role !== 'tool' && message.content,
   )
+  const isEmptyConversation =
+    activeId !== null &&
+    !conversationLoading &&
+    visibleMessages.length === 0 &&
+    pendingUserContent === null &&
+    !isStreaming
 
   return (
-    <div className="flex h-[75vh] gap-4">
-      <aside className="hidden w-64 flex-col gap-2 sm:flex">
+    <div className="flex h-[calc(100vh-2rem)] gap-6 sm:h-[calc(100vh-3rem)]">
+      <aside className="hidden w-64 flex-col gap-3 sm:flex">
         <Button onClick={() => createMutation.mutate({})} disabled={createMutation.isPending}>
           <Plus className="h-4 w-4" />
           New chat
         </Button>
-        <div className="flex-1 space-y-1 overflow-y-auto">
+        <div className="flex-1 space-y-0.5 overflow-y-auto">
           {conversationsLoading ? (
-            [...Array(3)].map((_, i) => <Skeleton key={i} className="h-10 w-full" />)
+            [...Array(3)].map((_, i) => <Skeleton key={i} className="h-9 w-full" />)
           ) : conversations.length === 0 ? (
-            <p className="p-2 text-sm text-muted-foreground">No conversations yet.</p>
+            <p className="px-2 py-1.5 text-sm text-muted-foreground">No conversations yet.</p>
           ) : (
             <>
               {conversations.map((c) => (
                 <div
                   key={c.id}
                   className={cn(
-                    'group flex items-center gap-1 rounded-md px-2 py-2 text-sm',
+                    'group flex items-center gap-1 rounded-md px-2.5 py-2 text-sm transition-colors',
                     c.id === activeId
-                      ? 'bg-brand-50 text-brand-700 dark:bg-brand-500/15 dark:text-brand-200'
-                      : 'hover:bg-surface-muted',
+                      ? 'bg-surface-muted font-medium text-foreground'
+                      : 'text-muted-foreground hover:bg-surface-muted/60 hover:text-foreground',
                   )}
                 >
                   <button className="flex-1 truncate text-left focus-ring" onClick={() => setSelectedId(c.id)}>
@@ -228,7 +239,7 @@ export function ChatPage() {
                 <Button
                   variant="ghost"
                   size="sm"
-                  className="w-full"
+                  className="w-full text-muted-foreground"
                   onClick={() => setConversationsLimit((prev) => Math.min(prev + CONVERSATIONS_PAGE_SIZE, CONVERSATIONS_MAX_LIMIT))}
                 >
                   Load more
@@ -245,7 +256,7 @@ export function ChatPage() {
             value={activeId !== null ? String(activeId) : undefined}
             onValueChange={(value) => setSelectedId(Number(value))}
           >
-            <SelectTrigger aria-label="Select conversation" className="mb-2 sm:hidden">
+            <SelectTrigger aria-label="Select conversation" className="mb-3 sm:hidden">
               <SelectValue placeholder="Select a conversation" />
             </SelectTrigger>
             <SelectContent>
@@ -257,103 +268,140 @@ export function ChatPage() {
             </SelectContent>
           </Select>
         )}
-        <div className="mb-3 flex items-center justify-between gap-2 border-b border-border pb-3">
-          <div className="min-w-0">
-            <h1 className="truncate text-lg font-semibold">{conversation?.title ?? 'Chat'}</h1>
-            <p className="text-sm text-muted-foreground">Your AI assistant.</p>
-          </div>
-          <Button
-            variant="outline"
-            size="icon"
-            className="shrink-0 sm:hidden"
-            aria-label="New chat"
-            onClick={() => createMutation.mutate({})}
-            disabled={createMutation.isPending}
-          >
-            <Plus className="h-4 w-4" />
-          </Button>
-          {conversation && (
-            <Select
-              value={conversation.persona}
-              onValueChange={(value) => personaMutation.mutate({ id: conversation.id, persona: value as Persona })}
+
+        <div className="flex items-center justify-between gap-2 pb-4">
+          <h1 className="min-w-0 truncate text-base font-semibold tracking-tight">
+            {conversation?.title ?? 'Chat'}
+          </h1>
+          <div className="flex items-center gap-2">
+            <Button
+              variant="outline"
+              size="icon"
+              className="shrink-0 sm:hidden"
+              aria-label="New chat"
+              onClick={() => createMutation.mutate({})}
+              disabled={createMutation.isPending}
             >
-              <SelectTrigger aria-label="Assistant persona" className="w-48 shrink-0">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                {Object.entries(PERSONA_LABELS).map(([value, label]) => (
-                  <SelectItem key={value} value={value}>
-                    {label}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          )}
-        </div>
-
-        <div ref={scrollRef} className="flex-1 space-y-4 overflow-y-auto rounded-card border border-border bg-surface p-4">
-          {activeId === null ? (
-            <p className="text-sm text-muted-foreground">Start a new conversation to begin chatting with Aether.</p>
-          ) : conversationLoading ? (
-            <div className="space-y-3">
-              {[...Array(3)].map((_, i) => (
-                <Skeleton key={i} className="h-16 w-2/3" />
-              ))}
-            </div>
-          ) : (
-            <>
-              {visibleMessages.length === 0 && pendingUserContent === null && (
-                <p className="text-sm text-muted-foreground">Send a message to get started.</p>
-              )}
-              {visibleMessages.map((message) => (
-                <ChatBubble
-                  key={message.id}
-                  role={message.role}
-                  content={message.content ?? ''}
-                  reasoningContent={message.reasoning_content}
-                />
-              ))}
-              {pendingUserContent !== null && <ChatBubble role="user" content={pendingUserContent} />}
-              {isStreaming && (
-                <div className="space-y-2">
-                  {streamingToolCalls.map((name, i) => (
-                    <Badge key={i} variant="secondary" className="gap-1">
-                      <Wrench className="h-3 w-3" />
-                      Using {name}...
-                    </Badge>
+              <Plus className="h-4 w-4" />
+            </Button>
+            {conversation && (
+              <Select
+                value={conversation.persona}
+                onValueChange={(value) => personaMutation.mutate({ id: conversation.id, persona: value as Persona })}
+              >
+                <SelectTrigger aria-label="Assistant persona" className="h-9 w-44 shrink-0 text-sm">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {Object.entries(PERSONA_LABELS).map(([value, label]) => (
+                    <SelectItem key={value} value={value}>
+                      {label}
+                    </SelectItem>
                   ))}
-                  {streamingContent ? (
-                    <ChatBubble role="assistant" content={streamingContent} reasoningContent={streamingReasoning} />
-                  ) : streamingReasoning ? (
-                    <ChatBubble role="assistant" content="" reasoningContent={streamingReasoning} />
-                  ) : (
-                    <p className="text-sm text-muted-foreground">Aether is thinking…</p>
-                  )}
-                </div>
-              )}
-            </>
-          )}
-          {errorMessage && <p className="text-sm text-red-600">{errorMessage}</p>}
+                </SelectContent>
+              </Select>
+            )}
+          </div>
         </div>
 
-        <div className="mt-3 flex gap-2">
-          <Textarea
-            value={draft}
-            onChange={(e) => setDraft(e.target.value)}
-            onKeyDown={handleKeyDown}
-            placeholder={activeId === null ? 'Start a new conversation first' : 'Message Aether...'}
-            aria-label="Message"
-            disabled={activeId === null || isStreaming}
-            className="min-h-[44px] flex-1 resize-none"
-            rows={1}
-          />
-          <Button
-            aria-label="Send message"
-            onClick={() => void handleSend()}
-            disabled={activeId === null || !draft.trim() || isStreaming}
-          >
-            <Send className="h-4 w-4" />
-          </Button>
+        <div ref={scrollRef} className="flex-1 overflow-y-auto">
+          <div className="mx-auto w-full max-w-3xl px-1 pb-6">
+            {activeId === null ? (
+              <div className="flex min-h-[50vh] flex-col items-center justify-center text-center">
+                <h2 className="text-2xl font-semibold tracking-tight">Start a new conversation</h2>
+                <p className="mt-2 text-sm text-muted-foreground">
+                  Create a chat from the sidebar to begin talking with Aether.
+                </p>
+              </div>
+            ) : conversationLoading ? (
+              <div className="space-y-6 pt-2">
+                {[...Array(3)].map((_, i) => (
+                  <Skeleton key={i} className="h-16 w-2/3" />
+                ))}
+              </div>
+            ) : isEmptyConversation ? (
+              <div className="flex min-h-[50vh] flex-col items-center justify-center text-center">
+                <h2 className="text-2xl font-semibold tracking-tight">How can I help?</h2>
+                <p className="mt-2 text-sm text-muted-foreground">
+                  Ask about your tasks, notes, the weather, or anything else.
+                </p>
+              </div>
+            ) : (
+              <div className="space-y-6 pt-2">
+                {visibleMessages.map((message) => (
+                  <Message
+                    key={message.id}
+                    role={message.role}
+                    content={message.content ?? ''}
+                    reasoningContent={message.reasoning_content}
+                  />
+                ))}
+                {pendingUserContent !== null && <Message role="user" content={pendingUserContent} />}
+                {isStreaming && (
+                  <div className="flex gap-3">
+                    <div
+                      aria-hidden
+                      className="mt-0.5 flex h-7 w-7 shrink-0 select-none items-center justify-center rounded-full bg-foreground text-[13px] font-semibold text-background"
+                    >
+                      A
+                    </div>
+                    <div className="min-w-0 flex-1 pt-0.5">
+                      {streamingToolCalls.map((name, i) => (
+                        <p key={i} className="mb-2 flex items-center gap-2 text-sm text-muted-foreground">
+                          <span className="inline-block h-1.5 w-1.5 animate-pulse rounded-full bg-muted-foreground" />
+                          Using <span className="font-medium text-foreground">{name}</span>
+                        </p>
+                      ))}
+                      {streamingReasoning && <ThinkingBlock content={streamingReasoning} />}
+                      {streamingContent ? (
+                        <MessageContent content={streamingContent} />
+                      ) : (
+                        !streamingReasoning && (
+                          <p className="flex items-center gap-1 py-1 text-sm text-muted-foreground">
+                            <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-muted-foreground [animation-delay:-0.3s]" />
+                            <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-muted-foreground [animation-delay:-0.15s]" />
+                            <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-muted-foreground" />
+                          </p>
+                        )
+                      )}
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
+            {errorMessage && (
+              <p className="mt-4 rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700 dark:border-red-900/50 dark:bg-red-950/40 dark:text-red-300">
+                {errorMessage}
+              </p>
+            )}
+          </div>
+        </div>
+
+        <div className="mx-auto w-full max-w-3xl px-1 pt-2">
+          <div className="relative rounded-2xl border border-border bg-surface shadow-sm transition-colors focus-within:border-foreground/25">
+            <textarea
+              value={draft}
+              onChange={(e) => setDraft(e.target.value)}
+              onKeyDown={handleKeyDown}
+              placeholder={activeId === null ? 'Start a new conversation first' : 'Message Aether…'}
+              aria-label="Message"
+              disabled={activeId === null || isStreaming}
+              rows={1}
+              className="block max-h-40 min-h-[52px] w-full resize-none rounded-2xl bg-transparent px-4 py-3.5 pr-14 text-[15px] leading-6 placeholder:text-muted-foreground focus:outline-none disabled:cursor-not-allowed disabled:opacity-60"
+            />
+            <Button
+              size="icon"
+              className="absolute bottom-2.5 right-2.5 h-9 w-9 rounded-lg"
+              aria-label="Send message"
+              onClick={() => void handleSend()}
+              disabled={activeId === null || !draft.trim() || isStreaming}
+            >
+              <Send className="h-4 w-4" />
+            </Button>
+          </div>
+          <p className="py-2 text-center text-xs text-muted-foreground">
+            Aether can make mistakes. Press Enter to send, Shift+Enter for a new line.
+          </p>
         </div>
       </div>
 

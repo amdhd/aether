@@ -32,6 +32,14 @@ both the backend and frontend.
   **rotate on every use** with **reuse detection**: replaying a rotated token
   revokes the whole token family.
 - **Rate limiting** on chat and external-API tools (web search, calendar).
+- **Prompt-injection guardrail** — the base system prompt marks tool, web, and
+  note content as untrusted data: embedded directives are ignored, and
+  unrequested destructive actions require explicit confirmation.
+- **Encrypted credentials** — Google OAuth tokens are stored Fernet-encrypted
+  at rest, and disconnecting revokes the grant at Google's endpoint (not just a
+  local delete).
+- **Structured logging** — the agent loop emits greppable `key=value` records
+  for per-turn token/tool/latency summaries, tool calls, and stream failures.
 
 ## Stack
 
@@ -39,6 +47,37 @@ both the backend and frontend.
   (SQLite for tests), Pydantic v2, JWT auth.
 - **Frontend**: React 19, TypeScript, Vite, Tailwind CSS v4, shadcn/ui-style
   components, TanStack Query, Recharts, Zustand.
+
+## Architecture
+
+```
+web/ (React + Vite)                       api/ (FastAPI, async)
+  ├─ pages/        chat, tasks, notes,       ├─ api/routes/   auth, conversations,
+  │                analytics, settings       │                tasks, notes,
+  ├─ api/          typed fetch clients        │                analytics, integrations
+  └─ store/        Zustand auth + theme       ├─ agent/        loop, tools, personas,
+                                              │                memory, client
+        │  SSE stream (EventSource)           ├─ services/     embeddings, note search,
+        │  Bearer access token                │                refresh tokens, google
+        ▼                                      ├─ core/         security, crypto, config,
+  POST /conversations/{id}/messages           │                rate_limit, logging
+        │                                      └─ models/       SQLAlchemy 2.0 (async)
+        ▼                                            │
+  agent/loop.py  ──►  DeepSeek (tool-calling, thinking mode)
+        │                    │
+        │  ◄── tool_calls ───┘
+        ▼
+  agent/tools.py  ──►  DB (tasks/notes) · data.gov.my · Tavily · Google Calendar
+```
+
+The **agent loop** ([`api/app/agent/loop.py`](api/app/agent/loop.py)) is the
+core: it builds conversation context (with automatic summarization of older
+turns), calls DeepSeek with the tool schemas, and streams the response back to
+the browser as Server-Sent Events. Distinct SSE event types — `reasoning`
+(visible "thinking"), `token` (assistant text), tool-call traces, and `error` —
+let the UI render each phase live. When the model requests a tool, the loop
+dispatches to a handler, feeds the result back, and continues until the model
+produces a final answer.
 
 ## Getting started
 

@@ -5,7 +5,7 @@ from datetime import datetime, timezone
 from typing import Any
 
 from sqlalchemy import select
-from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.agent.client import get_deepseek_client
 from app.agent.memory import maybe_summarize_history
@@ -79,19 +79,33 @@ def _sse_event(event: str, data: dict[str, Any]) -> str:
 
 
 async def stream_agent_response(
-    db: AsyncSession,
+    session_factory: async_sessionmaker[AsyncSession],
     user: User,
-    conversation: Conversation,
+    conversation_id: int,
     user_message: str,
 ) -> AsyncGenerator[str, None]:
     """Persist the user's message, run the tool-calling agent loop against
-    DeepSeek, and yield SSE-formatted events as the response streams in."""
+    DeepSeek, and yield SSE-formatted events as the response streams in.
 
-    # The request's db session may already be torn down by the time this
-    # generator runs (FastAPI closes `yield`-dependencies before streaming
-    # the response body), which detaches `conversation`. Re-fetch it so
-    # mutations (e.g. the title update below) are tracked and persisted.
-    conversation = await db.get(Conversation, conversation.id)
+    This generator outlives the request's DB dependency: FastAPI tears down
+    `yield`-dependencies before the streaming body runs. So instead of borrowing
+    the (already-closed) request session, it opens and *owns* a session for the
+    duration of the stream. The `async with` closes it when the stream finishes
+    normally or when the client disconnects (Starlette calls `aclose()`), which
+    releases the connection and prevents it lingering idle-in-transaction and
+    holding locks — a leak that is invisible on SQLite but deadlocks Postgres."""
+    async with session_factory() as db:
+        async for event in _run_agent(db, user, conversation_id, user_message):
+            yield event
+
+
+async def _run_agent(
+    db: AsyncSession,
+    user: User,
+    conversation_id: int,
+    user_message: str,
+) -> AsyncGenerator[str, None]:
+    conversation = await db.get(Conversation, conversation_id)
 
     db.add(Message(conversation_id=conversation.id, role=MessageRole.user, content=user_message))
     await db.commit()

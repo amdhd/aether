@@ -26,7 +26,9 @@ async def test_embed_text_disabled_returns_none(monkeypatch: pytest.MonkeyPatch)
 async def test_refresh_note_embedding_stores_vector(
     monkeypatch: pytest.MonkeyPatch, user: User
 ) -> None:
-    vector = [0.1] * 8
+    # Match the configured dimension so this works against the native
+    # Vector(EMBEDDING_DIMENSIONS) column on Postgres, not just SQLite's JSON.
+    vector = [0.1] * embeddings.settings.EMBEDDING_DIMENSIONS
     monkeypatch.setattr(note_search.embeddings, "embed_note", lambda *a, **k: _async(vector))
     async with TestingSessionLocal() as db:
         note = Note(user_id=user.id, title="Recipe", content="pasta and basil")
@@ -34,7 +36,9 @@ async def test_refresh_note_embedding_stores_vector(
         await note_search.refresh_note_embedding(db, note)
         await db.commit()
         await db.refresh(note)
-        assert note.embedding == vector
+        # pgvector round-trips as a numpy array on Postgres, a list on SQLite;
+        # normalize to a list before comparing.
+        assert list(note.embedding) == vector
 
 
 async def test_search_falls_back_to_keyword(user: User) -> None:

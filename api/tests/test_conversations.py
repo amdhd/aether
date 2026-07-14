@@ -4,6 +4,7 @@ from types import SimpleNamespace
 
 import pytest
 from httpx import AsyncClient
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
@@ -164,6 +165,30 @@ async def test_conversation_idor_protection(client: AsyncClient) -> None:
 
     resp = await client.get(f"/api/v1/conversations/{conversation_id}", headers=b_headers)
     assert resp.status_code == 404
+
+
+async def test_deleting_conversation_cascades_to_messages(
+    client: AsyncClient, auth_headers: dict[str, str]
+) -> None:
+    """Deleting a conversation must delete its messages too. The relationship
+    uses passive_deletes, so this relies on the DB enforcing ON DELETE CASCADE
+    (native on Postgres; enabled for SQLite via the foreign_keys pragma)."""
+    create_resp = await client.post("/api/v1/conversations", json={}, headers=auth_headers)
+    conversation_id = create_resp.json()["id"]
+
+    async with TestingSessionLocal() as session:
+        for _ in range(3):
+            session.add(Message(conversation_id=conversation_id, role=MessageRole.user, content="hi"))
+        await session.commit()
+
+    resp = await client.delete(f"/api/v1/conversations/{conversation_id}", headers=auth_headers)
+    assert resp.status_code == 204
+
+    async with TestingSessionLocal() as session:
+        remaining = await session.scalar(
+            select(func.count()).select_from(Message).where(Message.conversation_id == conversation_id)
+        )
+    assert remaining == 0
 
 
 async def test_streaming_owns_and_closes_its_session(

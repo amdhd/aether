@@ -9,7 +9,7 @@ from sqlalchemy.pool import NullPool, StaticPool
 
 from app.core.rate_limit import reset_rate_limits
 from app.db.base import Base
-from app.db.session import get_db, get_session_factory
+from app.db.session import enable_sqlite_foreign_keys, get_db, get_session_factory
 from app.main import app
 
 # Default to an in-memory SQLite DB (fast, keyless — mirrors local dev/CI). Set
@@ -31,6 +31,7 @@ else:
     # use, keeping every connection on its own test's loop.
     engine = create_async_engine(TEST_DATABASE_URL, poolclass=NullPool)
 
+enable_sqlite_foreign_keys(engine)
 TestingSessionLocal = async_sessionmaker(bind=engine, expire_on_commit=False, class_=AsyncSession)
 
 

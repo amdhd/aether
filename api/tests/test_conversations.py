@@ -10,6 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.config import settings
 from app.models.conversation import Conversation
 from app.models.message import Message, MessageRole
+from app.schemas.conversation import MAX_MESSAGE_CHARS
 from tests.conftest import TestingSessionLocal
 
 
@@ -255,6 +256,23 @@ async def test_stream_emits_error_when_conversation_missing(
     ]
 
     assert any("event: error" in event for event in events)
+
+
+async def test_chat_message_rejects_oversized_content(
+    client: AsyncClient, auth_headers: dict[str, str]
+) -> None:
+    """A single chat turn is length-capped so one request can't ship an
+    unbounded payload. Over-limit content is rejected at validation (422)
+    before any DB write or LLM call."""
+    create_resp = await client.post("/api/v1/conversations", json={}, headers=auth_headers)
+    conversation_id = create_resp.json()["id"]
+
+    resp = await client.post(
+        f"/api/v1/conversations/{conversation_id}/messages",
+        json={"content": "x" * (MAX_MESSAGE_CHARS + 1)},
+        headers=auth_headers,
+    )
+    assert resp.status_code == 422
 
 
 async def test_chat_message_requires_deepseek_key(

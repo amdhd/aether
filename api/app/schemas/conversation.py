@@ -43,5 +43,13 @@ class ConversationDetail(ConversationRead):
     messages: list[MessageRead] = Field(default_factory=list)
 
 
+# Upper bound on a single chat turn. Generous enough to paste a long note or
+# article (~4k tokens), but bounded so one request can't ship an unbounded
+# payload — memory + token-cost abuse the per-minute rate limit alone doesn't
+# stop. Kept under the summarization threshold (memory.SUMMARIZE_CHAR_THRESHOLD)
+# so a lone message can't blow the context budget on its own. Tunable.
+MAX_MESSAGE_CHARS = 16000
+
+
 class ChatMessageCreate(BaseModel):
-    content: str = Field(min_length=1)
+    content: str = Field(min_length=1, max_length=MAX_MESSAGE_CHARS)

@@ -106,6 +106,13 @@ async def _run_agent(
     user_message: str,
 ) -> AsyncGenerator[str, None]:
     conversation = await db.get(Conversation, conversation_id)
+    if conversation is None:
+        # The route verified ownership in a separate (now-closed) session; this
+        # generator re-fetches in its own session, which runs later. A conversation
+        # deleted in that window (e.g. from another tab) is gone by the time we
+        # look — surface a clean SSE error instead of raising and truncating.
+        yield _sse_event("error", {"message": "This conversation no longer exists."})
+        return
 
     db.add(Message(conversation_id=conversation.id, role=MessageRole.user, content=user_message))
     await db.commit()

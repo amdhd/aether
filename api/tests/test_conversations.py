@@ -204,6 +204,34 @@ async def test_streaming_owns_and_closes_its_session(
     assert closed["count"] == 1, "streaming generator did not close its session"
 
 
+async def test_stream_emits_error_when_conversation_missing(
+    client: AsyncClient, auth_headers: dict[str, str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The stream runs in its own session, opened *after* the route's ownership
+    check. If the conversation is deleted in that window (e.g. from another tab),
+    the fresh session's lookup returns None. The generator must surface a clean
+    SSE error event rather than raising and truncating the stream with no signal."""
+    from sqlalchemy import select
+
+    from app.agent.loop import stream_agent_response
+    from app.models.user import User
+
+    _patch_deepseek(monkeypatch, responses=[[_content_chunk("Hi"), _usage_chunk(1, 1)]])
+
+    async with TestingSessionLocal() as session:
+        user = (await session.scalars(select(User).where(User.email == "user@example.com"))).one()
+
+    missing_conversation_id = 999999
+    events = [
+        event
+        async for event in stream_agent_response(
+            TestingSessionLocal, user, missing_conversation_id, "Hi"
+        )
+    ]
+
+    assert any("event: error" in event for event in events)
+
+
 async def test_chat_message_requires_deepseek_key(
     client: AsyncClient, auth_headers: dict[str, str], monkeypatch: pytest.MonkeyPatch
 ) -> None:

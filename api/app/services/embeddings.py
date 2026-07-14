@@ -11,6 +11,9 @@ from functools import lru_cache
 from openai import AsyncOpenAI
 
 from app.core.config import settings
+from app.core.logging import get_logger
+
+logger = get_logger(__name__)
 
 
 def embeddings_enabled() -> bool:
@@ -40,7 +43,11 @@ async def embed_text(text: str) -> list[float] | None:
             input=text,
             dimensions=settings.EMBEDDING_DIMENSIONS,
         )
-    except Exception:
+    except Exception as exc:
+        # Degrade gracefully (search falls back to keyword scan), but leave a
+        # trace: without this, a bad/expired OPENAI_API_KEY silently disables
+        # semantic search indefinitely with no signal that anything is wrong.
+        logger.warning("embedding.failed error=%r", exc)
         return None
     return resp.data[0].embedding
 

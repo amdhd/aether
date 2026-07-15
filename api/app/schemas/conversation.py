@@ -36,12 +36,9 @@ class MessageRead(BaseModel):
     reasoning_content: str | None
     tool_calls: list[dict[str, Any]] | None
     tool_name: str | None
+    attachment_name: str | None = None
     created_at: datetime
 
 
 class ConversationDetail(ConversationRead):
     messages: list[MessageRead] = Field(default_factory=list)
-
-
-class ChatMessageCreate(BaseModel):
-    content: str = Field(min_length=1)

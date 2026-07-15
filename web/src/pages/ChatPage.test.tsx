@@ -41,6 +41,7 @@ const mockDetail: ConversationDetail = {
       reasoning_content: null,
       tool_calls: null,
       tool_name: null,
+      attachment_name: null,
       created_at: '2026-01-01T00:00:00Z',
     },
     {
@@ -50,6 +51,7 @@ const mockDetail: ConversationDetail = {
       reasoning_content: null,
       tool_calls: null,
       tool_name: null,
+      attachment_name: null,
       created_at: '2026-01-01T00:00:00Z',
     },
   ],
@@ -98,7 +100,7 @@ describe('ChatPage', () => {
     await userEvent.click(screen.getByRole('button', { name: /send message/i }))
 
     expect(await screen.findByText('Hello Aether')).toBeInTheDocument()
-    expect(chatApi.streamChatMessage).toHaveBeenCalledWith(1, 'Hello Aether', expect.any(Object))
+    expect(chatApi.streamChatMessage).toHaveBeenCalledWith(1, 'Hello Aether', expect.any(Object), null)
 
     resolveStream()
   })

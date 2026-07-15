@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile, status
 from fastapi.responses import StreamingResponse
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -12,12 +12,12 @@ from app.models.conversation import Conversation
 from app.models.user import User
 from app.schemas.common import DEFAULT_PAGE_LIMIT, MAX_PAGE_LIMIT, Page
 from app.schemas.conversation import (
-    ChatMessageCreate,
     ConversationCreate,
     ConversationDetail,
     ConversationRead,
     ConversationUpdate,
 )
+from app.services.attachments import MAX_ATTACHMENT_BYTES, parse_tabular_file
 
 router = APIRouter(prefix="/conversations", tags=["conversations"])
 
@@ -93,7 +93,8 @@ async def delete_conversation(
 @router.post("/{conversation_id}/messages")
 async def send_message(
     conversation_id: int,
-    message_in: ChatMessageCreate,
+    content: str = Form(..., min_length=1),
+    file: UploadFile | None = File(default=None),
     current_user: User = Depends(enforce_chat_rate_limit),
     db: AsyncSession = Depends(get_db),
 ) -> StreamingResponse:
@@ -105,8 +106,18 @@ async def send_message(
 
     conversation = await _get_owned_conversation(conversation_id, current_user, db)
 
+    attachment_name: str | None = None
+    attachment_content: str | None = None
+    if file is not None and file.filename:
+        raw = await file.read(MAX_ATTACHMENT_BYTES + 1)
+        # parse_tabular_file validates the size, extension, and contents,
+        # raising HTTP 422 with a user-facing message on any problem.
+        attachment_name, attachment_content = parse_tabular_file(file.filename, raw)
+
     return StreamingResponse(
-        stream_agent_response(db, current_user, conversation, message_in.content),
+        stream_agent_response(
+            db, current_user, conversation, content, attachment_name, attachment_content
+        ),
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )

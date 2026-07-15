@@ -34,7 +34,11 @@ def _usage_log(user: User, conversation: Conversation, usage: dict[str, int]) ->
 
 
 def _message_to_api(message: Message) -> dict[str, Any]:
-    out: dict[str, Any] = {"role": message.role.value, "content": message.content}
+    content = message.content
+    if message.role == MessageRole.user and message.attachment_content:
+        name = message.attachment_name or "attachment"
+        content = f"{content or ''}\n\n[Attached file: {name}]\n{message.attachment_content}".strip()
+    out: dict[str, Any] = {"role": message.role.value, "content": content}
     if message.tool_calls:
         out["tool_calls"] = message.tool_calls
     if message.tool_call_id:
@@ -83,9 +87,16 @@ async def stream_agent_response(
     user: User,
     conversation: Conversation,
     user_message: str,
+    attachment_name: str | None = None,
+    attachment_content: str | None = None,
 ) -> AsyncGenerator[str, None]:
     """Persist the user's message, run the tool-calling agent loop against
-    DeepSeek, and yield SSE-formatted events as the response streams in."""
+    DeepSeek, and yield SSE-formatted events as the response streams in.
+
+    An optional parsed file attachment (e.g. a campaign CSV) is stored on the
+    user message and injected into the model context by ``_message_to_api``, so
+    it remains available for follow-up turns without cluttering the chat bubble.
+    """
 
     # The request's db session may already be torn down by the time this
     # generator runs (FastAPI closes `yield`-dependencies before streaming
@@ -93,7 +104,15 @@ async def stream_agent_response(
     # mutations (e.g. the title update below) are tracked and persisted.
     conversation = await db.get(Conversation, conversation.id)
 
-    db.add(Message(conversation_id=conversation.id, role=MessageRole.user, content=user_message))
+    db.add(
+        Message(
+            conversation_id=conversation.id,
+            role=MessageRole.user,
+            content=user_message,
+            attachment_name=attachment_name,
+            attachment_content=attachment_content,
+        )
+    )
     await db.commit()
 
     client = get_deepseek_client()

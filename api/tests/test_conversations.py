@@ -174,7 +174,7 @@ async def test_chat_message_requires_deepseek_key(
     conversation_id = create_resp.json()["id"]
 
     resp = await client.post(
-        f"/api/v1/conversations/{conversation_id}/messages", json={"content": "Hi"}, headers=auth_headers
+        f"/api/v1/conversations/{conversation_id}/messages", data={"content": "Hi"}, headers=auth_headers
     )
     assert resp.status_code == 503
 
@@ -191,7 +191,7 @@ async def test_chat_message_simple_response(
     conversation_id = create_resp.json()["id"]
 
     resp = await client.post(
-        f"/api/v1/conversations/{conversation_id}/messages", json={"content": "Hi"}, headers=auth_headers
+        f"/api/v1/conversations/{conversation_id}/messages", data={"content": "Hi"}, headers=auth_headers
     )
     assert resp.status_code == 200
     body = resp.text
@@ -237,7 +237,7 @@ async def test_chat_message_summarizes_old_history(
         await session.commit()
 
     resp = await client.post(
-        f"/api/v1/conversations/{conversation_id}/messages", json={"content": "Hi"}, headers=auth_headers
+        f"/api/v1/conversations/{conversation_id}/messages", data={"content": "Hi"}, headers=auth_headers
     )
     assert resp.status_code == 200
 
@@ -273,7 +273,7 @@ async def test_chat_message_streams_error_on_llm_failure(
         conversation_id = create_resp.json()["id"]
 
         resp = await client.post(
-            f"/api/v1/conversations/{conversation_id}/messages", json={"content": "Hi"}, headers=auth_headers
+            f"/api/v1/conversations/{conversation_id}/messages", data={"content": "Hi"}, headers=auth_headers
         )
     finally:
         logging.getLogger("app").removeHandler(log_handler)
@@ -311,7 +311,7 @@ async def test_chat_message_logs_turn_and_tool_call(
         conversation_id = create_resp.json()["id"]
         resp = await client.post(
             f"/api/v1/conversations/{conversation_id}/messages",
-            json={"content": "Add a task to buy milk"},
+            data={"content": "Add a task to buy milk"},
             headers=auth_headers,
         )
         assert resp.status_code == 200
@@ -321,6 +321,58 @@ async def test_chat_message_logs_turn_and_tool_call(
     messages = [r.getMessage() for r in log_handler.records]
     assert any("tool.call" in m and "tool=create_task" in m for m in messages)
     assert any("llm.turn " in m and "tool_calls=1" in m for m in messages)
+
+
+async def test_chat_message_with_csv_attachment(
+    client: AsyncClient, auth_headers: dict[str, str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    fake_client = _patch_deepseek(
+        monkeypatch,
+        responses=[[_content_chunk("Your ROAS looks healthy."), _usage_chunk(10, 5)]],
+    )
+
+    create_resp = await client.post(
+        "/api/v1/conversations", json={"persona": "marketing_coach"}, headers=auth_headers
+    )
+    conversation_id = create_resp.json()["id"]
+
+    csv_bytes = b"campaign,spend,revenue\nBrand,100,500\nProspecting,200,300\n"
+    resp = await client.post(
+        f"/api/v1/conversations/{conversation_id}/messages",
+        data={"content": "How are these campaigns doing?"},
+        files={"file": ("campaigns.csv", csv_bytes, "text/csv")},
+        headers=auth_headers,
+    )
+    assert resp.status_code == 200
+
+    # The parsed table is injected into the model context, but the visible
+    # message content stays clean (just the user's typed prompt).
+    sent_messages = fake_client.chat.completions.stream_calls[0]["messages"]
+    user_msg = next(m for m in sent_messages if m["role"] == "user")
+    assert "[Attached file: campaigns.csv]" in user_msg["content"]
+    assert "Prospecting,200,300" in user_msg["content"]
+
+    detail = await client.get(f"/api/v1/conversations/{conversation_id}", headers=auth_headers)
+    stored_user = detail.json()["messages"][0]
+    assert stored_user["content"] == "How are these campaigns doing?"
+    assert stored_user["attachment_name"] == "campaigns.csv"
+
+
+async def test_chat_message_rejects_non_csv_attachment(
+    client: AsyncClient, auth_headers: dict[str, str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _patch_deepseek(monkeypatch, responses=[[_content_chunk("hi"), _usage_chunk(1, 1)]])
+
+    create_resp = await client.post("/api/v1/conversations", json={}, headers=auth_headers)
+    conversation_id = create_resp.json()["id"]
+
+    resp = await client.post(
+        f"/api/v1/conversations/{conversation_id}/messages",
+        data={"content": "analyze this"},
+        files={"file": ("report.pdf", b"%PDF-1.4 not a table", "application/pdf")},
+        headers=auth_headers,
+    )
+    assert resp.status_code == 422
 
 
 async def test_chat_message_rate_limit(
@@ -334,12 +386,12 @@ async def test_chat_message_rate_limit(
 
     for _ in range(2):
         resp = await client.post(
-            f"/api/v1/conversations/{conversation_id}/messages", json={"content": "Hi"}, headers=auth_headers
+            f"/api/v1/conversations/{conversation_id}/messages", data={"content": "Hi"}, headers=auth_headers
         )
         assert resp.status_code == 503  # DEEPSEEK_API_KEY not configured, but rate limit not yet hit
 
     resp = await client.post(
-        f"/api/v1/conversations/{conversation_id}/messages", json={"content": "Hi"}, headers=auth_headers
+        f"/api/v1/conversations/{conversation_id}/messages", data={"content": "Hi"}, headers=auth_headers
     )
     assert resp.status_code == 429
     assert "Retry-After" in resp.headers
@@ -364,7 +416,7 @@ async def test_chat_message_with_reasoning(
     conversation_id = create_resp.json()["id"]
 
     resp = await client.post(
-        f"/api/v1/conversations/{conversation_id}/messages", json={"content": "Hi"}, headers=auth_headers
+        f"/api/v1/conversations/{conversation_id}/messages", data={"content": "Hi"}, headers=auth_headers
     )
     assert resp.status_code == 200
     body = resp.text
@@ -398,7 +450,7 @@ async def test_chat_message_with_tool_call(
 
     resp = await client.post(
         f"/api/v1/conversations/{conversation_id}/messages",
-        json={"content": "Add a task to buy milk"},
+        data={"content": "Add a task to buy milk"},
         headers=auth_headers,
     )
     assert resp.status_code == 200

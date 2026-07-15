@@ -36,6 +36,7 @@ class MessageRead(BaseModel):
     reasoning_content: str | None
     tool_calls: list[dict[str, Any]] | None
     tool_name: str | None
+    attachment_name: str | None = None
     created_at: datetime
 
 
@@ -48,8 +49,5 @@ class ConversationDetail(ConversationRead):
 # payload — memory + token-cost abuse the per-minute rate limit alone doesn't
 # stop. Kept under the summarization threshold (memory.SUMMARIZE_CHAR_THRESHOLD)
 # so a lone message can't blow the context budget on its own. Tunable.
+# Applied to the multipart `content` form field in the message-send route.
 MAX_MESSAGE_CHARS = 16000
-
-
-class ChatMessageCreate(BaseModel):
-    content: str = Field(min_length=1, max_length=MAX_MESSAGE_CHARS)

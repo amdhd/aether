@@ -48,14 +48,20 @@ export interface ChatStreamHandlers {
   onError?: (message: string) => void
 }
 
-async function postChatMessage(conversationId: number, content: string, token: string | null): Promise<Response> {
+async function postChatMessage(
+  conversationId: number,
+  content: string,
+  file: File | null,
+  token: string | null,
+): Promise<Response> {
+  const form = new FormData()
+  form.append('content', content)
+  if (file) form.append('file', file)
+  // Let the browser set the multipart Content-Type (with boundary) itself.
   return fetch(`${API_URL}${API_PREFIX}/conversations/${conversationId}/messages`, {
     method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      ...(token ? { Authorization: `Bearer ${token}` } : {}),
-    },
-    body: JSON.stringify({ content }),
+    headers: token ? { Authorization: `Bearer ${token}` } : {},
+    body: form,
   })
 }
 
@@ -85,13 +91,14 @@ export async function streamChatMessage(
   conversationId: number,
   content: string,
   handlers: ChatStreamHandlers,
+  file: File | null = null,
 ): Promise<void> {
   let token = useAuthStore.getState().accessToken
-  let res = await postChatMessage(conversationId, content, token)
+  let res = await postChatMessage(conversationId, content, file, token)
 
   if (res.status === 401) {
     token = await refreshAccessToken()
-    res = await postChatMessage(conversationId, content, token)
+    res = await postChatMessage(conversationId, content, file, token)
   }
 
   if (!res.ok || !res.body) {

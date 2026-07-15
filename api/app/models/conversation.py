@@ -17,6 +17,7 @@ class Persona(str, enum.Enum):
     productivity_coach = "productivity_coach"
     research_assistant = "research_assistant"
     casual_friend = "casual_friend"
+    marketing_coach = "marketing_coach"
 
 
 class Conversation(Base):

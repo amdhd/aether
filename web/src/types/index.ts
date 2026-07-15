@@ -58,7 +58,7 @@ export interface NoteCreateInput {
 
 export type NoteUpdateInput = Partial<NoteCreateInput>
 
-export type Persona = 'productivity_coach' | 'research_assistant' | 'casual_friend'
+export type Persona = 'productivity_coach' | 'research_assistant' | 'casual_friend' | 'marketing_coach'
 export type MessageRole = 'user' | 'assistant' | 'tool'
 
 export interface ToolCall {
@@ -85,6 +85,7 @@ export interface ChatMessage {
   reasoning_content: string | null
   tool_calls: ToolCall[] | null
   tool_name: string | null
+  attachment_name: string | null
   created_at: string
 }
 

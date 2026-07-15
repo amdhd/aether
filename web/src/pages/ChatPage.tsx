@@ -1,6 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { ChevronRight, Plus, Send, Trash2 } from 'lucide-react'
-import { useEffect, useRef, useState, type KeyboardEvent } from 'react'
+import { ChevronRight, Paperclip, Plus, Send, Trash2, X } from 'lucide-react'
+import { useEffect, useRef, useState, type ChangeEvent, type KeyboardEvent } from 'react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 
@@ -27,7 +27,10 @@ const PERSONA_LABELS: Record<Persona, string> = {
   productivity_coach: 'Productivity Coach',
   research_assistant: 'Research Assistant',
   casual_friend: 'Casual Friend',
+  marketing_coach: 'Marketing Coach',
 }
+
+const ATTACHMENT_ACCEPT = '.csv,.tsv'
 
 const PROSE =
   'text-[15px] leading-7 [&_a]:font-medium [&_a]:text-foreground [&_a]:underline [&_a]:underline-offset-2 [&_code]:rounded [&_code]:bg-surface-muted [&_code]:px-1.5 [&_code]:py-0.5 [&_code]:text-[13px] [&_h1]:mb-2 [&_h1]:mt-4 [&_h1]:text-lg [&_h1]:font-semibold [&_h2]:mb-2 [&_h2]:mt-4 [&_h2]:text-base [&_h2]:font-semibold [&_h3]:mb-1.5 [&_h3]:mt-3 [&_h3]:font-semibold [&_li]:mb-1 [&_ol]:mb-3 [&_ol]:list-decimal [&_ol]:pl-5 [&_p:last-child]:mb-0 [&_p]:mb-3 [&_pre]:mb-3 [&_pre]:overflow-x-auto [&_pre]:rounded-lg [&_pre]:border [&_pre]:border-border [&_pre]:bg-surface-muted [&_pre]:p-3 [&_pre]:text-[13px] [&_pre_code]:bg-transparent [&_pre_code]:p-0 [&_ul]:mb-3 [&_ul]:list-disc [&_ul]:pl-5'
@@ -52,18 +55,30 @@ function ThinkingBlock({ content }: { content: string }) {
   )
 }
 
+function AttachmentChip({ name }: { name: string }) {
+  return (
+    <span className="inline-flex max-w-full items-center gap-1.5 rounded-md border border-border bg-surface px-2 py-1 text-xs text-muted-foreground">
+      <Paperclip className="h-3 w-3 shrink-0" />
+      <span className="truncate">{name}</span>
+    </span>
+  )
+}
+
 function Message({
   role,
   content,
   reasoningContent,
+  attachmentName,
 }: {
   role: MessageRole
   content: string
   reasoningContent?: string | null
+  attachmentName?: string | null
 }) {
   if (role === 'user') {
     return (
-      <div className="flex justify-end">
+      <div className="flex flex-col items-end gap-1.5">
+        {attachmentName && <AttachmentChip name={attachmentName} />}
         <div className="max-w-[80%] whitespace-pre-wrap rounded-2xl rounded-br-sm bg-surface-muted px-4 py-2.5 text-[15px] leading-7">
           {content}
         </div>
@@ -91,8 +106,12 @@ export function ChatPage() {
   const queryClient = useQueryClient()
   const [selectedId, setSelectedId] = useState<number | null>(null)
   const [draft, setDraft] = useState('')
+  const [attachedFile, setAttachedFile] = useState<File | null>(null)
+  const [attachError, setAttachError] = useState<string | null>(null)
+  const fileInputRef = useRef<HTMLInputElement>(null)
   const [isStreaming, setIsStreaming] = useState(false)
   const [pendingUserContent, setPendingUserContent] = useState<string | null>(null)
+  const [pendingAttachmentName, setPendingAttachmentName] = useState<string | null>(null)
   const [streamingContent, setStreamingContent] = useState('')
   const [streamingReasoning, setStreamingReasoning] = useState('')
   const [streamingToolCalls, setStreamingToolCalls] = useState<string[]>([])
@@ -154,23 +173,48 @@ export function ChatPage() {
     setStreamingToolCalls([])
   }
 
+  const handleFileSelect = (event: ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0] ?? null
+    setAttachError(null)
+    if (file) {
+      const name = file.name.toLowerCase()
+      if (!name.endsWith('.csv') && !name.endsWith('.tsv')) {
+        setAttachError('Only .csv or .tsv files are supported.')
+        event.target.value = ''
+        return
+      }
+    }
+    setAttachedFile(file)
+    // Allow re-selecting the same file after removing it.
+    event.target.value = ''
+  }
+
   const handleSend = async () => {
     const content = draft.trim()
     if (activeId === null || !content || isStreaming) return
 
+    const file = attachedFile
     setDraft('')
+    setAttachedFile(null)
+    setAttachError(null)
     setPendingUserContent(content)
+    setPendingAttachmentName(file?.name ?? null)
     resetStreamingState()
     setErrorMessage(null)
     setIsStreaming(true)
 
     try {
-      await streamChatMessage(activeId, content, {
-        onToken: (chunk) => setStreamingContent((prev) => prev + chunk),
-        onReasoning: (chunk) => setStreamingReasoning((prev) => prev + chunk),
-        onToolCall: (name) => setStreamingToolCalls((prev) => [...prev, name]),
-        onError: (message) => setErrorMessage(message),
-      })
+      await streamChatMessage(
+        activeId,
+        content,
+        {
+          onToken: (chunk) => setStreamingContent((prev) => prev + chunk),
+          onReasoning: (chunk) => setStreamingReasoning((prev) => prev + chunk),
+          onToolCall: (name) => setStreamingToolCalls((prev) => [...prev, name]),
+          onError: (message) => setErrorMessage(message),
+        },
+        file,
+      )
     } catch (err) {
       setErrorMessage(err instanceof Error ? err.message : 'Something went wrong. Please try again.')
     } finally {
@@ -178,6 +222,7 @@ export function ChatPage() {
       await queryClient.invalidateQueries({ queryKey: ['conversations'] })
       setIsStreaming(false)
       setPendingUserContent(null)
+      setPendingAttachmentName(null)
       resetStreamingState()
     }
   }
@@ -334,9 +379,12 @@ export function ChatPage() {
                     role={message.role}
                     content={message.content ?? ''}
                     reasoningContent={message.reasoning_content}
+                    attachmentName={message.attachment_name}
                   />
                 ))}
-                {pendingUserContent !== null && <Message role="user" content={pendingUserContent} />}
+                {pendingUserContent !== null && (
+                  <Message role="user" content={pendingUserContent} attachmentName={pendingAttachmentName} />
+                )}
                 {isStreaming && (
                   <div className="flex gap-3">
                     <div
@@ -378,7 +426,31 @@ export function ChatPage() {
         </div>
 
         <div className="mx-auto w-full max-w-3xl px-1 pt-2">
+          <input
+            ref={fileInputRef}
+            type="file"
+            accept={ATTACHMENT_ACCEPT}
+            className="hidden"
+            aria-hidden
+            onChange={handleFileSelect}
+          />
           <div className="relative rounded-2xl border border-border bg-surface shadow-sm transition-colors focus-within:border-foreground/25">
+            {attachedFile && (
+              <div className="flex px-3 pt-3">
+                <span className="inline-flex max-w-full items-center gap-1.5 rounded-md border border-border bg-surface-muted px-2 py-1 text-xs text-muted-foreground">
+                  <Paperclip className="h-3 w-3 shrink-0" />
+                  <span className="truncate">{attachedFile.name}</span>
+                  <button
+                    type="button"
+                    aria-label="Remove attachment"
+                    className="focus-ring shrink-0 hover:text-foreground"
+                    onClick={() => setAttachedFile(null)}
+                  >
+                    <X className="h-3 w-3" />
+                  </button>
+                </span>
+              </div>
+            )}
             <textarea
               value={draft}
               onChange={(e) => setDraft(e.target.value)}
@@ -387,8 +459,18 @@ export function ChatPage() {
               aria-label="Message"
               disabled={activeId === null || isStreaming}
               rows={1}
-              className="block max-h-40 min-h-[52px] w-full resize-none rounded-2xl bg-transparent px-4 py-3.5 pr-14 text-[15px] leading-6 placeholder:text-muted-foreground focus:outline-none disabled:cursor-not-allowed disabled:opacity-60"
+              className="block max-h-40 min-h-[52px] w-full resize-none rounded-2xl bg-transparent py-3.5 pl-12 pr-14 text-[15px] leading-6 placeholder:text-muted-foreground focus:outline-none disabled:cursor-not-allowed disabled:opacity-60"
             />
+            <Button
+              variant="ghost"
+              size="icon"
+              className="absolute bottom-2.5 left-2.5 h-9 w-9 rounded-lg text-muted-foreground"
+              aria-label="Attach CSV file"
+              onClick={() => fileInputRef.current?.click()}
+              disabled={activeId === null || isStreaming}
+            >
+              <Paperclip className="h-4 w-4" />
+            </Button>
             <Button
               size="icon"
               className="absolute bottom-2.5 right-2.5 h-9 w-9 rounded-lg"
@@ -399,8 +481,9 @@ export function ChatPage() {
               <Send className="h-4 w-4" />
             </Button>
           </div>
+          {attachError && <p className="px-1 pt-1 text-xs text-red-600 dark:text-red-400">{attachError}</p>}
           <p className="py-2 text-center text-xs text-muted-foreground">
-            Aether can make mistakes. Press Enter to send, Shift+Enter for a new line.
+            Aether can make mistakes. Attach a .csv to analyze campaign data. Press Enter to send, Shift+Enter for a new line.
           </p>
         </div>
       </div>

@@ -1,0 +1,4 @@
+# Copy to backend.hcl and fill in, then: terraform init -backend-config=backend.hcl
+bucket = "CHANGE_ME-terraform-state"
+key    = "aether/layer2_ephemeral/terraform.tfstate"
+region = "ap-southeast-1"

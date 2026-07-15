@@ -42,12 +42,16 @@ jobs:
       - name: Install dependencies
         run: pip install -r requirements-dev.txt
 
+      # Generate a throwaway Fernet key per run instead of committing one to the
+      # repo. Exported to $GITHUB_ENV so both test legs below inherit it.
+      - name: Generate ephemeral test encryption key
+        run: |
+          echo "ENCRYPTION_KEY=$(python -c 'from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())')" >> "$GITHUB_ENV"
+
       - name: Lint with ruff
         run: ruff check .
 
       - name: Run tests (SQLite)
-        env:
-          ENCRYPTION_KEY: emM55ApyTqDYuS-DzU6XtvAoFagygTO6Apst62ENFZk=
         run: pytest -q
 
       # Re-run the full suite against real Postgres + pgvector to cover the
@@ -55,7 +59,7 @@ jobs:
       # tests are skipped on the SQLite leg above).
       - name: Run tests (Postgres + pgvector)
         env:
-          ENCRYPTION_KEY: emM55ApyTqDYuS-DzU6XtvAoFagygTO6Apst62ENFZk=
+          # ENCRYPTION_KEY is inherited from $GITHUB_ENV (generated above).
           TEST_DATABASE_URL: postgresql+asyncpg://postgres:postgres@localhost:5432/aether_test
         run: pytest -q
 

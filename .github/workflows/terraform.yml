@@ -1,0 +1,67 @@
+name: Terraform
+
+on:
+  push:
+    branches: [main]
+    paths: ["infra/terraform/**", ".github/workflows/terraform.yml"]
+  pull_request:
+    branches: [main]
+    paths: ["infra/terraform/**", ".github/workflows/terraform.yml"]
+
+jobs:
+  validate:
+    name: fmt · validate · lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: "1.9.8"
+
+      - name: Terraform fmt
+        run: terraform -chdir=infra/terraform fmt -check -recursive
+
+      # Validate each stack without a backend or cloud credentials.
+      - name: Validate stacks
+        run: |
+          for dir in infra/terraform/layer1_persistent infra/terraform/layer2_ephemeral; do
+            echo "== $dir =="
+            terraform -chdir="$dir" init -backend=false -input=false
+            terraform -chdir="$dir" validate -no-color
+          done
+
+      - name: Setup TFLint
+        uses: terraform-linters/setup-tflint@v4
+        with:
+          tflint_version: latest
+
+      - name: TFLint
+        run: |
+          tflint --init
+          tflint --chdir infra/terraform --recursive -f compact
+
+  # ---------------------------------------------------------------------------
+  # Optional plan-on-PR via GitHub OIDC (no long-lived AWS keys). Enable by
+  # configuring an IAM role that trusts this repo's OIDC provider and setting the
+  # AWS_PLAN_ROLE_ARN + TF_STATE_BUCKET repository variables, then uncomment.
+  # ---------------------------------------------------------------------------
+  # plan:
+  #   name: plan (layer2)
+  #   runs-on: ubuntu-latest
+  #   permissions:
+  #     id-token: write
+  #     contents: read
+  #   steps:
+  #     - uses: actions/checkout@v5
+  #     - uses: aws-actions/configure-aws-credentials@v4
+  #       with:
+  #         role-to-assume: ${{ vars.AWS_PLAN_ROLE_ARN }}
+  #         aws-region: ap-southeast-1
+  #     - uses: hashicorp/setup-terraform@v3
+  #     - run: |
+  #         cd infra/terraform/layer2_ephemeral
+  #         terraform init -backend-config="bucket=${{ vars.TF_STATE_BUCKET }}" \
+  #           -backend-config="key=aether/layer2_ephemeral/terraform.tfstate" \
+  #           -backend-config="region=ap-southeast-1"
+  #         terraform plan -var "layer1_state_bucket=${{ vars.TF_STATE_BUCKET }}"

@@ -26,7 +26,23 @@ def enable_sqlite_foreign_keys(engine: AsyncEngine) -> None:
         cursor.close()
 
 
-engine = create_async_engine(settings.DATABASE_URL, future=True)
+# SQLite (local dev/tests) doesn't support the pool tuning below, so only apply
+# it to the real async Postgres engine used in deployed environments.
+_engine_kwargs: dict[str, object] = {"future": True}
+if settings.DATABASE_URL.startswith("postgresql+asyncpg://"):
+    _engine_kwargs.update(
+        # pool_pre_ping validates a connection before use so requests survive an
+        # RDS failover / idle-timeout drop instead of erroring on a dead socket.
+        pool_pre_ping=True,
+        # Recycle connections well under RDS's idle cutoff to avoid stale sockets.
+        pool_recycle=1800,
+        # Sized so N Fargate tasks stay within RDS max_connections, roughly:
+        # (pool_size + max_overflow) * task_count <= max_connections.
+        pool_size=5,
+        max_overflow=5,
+    )
+
+engine = create_async_engine(settings.DATABASE_URL, **_engine_kwargs)
 enable_sqlite_foreign_keys(engine)
 AsyncSessionLocal = async_sessionmaker(bind=engine, expire_on_commit=False, class_=AsyncSession)
 

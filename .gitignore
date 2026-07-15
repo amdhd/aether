@@ -29,5 +29,6 @@ dist/
 # Docker
 docker-compose.override.yml
 
-# Claude Code local settings
-.claude/settings.local.json
+# Claude Code (local tooling — not part of the project)
+.claude/
+CLAUDE.md

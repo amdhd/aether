@@ -50,24 +50,14 @@ jobs:
           ENCRYPTION_KEY: emM55ApyTqDYuS-DzU6XtvAoFagygTO6Apst62ENFZk=
         run: pytest -q
 
-      # The full suite runs on SQLite above; this leg re-runs only the
-      # persistence/query tests against real Postgres + pgvector to cover the
-      # dialect-specific SQL and the native vector-search path. The agent
-      # streaming tests are intentionally excluded: they reuse the request DB
-      # session after FastAPI tears it down, which stalls on asyncpg (tracked
-      # separately) and is orthogonal to what this leg verifies.
+      # Re-run the full suite against real Postgres + pgvector to cover the
+      # dialect-specific SQL and the native vector-search path (the pgvector
+      # tests are skipped on the SQLite leg above).
       - name: Run tests (Postgres + pgvector)
         env:
           ENCRYPTION_KEY: emM55ApyTqDYuS-DzU6XtvAoFagygTO6Apst62ENFZk=
           TEST_DATABASE_URL: postgresql+asyncpg://postgres:postgres@localhost:5432/aether_test
-        run: >-
-          pytest -q
-          tests/test_analytics.py
-          tests/test_notes.py
-          tests/test_tasks.py
-          tests/test_rag.py
-          tests/test_rag_pg.py
-          tests/test_integrations.py
+        run: pytest -q
 
   frontend:
     name: Frontend (lint + build + tests)

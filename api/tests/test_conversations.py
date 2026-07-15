@@ -4,10 +4,13 @@ from types import SimpleNamespace
 
 import pytest
 from httpx import AsyncClient
+from sqlalchemy import func, select
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
 from app.models.conversation import Conversation
 from app.models.message import Message, MessageRole
+from app.schemas.conversation import MAX_MESSAGE_CHARS
 from tests.conftest import TestingSessionLocal
 
 
@@ -163,6 +166,113 @@ async def test_conversation_idor_protection(client: AsyncClient) -> None:
 
     resp = await client.get(f"/api/v1/conversations/{conversation_id}", headers=b_headers)
     assert resp.status_code == 404
+
+
+async def test_deleting_conversation_cascades_to_messages(
+    client: AsyncClient, auth_headers: dict[str, str]
+) -> None:
+    """Deleting a conversation must delete its messages too. The relationship
+    uses passive_deletes, so this relies on the DB enforcing ON DELETE CASCADE
+    (native on Postgres; enabled for SQLite via the foreign_keys pragma)."""
+    create_resp = await client.post("/api/v1/conversations", json={}, headers=auth_headers)
+    conversation_id = create_resp.json()["id"]
+
+    async with TestingSessionLocal() as session:
+        for _ in range(3):
+            session.add(Message(conversation_id=conversation_id, role=MessageRole.user, content="hi"))
+        await session.commit()
+
+    resp = await client.delete(f"/api/v1/conversations/{conversation_id}", headers=auth_headers)
+    assert resp.status_code == 204
+
+    async with TestingSessionLocal() as session:
+        remaining = await session.scalar(
+            select(func.count()).select_from(Message).where(Message.conversation_id == conversation_id)
+        )
+    assert remaining == 0
+
+
+async def test_streaming_owns_and_closes_its_session(
+    client: AsyncClient, auth_headers: dict[str, str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The streaming generator must open its own session and close it when the
+    stream ends — otherwise the connection lingers idle-in-transaction and holds
+    locks (invisible on SQLite, deadlocks Postgres). Assert close() is called."""
+    from app.db import session as session_module
+    from app.main import app
+
+    _patch_deepseek(monkeypatch, responses=[[_content_chunk("Hi"), _usage_chunk(1, 1)]])
+
+    closed = {"count": 0}
+
+    def tracking_factory() -> AsyncSession:
+        db = TestingSessionLocal()
+        original_close = db.close
+
+        async def _tracked_close() -> None:
+            closed["count"] += 1
+            await original_close()
+
+        db.close = _tracked_close
+        return db
+
+    app.dependency_overrides[session_module.get_session_factory] = lambda: tracking_factory
+    try:
+        create_resp = await client.post("/api/v1/conversations", json={}, headers=auth_headers)
+        conversation_id = create_resp.json()["id"]
+        resp = await client.post(
+            f"/api/v1/conversations/{conversation_id}/messages", data={"content": "Hi"}, headers=auth_headers
+        )
+        assert resp.status_code == 200
+    finally:
+        app.dependency_overrides[session_module.get_session_factory] = lambda: TestingSessionLocal
+
+    assert closed["count"] == 1, "streaming generator did not close its session"
+
+
+async def test_stream_emits_error_when_conversation_missing(
+    client: AsyncClient, auth_headers: dict[str, str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The stream runs in its own session, opened *after* the route's ownership
+    check. If the conversation is deleted in that window (e.g. from another tab),
+    the fresh session's lookup returns None. The generator must surface a clean
+    SSE error event rather than raising and truncating the stream with no signal."""
+    from sqlalchemy import select
+
+    from app.agent.loop import stream_agent_response
+    from app.models.user import User
+
+    _patch_deepseek(monkeypatch, responses=[[_content_chunk("Hi"), _usage_chunk(1, 1)]])
+
+    async with TestingSessionLocal() as session:
+        user = (await session.scalars(select(User).where(User.email == "user@example.com"))).one()
+
+    missing_conversation_id = 999999
+    events = [
+        event
+        async for event in stream_agent_response(
+            TestingSessionLocal, user, missing_conversation_id, "Hi"
+        )
+    ]
+
+    assert any("event: error" in event for event in events)
+
+
+async def test_chat_message_rejects_oversized_content(
+    client: AsyncClient, auth_headers: dict[str, str]
+) -> None:
+    """A single chat turn is length-capped so one request can't ship an
+    unbounded payload. Over-limit content is rejected at validation (422)
+    before any DB write or LLM call."""
+    create_resp = await client.post("/api/v1/conversations", json={}, headers=auth_headers)
+    conversation_id = create_resp.json()["id"]
+
+    resp = await client.post(
+        f"/api/v1/conversations/{conversation_id}/messages",
+        data={"content": "x" * (MAX_MESSAGE_CHARS + 1)},
+        headers=auth_headers,
+    )
+    assert resp.status_code == 422
 
 
 async def test_chat_message_requires_deepseek_key(

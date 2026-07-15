@@ -1,3 +1,4 @@
+import logging
 from types import SimpleNamespace
 
 import pytest
@@ -21,6 +22,31 @@ async def user() -> User:
 async def test_embed_text_disabled_returns_none(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(embeddings.settings, "OPENAI_API_KEY", "")
     assert await embeddings.embed_text("hello") is None
+
+
+async def test_embed_text_logs_and_degrades_on_api_error(monkeypatch: pytest.MonkeyPatch) -> None:
+    # A configured-but-failing embeddings API (e.g. a bad/expired key) must not
+    # blow up the caller: embed_text returns None so search degrades to keyword
+    # scan, but the failure is logged so it isn't invisible.
+    monkeypatch.setattr(embeddings.settings, "OPENAI_API_KEY", "test-key")
+
+    class _BoomEmbeddings:
+        async def create(self, **kwargs):
+            raise RuntimeError("upstream 500")
+
+    monkeypatch.setattr(embeddings, "_client", lambda: SimpleNamespace(embeddings=_BoomEmbeddings()))
+
+    records: list[logging.LogRecord] = []
+    handler = logging.Handler()
+    handler.emit = records.append  # type: ignore[method-assign]
+    logging.getLogger("app").addHandler(handler)
+    try:
+        result = await embeddings.embed_text("hello")
+    finally:
+        logging.getLogger("app").removeHandler(handler)
+
+    assert result is None
+    assert any("embedding.failed" in r.getMessage() for r in records)
 
 
 async def test_refresh_note_embedding_stores_vector(

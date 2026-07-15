@@ -5,7 +5,7 @@ from datetime import datetime, timezone
 from typing import Any
 
 from sqlalchemy import select
-from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.agent.client import get_deepseek_client
 from app.agent.memory import maybe_summarize_history
@@ -83,9 +83,9 @@ def _sse_event(event: str, data: dict[str, Any]) -> str:
 
 
 async def stream_agent_response(
-    db: AsyncSession,
+    session_factory: async_sessionmaker[AsyncSession],
     user: User,
-    conversation: Conversation,
+    conversation_id: int,
     user_message: str,
     attachment_name: str | None = None,
     attachment_content: str | None = None,
@@ -96,13 +96,37 @@ async def stream_agent_response(
     An optional parsed file attachment (e.g. a campaign CSV) is stored on the
     user message and injected into the model context by ``_message_to_api``, so
     it remains available for follow-up turns without cluttering the chat bubble.
-    """
 
-    # The request's db session may already be torn down by the time this
-    # generator runs (FastAPI closes `yield`-dependencies before streaming
-    # the response body), which detaches `conversation`. Re-fetch it so
-    # mutations (e.g. the title update below) are tracked and persisted.
-    conversation = await db.get(Conversation, conversation.id)
+    This generator outlives the request's DB dependency: FastAPI tears down
+    `yield`-dependencies before the streaming body runs. So instead of borrowing
+    the (already-closed) request session, it opens and *owns* a session for the
+    duration of the stream. The `async with` closes it when the stream finishes
+    normally or when the client disconnects (Starlette calls `aclose()`), which
+    releases the connection and prevents it lingering idle-in-transaction and
+    holding locks — a leak that is invisible on SQLite but deadlocks Postgres."""
+    async with session_factory() as db:
+        async for event in _run_agent(
+            db, user, conversation_id, user_message, attachment_name, attachment_content
+        ):
+            yield event
+
+
+async def _run_agent(
+    db: AsyncSession,
+    user: User,
+    conversation_id: int,
+    user_message: str,
+    attachment_name: str | None = None,
+    attachment_content: str | None = None,
+) -> AsyncGenerator[str, None]:
+    conversation = await db.get(Conversation, conversation_id)
+    if conversation is None:
+        # The route verified ownership in a separate (now-closed) session; this
+        # generator re-fetches in its own session, which runs later. A conversation
+        # deleted in that window (e.g. from another tab) is gone by the time we
+        # look — surface a clean SSE error instead of raising and truncating.
+        yield _sse_event("error", {"message": "This conversation no longer exists."})
+        return
 
     db.add(
         Message(

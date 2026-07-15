@@ -40,5 +40,10 @@ class Conversation(Base):
     messages: Mapped[list["Message"]] = relationship(
         back_populates="conversation",
         cascade="all, delete-orphan",
+        # Let the DB-level ON DELETE CASCADE remove messages in one statement
+        # instead of the ORM loading and deleting them one-by-one. Relies on FK
+        # enforcement, which Postgres does natively and SQLite gets via the
+        # PRAGMA set in db.session.enable_sqlite_foreign_keys.
+        passive_deletes=True,
         order_by="Message.created_at",
     )

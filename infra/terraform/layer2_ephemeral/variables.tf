@@ -86,6 +86,19 @@ variable "alert_email" {
   default     = ""
 }
 
+# --- Custom domain for the API (enables HTTPS on the ALB) ---
+variable "api_domain_name" {
+  description = "FQDN to serve the API on, e.g. api.example.com. Empty = HTTP-only demo (no TLS on the ALB)."
+  type        = string
+  default     = ""
+}
+
+variable "hosted_zone_name" {
+  description = "Route53 hosted zone that owns api_domain_name, e.g. example.com. Required when api_domain_name is set."
+  type        = string
+  default     = ""
+}
+
 variable "waf_rate_limit" {
   description = "Max requests per 5-minute window per IP before WAF blocks (protects the LLM endpoint from cost abuse)."
   type        = number

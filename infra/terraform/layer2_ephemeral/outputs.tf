@@ -1,6 +1,11 @@
 output "api_alb_url" {
-  description = "Public API entry point. Set VITE_API_URL to \"<this>/api/v1\" when building the SPA, and GOOGLE_REDIRECT_URI accordingly."
-  value       = "http://${module.ecs.alb_dns_name}"
+  description = "Public API entry point (HTTPS when a custom domain is set, else the HTTP ALB DNS). Set VITE_API_URL to \"<this>/api/v1\" and GOOGLE_REDIRECT_URI accordingly."
+  value       = local.api_url
+}
+
+output "api_uses_https" {
+  description = "True when the API is served over HTTPS via a custom domain."
+  value       = local.custom_domain
 }
 
 output "frontend_url" {

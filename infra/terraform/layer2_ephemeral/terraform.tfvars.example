@@ -14,3 +14,9 @@ high_availability = false
 # api_desired_count = 1
 
 # alert_email = "you@example.com"   # CloudWatch alarm notifications
+
+# Custom domain → HTTPS on the API (recommended). Requires a Route53 hosted zone
+# you own. Leave both empty for an HTTP-only demo (frontend-over-HTTPS won't be
+# able to call it, so a domain is needed for a working end-to-end demo).
+# api_domain_name  = "api.example.com"
+# hosted_zone_name = "example.com"

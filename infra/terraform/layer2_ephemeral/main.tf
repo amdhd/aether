@@ -36,9 +36,10 @@ locals {
 
   # Redis is provisioned only in HA mode. NOTE: the app's in-memory rate limiter
   # must be updated to read REDIS_URL before >1 task is safe — that app change is
-  # tracked separately; the infra just makes the store available.
+  # tracked separately; the infra just makes the store available. rediss:// = TLS
+  # (transit encryption is on); the app connects to the primary endpoint.
   redis_environment = var.high_availability ? {
-    REDIS_URL = "redis://${aws_elasticache_cluster.redis[0].cache_nodes[0].address}:6379"
+    REDIS_URL = "rediss://${aws_elasticache_replication_group.redis[0].primary_endpoint_address}:6379"
   } : {}
 
   container_environment = merge(local.base_environment, local.redis_environment)
@@ -180,22 +181,37 @@ resource "aws_route53_record" "api" {
   }
 }
 
-# --- ElastiCache Redis (HA only) ---
+# --- ElastiCache Redis (HA only): Multi-AZ replication group w/ auto-failover ---
 resource "aws_elasticache_subnet_group" "redis" {
   count      = var.high_availability ? 1 : 0
   name       = "${var.name_prefix}-redis"
   subnet_ids = module.vpc.app_subnet_ids
 }
 
-resource "aws_elasticache_cluster" "redis" {
-  count              = var.high_availability ? 1 : 0
-  cluster_id         = "${var.name_prefix}-redis"
-  engine             = "redis"
-  node_type          = var.redis_node_type
-  num_cache_nodes    = 1
+resource "aws_elasticache_replication_group" "redis" {
+  count                = var.high_availability ? 1 : 0
+  replication_group_id = "${var.name_prefix}-redis"
+  description          = "Aether shared rate-limit / cache store"
+
+  engine         = "redis"
+  engine_version = "7.1"
+  node_type      = var.redis_node_type
+  port           = 6379
+
+  # Primary + one replica, placed in different AZs, with automatic failover.
+  num_cache_clusters         = 2
+  automatic_failover_enabled = true
+  multi_az_enabled           = true
+
   subnet_group_name  = aws_elasticache_subnet_group.redis[0].name
   security_group_ids = [module.security_groups.redis_sg_id]
-  tags               = { Name = "${var.name_prefix}-redis" }
+
+  # Encryption at rest and in transit (clients connect via rediss://).
+  at_rest_encryption_enabled = true
+  transit_encryption_enabled = true
+
+  apply_immediately = true
+  tags              = { Name = "${var.name_prefix}-redis" }
 }
 
 # --- WAF: rate-based rule on the ALB (protects the LLM endpoint from abuse) ---

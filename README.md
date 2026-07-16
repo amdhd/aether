@@ -21,6 +21,8 @@ both the backend and frontend.
 ```mermaid
 flowchart TB
     users([Users])
+    dns["Route 53 · DNS"]
+    acm["ACM · TLS certificates"]
     ext["External APIs<br/>DeepSeek · OpenAI · Tavily · Google"]
 
     subgraph edge["Edge"]
@@ -37,31 +39,44 @@ flowchart TB
 
     subgraph vpc["VPC · 2 Availability Zones"]
         igw["Internet Gateway"]
-        alb["Application Load Balancer<br/>ONE ALB · a node in each AZ · HTTPS 443"]
+        alb["Application Load Balancer<br/>ONE ALB · node in each AZ · HTTPS 443"]
 
         subgraph aza["Availability Zone A"]
-            nata["NAT Gateway A"]
-            fga["ECS Fargate · FastAPI"]
-            rediska[("ElastiCache Redis · PRIMARY")]
-            rdsa[("Amazon RDS PostgreSQL · PRIMARY<br/>pgvector")]
+            subgraph puba["Public subnet A"]
+                nata["NAT Gateway A"]
+            end
+            subgraph appa["Private app subnet A"]
+                fga["ECS Fargate · FastAPI"]
+                rediska[("ElastiCache Redis · PRIMARY")]
+            end
+            subgraph dba["Private DB subnet A"]
+                rdsa[("RDS PostgreSQL · PRIMARY<br/>pgvector")]
+            end
         end
 
         subgraph azb["Availability Zone B"]
-            natb["NAT Gateway B"]
-            fgb["ECS Fargate · FastAPI"]
-            rediskb[("Redis · replica")]
-            rdsb[("RDS · standby")]
+            subgraph pubb["Public subnet B"]
+                natb["NAT Gateway B"]
+            end
+            subgraph appb["Private app subnet B"]
+                fgb["ECS Fargate · FastAPI"]
+                rediskb[("Redis · replica")]
+            end
+            subgraph dbb["Private DB subnet B"]
+                rdsb[("RDS · standby")]
+            end
         end
     end
 
-    users -->|"① HTTPS"| cf --> s3
-    users -->|"③ HTTPS API"| alb
+    users -->|DNS| dns
+    dns -->|"① app"| cf --> s3
+    dns -->|"③ api · HTTPS"| alb
+    acm -.->|cert| alb
+    acm -.->|cert| cf
     waf -.->|inspect| alb
-    igw --- alb
 
     alb -->|"④ forward"| fga
     alb -->|"④ forward"| fgb
-
     fga -->|"⑥ SQL + vector"| rdsa
     fgb -->|"⑥ SQL + vector"| rdsa
     fga -->|"⑦ cache"| rediska
@@ -69,8 +84,11 @@ flowchart TB
     rdsa -. sync .-> rdsb
     rediska -. sync .-> rediskb
 
-    fga -->|"⑧ egress"| nata --> ext
-    fgb -->|"⑧ egress"| natb --> ext
+    fga -->|"⑧ egress"| nata
+    fgb -->|"⑧ egress"| natb
+    nata --> igw
+    natb --> igw
+    igw --> ext
     fga -. "⑤ secrets · image · logs" .-> sm
     fga -.-> ecr
     fga -.-> obs

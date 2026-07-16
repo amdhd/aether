@@ -57,8 +57,6 @@ jobs:
           category: checkov
 
   # --- Gate 2: cost (Infracost) ---
-  # The org's Infracost Cloud guardrail (block PR on >$250/mo increase) enforces
-  # the threshold server-side when the comment is posted.
   cost:
     name: Gate · Cost (Infracost)
     runs-on: ubuntu-latest
@@ -66,6 +64,8 @@ jobs:
     # green) rather than failing the PR when the key is absent.
     env:
       INFRACOST_API_KEY: ${{ secrets.INFRACOST_API_KEY }}
+      # Fail the PR if it raises estimated monthly cost by more than this (USD).
+      COST_INCREASE_LIMIT_USD: "10"
     steps:
       - uses: actions/checkout@v5
         with:
@@ -98,6 +98,16 @@ jobs:
             --pull-request ${{ github.event.pull_request.number }} \
             --github-token ${{ secrets.GITHUB_TOKEN }} \
             --behavior update
+
+      - name: Enforce cost-increase threshold
+        if: env.INFRACOST_API_KEY != '' && github.event_name == 'pull_request'
+        run: |
+          increase=$(jq -r '.diffTotalMonthlyCost // "0"' /tmp/diff.json)
+          echo "Estimated monthly cost increase: \$$increase (limit: \$$COST_INCREASE_LIMIT_USD)"
+          if awk "BEGIN{exit !($increase > $COST_INCREASE_LIMIT_USD)}"; then
+            echo "::error::Cost increase \$$increase/mo exceeds the \$$COST_INCREASE_LIMIT_USD/mo limit"
+            exit 1
+          fi
 
       - name: Cost breakdown (push/dispatch)
         if: env.INFRACOST_API_KEY != '' && github.event_name != 'pull_request'

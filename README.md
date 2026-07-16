@@ -8,6 +8,105 @@ A full-stack project: streaming chat, a tool-calling agent, JWT auth, OAuth
 integrations, background-free async I/O end to end, and a test suite + CI on
 both the backend and frontend.
 
+## Cloud architecture (AWS)
+
+> **Production-grade AWS architecture, defined as Terraform** — VPC, ECS Fargate,
+> RDS + pgvector, CloudFront/S3, WAF, Secrets Manager, and a gated CI/CD pipeline.
+> Validated in CI and **one-command deployable**; run **ephemerally**
+> (`make up` / `make down`) so idle cost is ~$0. Full IaC in
+> [`infra/terraform/`](infra/terraform/) · deploy runbook in
+> [`infra/terraform/README.md`](infra/terraform/README.md) · design decisions in
+> [`docs/architecture/`](docs/architecture/).
+
+```mermaid
+flowchart TB
+    users([Users])
+    ext["External APIs<br/>DeepSeek · OpenAI · Tavily · Google"]
+
+    subgraph edge["Edge / persistent layer"]
+        cf["CloudFront<br/>HTTPS + security headers"]
+        s3["S3 — React SPA<br/>private, via OAC"]
+        ecr["ECR"]
+        sm["Secrets Manager"]
+    end
+
+    subgraph vpc["VPC · 2 Availability Zones"]
+        waf["AWS WAF<br/>rate-limit + managed rules"]
+        alb["Application Load Balancer<br/>HTTPS 443 via ACM"]
+        subgraph app["Private app subnets"]
+            ecs["ECS Fargate · FastAPI<br/>Graviton · autoscaled"]
+        end
+        subgraph db["Private DB subnets"]
+            rds[("RDS PostgreSQL 16<br/>+ pgvector")]
+            redis[("ElastiCache Redis<br/>HA only")]
+        end
+        nat["NAT Gateway<br/>1 demo / per-AZ in HA"]
+    end
+
+    subgraph obs["Monitoring"]
+        cw["CloudWatch<br/>logs + alarms"]
+        sns["SNS + AWS Budgets"]
+    end
+
+    users -->|HTTPS| cf --> s3
+    users -->|HTTPS API| waf --> alb --> ecs
+    ecs -->|SQL + vector search| rds
+    ecs -->|cache / shared rate-limit| redis
+    ecs -->|secrets at startup| sm
+    ecs -->|pull image| ecr
+    ecs -->|logs / metrics| cw
+    ecs -->|egress| nat --> ext
+    cw --> sns
+```
+
+**Request flow:** ① a user loads the SPA over **HTTPS via CloudFront** (private
+S3, OAC); ② the browser calls the API over **HTTPS at the ALB** (ACM cert),
+fronted by **AWS WAF**; ③ the ALB forwards to **FastAPI on ECS Fargate** in
+private subnets; ④ Fargate reads secrets from **Secrets Manager** at startup
+(`valueFrom`) and pulls its image from **ECR**; ⑤ it queries **RDS PostgreSQL**
+(relational data **and** pgvector semantic search) and, in HA, **ElastiCache
+Redis**; ⑥ outbound LLM/tool calls egress via **NAT**; ⑦ logs and alarms flow to
+**CloudWatch → SNS**, with spend guarded by **AWS Budgets**.
+
+| App component | AWS service |
+|---|---|
+| React SPA (static build) | **S3 + CloudFront** (OAC, HTTPS, security headers) |
+| FastAPI (container) | **ECS Fargate** (Graviton) behind an **ALB**, in a **VPC** |
+| PostgreSQL + pgvector | **RDS PostgreSQL 16** |
+| Cache / shared rate-limit (HA) | **ElastiCache Redis** |
+| Secrets | **Secrets Manager** (injected via `valueFrom`, never in the image) |
+| Container image | **ECR** (scan-on-push) |
+| Edge protection | **AWS WAF** (rate-limit + AWS managed rule groups) |
+| Egress to external LLM/APIs | **NAT Gateway** |
+| Observability / cost | **CloudWatch, SNS, AWS Budgets** |
+
+> The diagram shows the **HA topology**. A single boolean — `high_availability`
+> — flips the stack between a cost-optimized demo (**1 NAT**, single-AZ RDS, 1
+> task, no Redis) and production (**per-AZ NAT**, Multi-AZ RDS, autoscaling,
+> Redis).
+
+### Production-readiness
+
+- **Networking** — 3-tier subnets (public / app / db) across 2 AZs; compute and
+  DB in private subnets; VPC default security group locked to deny-all;
+  reference-based SG chain (ALB → API → RDS/Redis, no CIDR leakage).
+- **Compute** — ECS Fargate on Graviton; deployment **circuit breaker with
+  auto-rollback**; target-tracking autoscaling in HA.
+- **Data** — RDS PostgreSQL + pgvector, **encrypted at rest**; Multi-AZ +
+  automated backups in HA; ElastiCache Redis for shared state at scale.
+- **Edge & TLS** — CloudFront (OAC, HSTS + security headers); **ACM cert +
+  HTTPS ALB listener** with a TLS 1.2+ policy; HTTP → HTTPS redirect; AWS WAF.
+- **Secrets & IAM** — Secrets Manager via `valueFrom`; **two least-privilege IAM
+  roles** (execution role scoped to specific secret ARNs; an intentionally empty
+  task role — the app calls no AWS APIs).
+- **IaC** — Terraform with reusable modules, **remote state + locking**, the
+  single `high_availability` toggle, and org tagging via `default_tags`.
+- **CI/CD** — GitHub Actions with **OIDC (no static keys)** and three gates:
+  **Infracost** (cost), **Checkov** (IaC), **Trivy** (container CVEs); rolling
+  deploy with auto-rollback.
+- **Cost & ops** — CloudWatch alarms → SNS, an **AWS Budgets** alert, and an
+  ephemeral `apply → demo → destroy` model with a `verify-clean` orphan check.
+
 ## Features
 
 - **Chat** with a DeepSeek-powered assistant, streamed over SSE with markdown
@@ -48,7 +147,7 @@ both the backend and frontend.
 - **Frontend**: React 19, TypeScript, Vite, Tailwind CSS v4, shadcn/ui-style
   components, TanStack Query, Recharts, Zustand.
 
-## Architecture
+## Application architecture
 
 ```
 web/ (React + Vite)                       api/ (FastAPI, async)
@@ -164,19 +263,31 @@ Both suites run automatically on every push/PR via GitHub Actions
 
 ## Deployment
 
-A production deployment typically looks like:
+### AWS (primary — Terraform)
 
-- **API + Postgres**: deploy `api/` (Docker image) plus a managed Postgres
-  database to [Railway](https://railway.app) or [Render](https://render.com).
-  Set the same environment variables as `.env.example`, pointing
-  `DATABASE_URL` at the managed Postgres instance and `FRONTEND_ORIGIN` /
-  `GOOGLE_REDIRECT_URI` at your deployed URLs. Run
-  `alembic upgrade head` as a release/start command.
-- **Frontend**: deploy `web/` to [Vercel](https://vercel.com) (or any static
-  host) with `VITE_API_URL` set to your deployed API URL.
+The primary target is **AWS**, fully defined as Terraform under
+[`infra/terraform/`](infra/terraform/) — see the [architecture](#cloud-architecture-aws)
+above and the [deploy runbook](infra/terraform/README.md). It's a two-layer stack
+(persistent edge + ephemeral compute) driven by a `Makefile`:
 
-See `render.yaml` and `web/vercel.json` for ready-to-use starting
-configurations for Render and Vercel.
+```sh
+make base-up   # persistent layer: ECR, S3+CloudFront, Secrets Manager
+make image     # build + push the ARM64 API image to ECR
+make up        # ephemeral layer: VPC, ALB, ECS, RDS (+ migrations)
+make web       # build the SPA, sync to S3, invalidate CloudFront
+# ... demo ...
+make down      # destroy the ephemeral layer → hourly billing stops
+```
+
+Flip `make up HA=true` for the production-grade shape (Multi-AZ RDS, autoscaling,
+Redis). Set `api_domain_name` / `hosted_zone_name` in `terraform.tfvars` to get
+HTTPS on the API via ACM + Route 53.
+
+### Alternative (managed PaaS)
+
+For a quick managed deploy without AWS: push `api/` + a managed Postgres to
+[Render](https://render.com)/[Railway](https://railway.app) and `web/` to
+[Vercel](https://vercel.com). See `render.yaml` and `web/vercel.json`.
 
 ### Google Calendar OAuth in production
 

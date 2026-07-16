@@ -102,12 +102,13 @@ resource "aws_ecs_task_definition" "api" {
 
 # --- Load balancer ---
 resource "aws_lb" "api" {
-  name               = "${var.name_prefix}-alb"
-  load_balancer_type = "application"
-  security_groups    = [var.alb_sg_id]
-  subnets            = var.public_subnet_ids
-  idle_timeout       = var.alb_idle_timeout
-  tags               = { Name = "${var.name_prefix}-alb" }
+  name                       = "${var.name_prefix}-alb"
+  load_balancer_type         = "application"
+  security_groups            = [var.alb_sg_id]
+  subnets                    = var.public_subnet_ids
+  idle_timeout               = var.alb_idle_timeout
+  drop_invalid_header_fields = true
+  tags                       = { Name = "${var.name_prefix}-alb" }
 }
 
 resource "aws_lb_target_group" "api" {

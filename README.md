@@ -37,8 +37,8 @@ flowchart TB
             ecs["ECS Fargate · FastAPI<br/>Graviton · autoscaled"]
         end
         subgraph db["Private DB subnets"]
-            rds[("RDS PostgreSQL 16<br/>+ pgvector")]
-            redis[("ElastiCache Redis<br/>HA only")]
+            rds[("Amazon RDS · PostgreSQL 16<br/>+ pgvector · Multi-AZ")]
+            redis[("Amazon ElastiCache for Redis<br/>Multi-AZ · HA only")]
         end
         nat["NAT Gateway<br/>1 demo / per-AZ in HA"]
     end
@@ -72,8 +72,8 @@ Redis**; ⑥ outbound LLM/tool calls egress via **NAT**; ⑦ logs and alarms flo
 |---|---|
 | React SPA (static build) | **S3 + CloudFront** (OAC, HTTPS, security headers) |
 | FastAPI (container) | **ECS Fargate** (Graviton) behind an **ALB**, in a **VPC** |
-| PostgreSQL + pgvector | **RDS PostgreSQL 16** |
-| Cache / shared rate-limit (HA) | **ElastiCache Redis** |
+| PostgreSQL + pgvector | **Amazon RDS (PostgreSQL 16 + pgvector)** |
+| Cache / shared rate-limit (HA) | **Amazon ElastiCache for Redis** (Multi-AZ) |
 | Secrets | **Secrets Manager** (injected via `valueFrom`, never in the image) |
 | Container image | **ECR** (scan-on-push) |
 | Edge protection | **AWS WAF** (rate-limit + AWS managed rule groups) |
@@ -82,8 +82,8 @@ Redis**; ⑥ outbound LLM/tool calls egress via **NAT**; ⑦ logs and alarms flo
 
 > The diagram shows the **HA topology**. A single boolean — `high_availability`
 > — flips the stack between a cost-optimized demo (**1 NAT**, single-AZ RDS, 1
-> task, no Redis) and production (**per-AZ NAT**, Multi-AZ RDS, autoscaling,
-> Redis).
+> task, no Redis) and production (**per-AZ NAT**, Multi-AZ RDS, autoscaling, and a
+> **Multi-AZ ElastiCache Redis replication group** with automatic failover).
 
 ### Production-readiness
 
@@ -92,8 +92,10 @@ Redis**; ⑥ outbound LLM/tool calls egress via **NAT**; ⑦ logs and alarms flo
   reference-based SG chain (ALB → API → RDS/Redis, no CIDR leakage).
 - **Compute** — ECS Fargate on Graviton; deployment **circuit breaker with
   auto-rollback**; target-tracking autoscaling in HA.
-- **Data** — RDS PostgreSQL + pgvector, **encrypted at rest**; Multi-AZ +
-  automated backups in HA; ElastiCache Redis for shared state at scale.
+- **Data** — Amazon RDS PostgreSQL + pgvector, **encrypted at rest**; Multi-AZ +
+  automated backups in HA; **Amazon ElastiCache for Redis** as a Multi-AZ
+  replication group (auto-failover, encryption in transit + at rest) for shared
+  state at scale.
 - **Edge & TLS** — CloudFront (OAC, HSTS + security headers); **ACM cert +
   HTTPS ALB listener** with a TLS 1.2+ policy; HTTP → HTTPS redirect; AWS WAF.
 - **Secrets & IAM** — Secrets Manager via `valueFrom`; **two least-privilege IAM

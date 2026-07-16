@@ -160,6 +160,10 @@ resource "aws_ecs_service" "api" {
   desired_count   = var.desired_count
   launch_type     = "FARGATE"
 
+  # Give the task time to boot (image pull + uvicorn start) before the ALB
+  # health check can cause ECS to cycle it.
+  health_check_grace_period_seconds = 60
+
   network_configuration {
     subnets          = var.app_subnet_ids
     security_groups  = [var.api_sg_id]

@@ -1,5 +1,6 @@
 terraform {
-  required_version = ">= 1.6"
+  # use_lockfile (S3-native state locking) requires Terraform >= 1.10.
+  required_version = ">= 1.10"
 
   required_providers {
     aws = {
@@ -10,8 +11,8 @@ terraform {
 
   # Remote state with locking. Supply the bucket/key/region at init time:
   #   terraform init -backend-config=backend.hcl
-  # (S3 native lockfile via use_lockfile — no DynamoDB table required on AWS
-  # provider v5.60+.) Run `terraform validate` offline with `-backend=false`.
+  # S3-native state locking (use_lockfile) needs no DynamoDB table.
+  # Run `terraform validate` offline with `-backend=false`.
   backend "s3" {
     use_lockfile = true
     encrypt      = true

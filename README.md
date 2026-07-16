@@ -23,41 +23,64 @@ flowchart TB
     users([Users])
     ext["External APIs<br/>DeepSeek · OpenAI · Tavily · Google"]
 
-    subgraph edge["Edge / persistent layer"]
-        cf["CloudFront<br/>HTTPS + security headers"]
-        s3["S3 — React SPA<br/>private, via OAC"]
-        ecr["ECR"]
+    subgraph edge["Edge"]
+        cf["CloudFront"]
+        s3["S3 · React SPA · OAC"]
+        waf["AWS WAF"]
+    end
+
+    subgraph shared["Regional services"]
         sm["Secrets Manager"]
+        ecr["ECR"]
+        obs["CloudWatch · SNS · Budgets"]
     end
 
     subgraph vpc["VPC · 2 Availability Zones"]
-        waf["AWS WAF<br/>rate-limit + managed rules"]
-        alb["Application Load Balancer<br/>HTTPS 443 via ACM"]
-        subgraph app["Private app subnets"]
-            ecs["ECS Fargate · FastAPI<br/>Graviton · autoscaled"]
+        igw["Internet Gateway"]
+        alb["Application Load Balancer<br/>ONE ALB · a node in each AZ · HTTPS 443"]
+
+        subgraph aza["Availability Zone A"]
+            nata["NAT Gateway A"]
+            fga["ECS Fargate · FastAPI"]
+            rediska[("ElastiCache Redis · PRIMARY")]
+            rdsa[("Amazon RDS PostgreSQL · PRIMARY<br/>pgvector")]
         end
-        subgraph db["Private DB subnets"]
-            rds[("Amazon RDS · PostgreSQL 16<br/>+ pgvector · Multi-AZ")]
-            redis[("Amazon ElastiCache for Redis<br/>Multi-AZ · HA only")]
+
+        subgraph azb["Availability Zone B"]
+            natb["NAT Gateway B"]
+            fgb["ECS Fargate · FastAPI"]
+            rediskb[("Redis · replica")]
+            rdsb[("RDS · standby")]
         end
-        nat["NAT Gateway<br/>1 demo / per-AZ in HA"]
     end
 
-    subgraph obs["Monitoring"]
-        cw["CloudWatch<br/>logs + alarms"]
-        sns["SNS + AWS Budgets"]
-    end
+    users -->|"① HTTPS"| cf --> s3
+    users -->|"③ HTTPS API"| alb
+    waf -.->|inspect| alb
+    igw --- alb
 
-    users -->|HTTPS| cf --> s3
-    users -->|HTTPS API| waf --> alb --> ecs
-    ecs -->|SQL + vector search| rds
-    ecs -->|cache / shared rate-limit| redis
-    ecs -->|secrets at startup| sm
-    ecs -->|pull image| ecr
-    ecs -->|logs / metrics| cw
-    ecs -->|egress| nat --> ext
-    cw --> sns
+    alb -->|"④ forward"| fga
+    alb -->|"④ forward"| fgb
+
+    fga -->|"⑥ SQL + vector"| rdsa
+    fgb -->|"⑥ SQL + vector"| rdsa
+    fga -->|"⑦ cache"| rediska
+    fgb -->|"⑦ cache"| rediska
+    rdsa -. sync .-> rdsb
+    rediska -. sync .-> rediskb
+
+    fga -->|"⑧ egress"| nata --> ext
+    fgb -->|"⑧ egress"| natb --> ext
+    fga -. "⑤ secrets · image · logs" .-> sm
+    fga -.-> ecr
+    fga -.-> obs
 ```
+
+> **Reading the diagram:** there is **one** ALB with a node in each AZ; it forwards
+> to Fargate in **both** AZs. **Both** Fargate tasks connect to the **primary** RDS
+> and **primary** Redis (in AZ A) — the standby/replica receive only replication
+> (`sync`) and are never queried directly; on failover AWS promotes them and the
+> endpoint DNS flips automatically.
 
 **Request flow:** ① a user loads the SPA over **HTTPS via CloudFront** (private
 S3, OAC); ② the browser calls the API over **HTTPS at the ALB** (ACM cert),

@@ -5,7 +5,9 @@ name: Deploy
 # and PR reporting) is a separate showcase: github.com/amdhd/pipelineguard.
 #
 # On pull_request: gates run and block the merge (→ block the deploy).
-# On push to main / manual dispatch: gates run, then build → push → migrate → deploy.
+# On push to main / manual dispatch: gates run, then build → push → migrate →
+# deploy — but the push/deploy steps activate only once AWS_DEPLOY_ROLE_ARN is
+# set, so the workflow stays green on main until OIDC is wired up.
 #
 # Required repo settings before this works:
 #   vars.AWS_DEPLOY_ROLE_ARN   IAM role trusting this repo's GitHub OIDC provider
@@ -13,8 +15,10 @@ name: Deploy
 on:
   pull_request:
     branches: [main]
+    paths: ["api/**", "web/**", "infra/**", ".github/workflows/deploy.yml"]
   push:
     branches: [main]
+    paths: ["api/**", "web/**", "infra/**", ".github/workflows/deploy.yml"]
   workflow_dispatch:
 
 permissions:
@@ -143,17 +147,18 @@ jobs:
             --ignore-unfixed --exit-code 1 --no-progress \
             aether-api:${{ github.sha }}
 
-      # Publish the immutable, SHA-tagged image only after it passes the scan,
-      # and only on the deploy path (not PRs).
+      # Publish the SHA-tagged image only after it passes the scan, on the deploy
+      # path (not PRs), and only once the OIDC deploy role is configured — so the
+      # workflow stays green on main until AWS_DEPLOY_ROLE_ARN is set.
       - name: Configure AWS credentials (OIDC)
-        if: github.event_name != 'pull_request'
+        if: github.event_name != 'pull_request' && vars.AWS_DEPLOY_ROLE_ARN != ''
         uses: aws-actions/configure-aws-credentials@v4
         with:
           role-to-assume: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
           aws-region: ${{ env.AWS_REGION }}
 
       - name: Push to ECR
-        if: github.event_name != 'pull_request'
+        if: github.event_name != 'pull_request' && vars.AWS_DEPLOY_ROLE_ARN != ''
         run: |
           registry=$(aws ecr describe-repositories --repository-names "$ECR_REPOSITORY" \
             --query 'repositories[0].repositoryUri' --output text)
@@ -167,7 +172,8 @@ jobs:
     name: Deploy to ECS
     runs-on: ubuntu-latest
     needs: [iac-security, cost, build-scan]
-    if: github.event_name != 'pull_request'
+    # Skips (stays green) until the OIDC deploy role is configured.
+    if: github.event_name != 'pull_request' && vars.AWS_DEPLOY_ROLE_ARN != ''
     steps:
       - name: Configure AWS credentials (OIDC)
         uses: aws-actions/configure-aws-credentials@v4

@@ -1,0 +1,16 @@
+# Copy to terraform.tfvars and adjust. layer1_state_bucket is required so this
+# stack can read layer1's outputs (ECR repo, secret ARN, CloudFront domain).
+
+layer1_state_bucket = "CHANGE_ME-terraform-state"
+image_tag           = "latest"
+
+# Cost/scale knobs (defaults are the cheap single-AZ demo). Flip one boolean for
+# the full production-grade shape (Multi-AZ RDS + autoscaling + Redis):
+high_availability = false
+
+# db_instance_class = "db.t4g.small"
+# ecs_task_cpu      = 512
+# ecs_task_memory   = 1024
+# api_desired_count = 1
+
+# alert_email = "you@example.com"   # CloudWatch alarm notifications

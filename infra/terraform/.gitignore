@@ -1,0 +1,9 @@
+# Never commit state, provider binaries, backend config, or real tfvars.
+.terraform/
+.terraform.lock.hcl
+*.tfstate
+*.tfstate.*
+backend.hcl
+terraform.tfvars
+*.auto.tfvars
+crash.log

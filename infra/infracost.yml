@@ -1,0 +1,9 @@
+# Infracost project config for CI. Supplies the required layer1_state_bucket var
+# with a placeholder so the cost gate can parse layer2 without real remote state
+# (it doesn't affect pricing — costs come from the variable-driven sizing).
+version: 0.1
+projects:
+  - path: infra/terraform/layer2_ephemeral
+    name: aether-layer2-ephemeral
+    terraform_vars:
+      layer1_state_bucket: ci-placeholder

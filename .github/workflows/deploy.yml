@@ -1,0 +1,224 @@
+name: Deploy
+
+# CD with inline gates (cost · IaC · container CVEs) → OIDC deploy to ECS.
+# The full platform-level version of these gates (Lambda-based, with auto-rollback
+# and PR reporting) is a separate showcase: github.com/amdhd/pipelineguard.
+#
+# On pull_request: gates run and block the merge (→ block the deploy).
+# On push to main / manual dispatch: gates run, then build → push → migrate → deploy.
+#
+# Required repo settings before this works:
+#   vars.AWS_DEPLOY_ROLE_ARN   IAM role trusting this repo's GitHub OIDC provider
+#   secrets.INFRACOST_API_KEY  from `infracost auth login` / Infracost Cloud
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  id-token: write # OIDC → AWS, no long-lived keys
+  contents: read
+  pull-requests: write # Infracost PR comment
+  security-events: write # Checkov SARIF → Security tab
+
+env:
+  AWS_REGION: ap-southeast-1
+  NAME_PREFIX: aether
+  ECR_REPOSITORY: aether-api
+
+jobs:
+  # --- Gate 1: infrastructure static analysis (Checkov) ---
+  iac-security:
+    name: Gate · IaC (Checkov)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      # Enforcing IaC gate. Every accepted exception is documented with a reason
+      # in infra/terraform/.checkov.yaml; anything NOT fixed or listed there fails
+      # the build. Findings are also uploaded to the Security tab (SARIF).
+      - name: Checkov
+        id: checkov
+        uses: bridgecrewio/checkov-action@v12
+        with:
+          directory: infra/terraform
+          config_file: infra/terraform/.checkov.yaml
+          output_format: cli,sarif
+          output_file_path: console,checkov.sarif
+          soft_fail: false
+
+      - name: Upload Checkov SARIF
+        if: always()
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: checkov.sarif
+          category: checkov
+
+  # --- Gate 2: cost (Infracost) ---
+  cost:
+    name: Gate · Cost (Infracost)
+    runs-on: ubuntu-latest
+    # Inert until INFRACOST_API_KEY is configured — the steps skip (job stays
+    # green) rather than failing the PR when the key is absent.
+    env:
+      INFRACOST_API_KEY: ${{ secrets.INFRACOST_API_KEY }}
+      # Fail the PR if it raises estimated monthly cost by more than this (USD).
+      COST_INCREASE_LIMIT_USD: "10"
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - name: Note if Infracost key is missing
+        if: env.INFRACOST_API_KEY == ''
+        run: echo "::notice::INFRACOST_API_KEY not set — cost gate skipped. Add the secret to enable it."
+
+      - uses: infracost/actions/setup@v3
+        if: env.INFRACOST_API_KEY != ''
+        with:
+          api-key: ${{ secrets.INFRACOST_API_KEY }}
+
+      - name: Baseline cost (target branch)
+        if: env.INFRACOST_API_KEY != '' && github.event_name == 'pull_request'
+        run: |
+          git checkout ${{ github.event.pull_request.base.sha }}
+          infracost breakdown --config-file infra/infracost.yml \
+            --format json --out-file /tmp/base.json
+          git checkout ${{ github.event.pull_request.head.sha }}
+
+      - name: Cost diff + comment (PR)
+        if: env.INFRACOST_API_KEY != '' && github.event_name == 'pull_request'
+        run: |
+          infracost diff --config-file infra/infracost.yml \
+            --compare-to /tmp/base.json --format json --out-file /tmp/diff.json
+          infracost comment github --path /tmp/diff.json \
+            --repo ${{ github.repository }} \
+            --pull-request ${{ github.event.pull_request.number }} \
+            --github-token ${{ secrets.GITHUB_TOKEN }} \
+            --behavior update
+
+      - name: Enforce cost-increase threshold
+        if: env.INFRACOST_API_KEY != '' && github.event_name == 'pull_request'
+        run: |
+          increase=$(jq -r '.diffTotalMonthlyCost // "0"' /tmp/diff.json)
+          echo "Estimated monthly cost increase: \$$increase (limit: \$$COST_INCREASE_LIMIT_USD)"
+          if awk "BEGIN{exit !($increase > $COST_INCREASE_LIMIT_USD)}"; then
+            echo "::error::Cost increase \$$increase/mo exceeds the \$$COST_INCREASE_LIMIT_USD/mo limit"
+            exit 1
+          fi
+
+      - name: Cost breakdown (push/dispatch)
+        if: env.INFRACOST_API_KEY != '' && github.event_name != 'pull_request'
+        run: infracost breakdown --config-file infra/infracost.yml
+
+  # --- Gate 3: build image + container CVE scan (Trivy). Push on main only. ---
+  build-scan:
+    name: Gate · Image (Trivy) + push
+    runs-on: ubuntu-latest
+    outputs:
+      image_tag: ${{ github.sha }}
+    steps:
+      - uses: actions/checkout@v5
+
+      # arm64 image (Fargate runs Graviton) built on an amd64 runner needs QEMU.
+      - uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Build image (load locally for scanning)
+        run: |
+          docker buildx build --platform linux/arm64 \
+            -t aether-api:${{ github.sha }} --load ./api
+
+      # Install the Trivy binary directly (deterministic — no action-tag drift).
+      - name: Install Trivy
+        run: |
+          curl -sfL https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/install.sh \
+            | sh -s -- -b /usr/local/bin
+
+      - name: Trivy scan (blocks on HIGH/CRITICAL)
+        run: |
+          trivy image --scanners vuln --severity HIGH,CRITICAL \
+            --ignore-unfixed --exit-code 1 --no-progress \
+            aether-api:${{ github.sha }}
+
+      # Publish the immutable, SHA-tagged image only after it passes the scan,
+      # and only on the deploy path (not PRs).
+      - name: Configure AWS credentials (OIDC)
+        if: github.event_name != 'pull_request'
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Push to ECR
+        if: github.event_name != 'pull_request'
+        run: |
+          registry=$(aws ecr describe-repositories --repository-names "$ECR_REPOSITORY" \
+            --query 'repositories[0].repositoryUri' --output text)
+          aws ecr get-login-password --region "$AWS_REGION" \
+            | docker login --username AWS --password-stdin "${registry%/*}"
+          docker tag aether-api:${{ github.sha }} "$registry:${{ github.sha }}"
+          docker push "$registry:${{ github.sha }}"
+
+  # --- Deploy: migrate then roll the service (only after all gates pass) ---
+  deploy:
+    name: Deploy to ECS
+    runs-on: ubuntu-latest
+    needs: [iac-security, cost, build-scan]
+    if: github.event_name != 'pull_request'
+    steps:
+      - name: Configure AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Register new task definition with the new image
+        id: taskdef
+        run: |
+          registry=$(aws ecr describe-repositories --repository-names "$ECR_REPOSITORY" \
+            --query 'repositories[0].repositoryUri' --output text)
+          image="$registry:${{ needs.build-scan.outputs.image_tag }}"
+
+          # Take the current task def, swap the image, strip read-only fields, re-register.
+          aws ecs describe-task-definition --task-definition "${NAME_PREFIX}-api" \
+            --query 'taskDefinition' --output json > current.json
+          jq --arg IMAGE "$image" '
+            .containerDefinitions[0].image = $IMAGE
+            | del(.taskDefinitionArn, .revision, .status, .requiresAttributes,
+                  .compatibilities, .registeredAt, .registeredBy)
+          ' current.json > new.json
+
+          arn=$(aws ecs register-task-definition --cli-input-json file://new.json \
+            --query 'taskDefinition.taskDefinitionArn' --output text)
+          echo "arn=$arn" >> "$GITHUB_OUTPUT"
+
+      - name: Run migrations (one-off task)
+        run: |
+          net=$(aws ecs describe-services --cluster "$NAME_PREFIX" --services "${NAME_PREFIX}-api" \
+            --query 'services[0].networkConfiguration.awsvpcConfiguration' --output json)
+          subnets=$(echo "$net" | jq -r '.subnets | join(",")')
+          sgs=$(echo "$net" | jq -r '.securityGroups | join(",")')
+
+          task=$(aws ecs run-task --cluster "$NAME_PREFIX" \
+            --task-definition "${{ steps.taskdef.outputs.arn }}" \
+            --launch-type FARGATE \
+            --network-configuration "awsvpcConfiguration={subnets=[$subnets],securityGroups=[$sgs],assignPublicIp=DISABLED}" \
+            --overrides '{"containerOverrides":[{"name":"api","command":["alembic","upgrade","head"]}]}' \
+            --query 'tasks[0].taskArn' --output text)
+
+          aws ecs wait tasks-stopped --cluster "$NAME_PREFIX" --tasks "$task"
+          code=$(aws ecs describe-tasks --cluster "$NAME_PREFIX" --tasks "$task" \
+            --query 'tasks[0].containers[0].exitCode' --output text)
+          echo "migration exit code: $code"
+          test "$code" = "0" || { echo "Migration failed"; exit 1; }
+
+      - name: Deploy service (circuit breaker auto-rolls back on failure)
+        run: |
+          aws ecs update-service --cluster "$NAME_PREFIX" --service "${NAME_PREFIX}-api" \
+            --task-definition "${{ steps.taskdef.outputs.arn }}" >/dev/null
+          echo "Waiting for the service to reach steady state..."
+          aws ecs wait services-stable --cluster "$NAME_PREFIX" --services "${NAME_PREFIX}-api"
+          echo "Deploy complete."

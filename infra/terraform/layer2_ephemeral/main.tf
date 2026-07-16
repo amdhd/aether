@@ -19,6 +19,10 @@ locals {
   ecr_repo_url      = data.terraform_remote_state.layer1.outputs.ecr_repository_url
   cloudfront_domain = data.terraform_remote_state.layer1.outputs.cloudfront_domain_name
 
+  # A custom domain turns on HTTPS end-to-end (ACM cert + ALB HTTPS listener).
+  custom_domain = var.api_domain_name != ""
+  api_url       = local.custom_domain ? "https://${var.api_domain_name}" : "http://${module.ecs.alb_dns_name}"
+
   # Non-secret container config. Cross-origin (CloudFront SPA ↔ ALB API) needs
   # Secure + SameSite=None refresh cookies; TRUST_PROXY_HEADERS lets per-IP rate
   # limiting read X-Forwarded-For behind the ALB.
@@ -115,7 +119,65 @@ module "ecs" {
   secrets     = local.container_secrets
   secret_arns = [local.app_secret_arn, aws_secretsmanager_secret.db_url.arn]
 
+  # When a domain is configured, hand the validated cert to the ALB HTTPS listener.
+  certificate_arn = local.custom_domain ? aws_acm_certificate_validation.api[0].certificate_arn : ""
+
   high_availability = var.high_availability
+}
+
+# --- Custom domain + TLS (only when api_domain_name is set) ---
+data "aws_route53_zone" "main" {
+  count = local.custom_domain ? 1 : 0
+  name  = var.hosted_zone_name
+}
+
+resource "aws_acm_certificate" "api" {
+  count             = local.custom_domain ? 1 : 0
+  domain_name       = var.api_domain_name
+  validation_method = "DNS"
+
+  lifecycle {
+    create_before_destroy = true
+  }
+  tags = { Name = "${var.name_prefix}-api-cert" }
+}
+
+# DNS records that prove domain ownership to ACM.
+resource "aws_route53_record" "cert_validation" {
+  for_each = local.custom_domain ? {
+    for dvo in aws_acm_certificate.api[0].domain_validation_options : dvo.domain_name => {
+      name   = dvo.resource_record_name
+      type   = dvo.resource_record_type
+      record = dvo.resource_record_value
+    }
+  } : {}
+
+  zone_id         = data.aws_route53_zone.main[0].zone_id
+  name            = each.value.name
+  type            = each.value.type
+  records         = [each.value.record]
+  ttl             = 60
+  allow_overwrite = true
+}
+
+resource "aws_acm_certificate_validation" "api" {
+  count                   = local.custom_domain ? 1 : 0
+  certificate_arn         = aws_acm_certificate.api[0].arn
+  validation_record_fqdns = [for r in aws_route53_record.cert_validation : r.fqdn]
+}
+
+# Point the API FQDN at the ALB.
+resource "aws_route53_record" "api" {
+  count   = local.custom_domain ? 1 : 0
+  zone_id = data.aws_route53_zone.main[0].zone_id
+  name    = var.api_domain_name
+  type    = "A"
+
+  alias {
+    name                   = module.ecs.alb_dns_name
+    zone_id                = module.ecs.alb_zone_id
+    evaluate_target_health = true
+  }
 }
 
 # --- ElastiCache Redis (HA only) ---

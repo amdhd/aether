@@ -130,12 +130,40 @@ resource "aws_lb_target_group" "api" {
   tags = { Name = "${var.name_prefix}-api-tg" }
 }
 
-# HTTP listener. For a custom domain, add an ACM cert + an HTTPS:443 listener and
-# redirect 80→443; the demo runs on HTTP behind CloudFront's HTTPS edge.
+locals {
+  https_enabled = var.certificate_arn != ""
+}
+
+# HTTP:80 — forwards directly when there's no cert; redirects to HTTPS when a
+# custom-domain cert is configured (no plaintext API traffic in that case).
 resource "aws_lb_listener" "http" {
   load_balancer_arn = aws_lb.api.arn
   port              = 80
   protocol          = "HTTP"
+
+  default_action {
+    type             = local.https_enabled ? "redirect" : "forward"
+    target_group_arn = local.https_enabled ? null : aws_lb_target_group.api.arn
+
+    dynamic "redirect" {
+      for_each = local.https_enabled ? [1] : []
+      content {
+        port        = "443"
+        protocol    = "HTTPS"
+        status_code = "HTTP_301"
+      }
+    }
+  }
+}
+
+# HTTPS:443 — only when a custom-domain ACM cert is provided. TLS 1.2+ policy.
+resource "aws_lb_listener" "https" {
+  count             = local.https_enabled ? 1 : 0
+  load_balancer_arn = aws_lb.api.arn
+  port              = 443
+  protocol          = "HTTPS"
+  ssl_policy        = "ELBSecurityPolicy-TLS13-1-2-2021-06"
+  certificate_arn   = var.certificate_arn
 
   default_action {
     type             = "forward"

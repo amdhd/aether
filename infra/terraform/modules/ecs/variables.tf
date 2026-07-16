@@ -75,6 +75,12 @@ variable "alb_idle_timeout" {
   default     = 300
 }
 
+variable "certificate_arn" {
+  description = "ACM cert ARN for the ALB HTTPS listener. Empty = HTTP-only (no custom domain)."
+  type        = string
+  default     = ""
+}
+
 variable "log_retention_days" {
   type    = number
   default = 30

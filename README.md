@@ -41,30 +41,19 @@ flowchart TB
         igw["Internet Gateway"]
         alb["Application Load Balancer<br/>ONE ALB · node in each AZ · HTTPS 443"]
 
-        subgraph aza["Availability Zone A"]
-            subgraph puba["Public subnet A"]
-                nata["NAT Gateway A"]
-            end
-            subgraph appa["Private app subnet A"]
-                fga["ECS Fargate · FastAPI"]
-                rediska[("ElastiCache Redis · PRIMARY")]
-            end
-            subgraph dba["Private DB subnet A"]
-                rdsa[("RDS PostgreSQL · PRIMARY<br/>pgvector")]
-            end
+        subgraph pub["Public subnets · AZ A + AZ B"]
+            nata["NAT Gateway · AZ A"]
+            natb["NAT Gateway · AZ B"]
         end
-
-        subgraph azb["Availability Zone B"]
-            subgraph pubb["Public subnet B"]
-                natb["NAT Gateway B"]
-            end
-            subgraph appb["Private app subnet B"]
-                fgb["ECS Fargate · FastAPI"]
-                rediskb[("Redis · replica")]
-            end
-            subgraph dbb["Private DB subnet B"]
-                rdsb[("RDS · standby")]
-            end
+        subgraph appnet["Private app subnets · AZ A + AZ B"]
+            fga["ECS Fargate · AZ A"]
+            fgb["ECS Fargate · AZ B"]
+            rediska[("Redis PRIMARY · AZ A")]
+            rediskb[("Redis replica · AZ B")]
+        end
+        subgraph dbnet["Private DB subnets · AZ A + AZ B"]
+            rdsa[("RDS PostgreSQL PRIMARY · AZ A<br/>pgvector")]
+            rdsb[("RDS standby · AZ B")]
         end
     end
 

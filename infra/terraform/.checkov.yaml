@@ -1,0 +1,65 @@
+# Checkov baseline for Aether's ephemeral, cost-optimized demo stack.
+#
+# Every check below is an EXPLICIT, JUSTIFIED exception — not a silent ignore.
+# They fall into three buckets:
+#   1. Ephemeral-demo trade-offs (must-destroy → no deletion protection/backups).
+#   2. Cost trade-offs (KMS CMKs, cross-region replication, access-logging
+#      buckets, enhanced monitoring — all add spend for a throwaway demo; default
+#      AWS-managed encryption stays ON).
+#   3. Upgrades that need a custom domain (ALB HTTPS, CloudFront custom cert/TLS1.2).
+#
+# For a standing production environment, drop the relevant lines and implement
+# the control. Cheap wins already fixed in code (not skipped): default-SG lockdown,
+# no auto public IPs, RDS copy-tags/auto-minor-upgrade, S3 versioning, SNS
+# encryption, and AWS-managed WAF rule groups (incl. Log4Shell coverage).
+
+framework:
+  - terraform
+skip-check:
+  # --- Ephemeral: teardown must never be blocked ---
+  - CKV_AWS_150  # ALB deletion protection — off so `make down` works
+  - CKV_AWS_293  # RDS deletion protection — off so `make down` works
+  - CKV_AWS_157  # RDS Multi-AZ — gated on high_availability; demo is single-AZ
+  - CKV_AWS_133  # RDS automated backups — retention 0 for a destroyable demo
+
+  # --- Cost trade-offs (default AWS-managed encryption remains enabled) ---
+  - CKV_AWS_136  # ECR KMS CMK — default AES256 encryption is on
+  - CKV_AWS_145  # S3 KMS CMK — default SSE-S3 is on
+  - CKV_AWS_149  # Secrets Manager KMS CMK — default AWS-managed key
+  - CKV_AWS_158  # CloudWatch Logs KMS CMK — default encryption
+  - CKV_AWS_144  # S3 cross-region replication — needless for a static SPA
+  - CKV_AWS_18   # S3 access logging — needs a log bucket
+  - CKV_AWS_86   # CloudFront access logging — needs a log bucket
+  - CKV_AWS_91   # ALB access logging — needs a log bucket
+  - CKV2_AWS_11  # VPC flow logs — CloudWatch cost
+  - CKV2_AWS_31  # WAF logging — needs a logging destination
+  - CKV_AWS_338  # Log retention >= 1yr — 30d by design for a demo
+  - CKV_AWS_118  # RDS enhanced monitoring — cost
+  - CKV_AWS_353  # RDS performance insights — cost
+  - CKV_AWS_129  # RDS log exports — cost
+  - CKV2_AWS_30  # RDS query logging — cost
+  - CKV2_AWS_61  # S3 lifecycle — SPA is re-synced each deploy
+  - CKV2_AWS_62  # S3 event notifications — not used by a SPA bucket
+  - CKV_AWS_51   # ECR immutable tags — demo re-pushes :latest (CD uses SHA tags)
+  - CKV2_AWS_57  # Secrets rotation — needs a rotation Lambda (maturity item)
+
+  # --- Need a custom domain / ACM cert (no domain in the demo) ---
+  - CKV_AWS_2    # ALB listener HTTPS — TLS terminates at the CloudFront edge
+  - CKV_AWS_378  # ALB HTTP protocol — same; ALB HTTPS needs ACM + domain
+  - CKV2_AWS_20  # ALB HTTP->HTTPS redirect — same
+  - CKV_AWS_103  # ALB TLS 1.2 — no HTTPS listener without a cert
+  - CKV_AWS_174  # CloudFront TLS 1.2 — default *.cloudfront.net cert
+  - CKV2_AWS_42  # CloudFront custom SSL cert — using the default cert
+
+  # --- CloudFront-level WAF (WAF is applied at the ALB origin instead) ---
+  - CKV_AWS_68   # CloudFront WAF — regional WAF is on the ALB
+  - CKV2_AWS_47  # CloudFront WAFv2 Log4j AMR — KnownBadInputs is on the ALB WAF
+  - CKV_AWS_192  # CloudFront WAF Log4j — same
+  - CKV_AWS_310  # CloudFront origin failover — single origin by design
+  - CKV_AWS_374  # CloudFront geo restriction — public app, no geo blocking
+
+  # --- Design / accepted ---
+  - CKV_AWS_260  # ALB SG ingress :80 from 0.0.0.0/0 — public web entry point
+  - CKV_AWS_161  # RDS IAM auth — app authenticates with a Secrets Manager password
+  - CKV_AWS_259  # CloudFront HSTS — configured via the response_headers_policy
+  - CKV2_AWS_5   # SGs attached — ALB/API/RDS SGs are attached (Redis SG only in HA)

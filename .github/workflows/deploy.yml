@@ -21,6 +21,7 @@ permissions:
   id-token: write # OIDC → AWS, no long-lived keys
   contents: read
   pull-requests: write # Infracost PR comment
+  security-events: write # Checkov SARIF → Security tab
 
 env:
   AWS_REGION: ap-southeast-1
@@ -35,19 +36,25 @@ jobs:
     steps:
       - uses: actions/checkout@v5
 
-      # Informational IaC scan (console output). Reported, not enforced: many of
-      # Checkov's defaults (KMS CMK everywhere, cross-region replication, ELB
-      # deletion protection, access logging) are deliberately off for a cheap,
-      # fully-destroyable demo. Flip soft_fail to false — ideally with a curated
-      # .checkov.yaml skip-list — once the baseline is triaged for a standing env.
+      # Enforcing IaC gate. Every accepted exception is documented with a reason
+      # in infra/terraform/.checkov.yaml; anything NOT fixed or listed there fails
+      # the build. Findings are also uploaded to the Security tab (SARIF).
       - name: Checkov
         id: checkov
         uses: bridgecrewio/checkov-action@v12
         with:
           directory: infra/terraform
-          framework: terraform
-          output_format: cli
-          soft_fail: true
+          config_file: infra/terraform/.checkov.yaml
+          output_format: cli,sarif
+          output_file_path: console,checkov.sarif
+          soft_fail: false
+
+      - name: Upload Checkov SARIF
+        if: always()
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: checkov.sarif
+          category: checkov
 
   # --- Gate 2: cost (Infracost) ---
   # The org's Infracost Cloud guardrail (block PR on >$250/mo increase) enforces

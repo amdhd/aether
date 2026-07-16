@@ -57,6 +57,13 @@ resource "aws_s3_bucket_server_side_encryption_configuration" "web" {
   }
 }
 
+resource "aws_s3_bucket_versioning" "web" {
+  bucket = aws_s3_bucket.web.id
+  versioning_configuration {
+    status = "Enabled"
+  }
+}
+
 # --- CloudFront: HTTPS edge in front of the private bucket via OAC ---
 resource "aws_cloudfront_origin_access_control" "web" {
   name                              = "${var.name_prefix}-web-oac"

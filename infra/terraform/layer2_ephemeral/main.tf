@@ -164,6 +164,46 @@ resource "aws_wafv2_web_acl" "api" {
     }
   }
 
+  # AWS-managed rule groups: common web exploits + known-bad inputs (the latter
+  # covers Log4Shell / CVE-2021-44228). Free beyond the base WAF cost.
+  rule {
+    name     = "aws-common"
+    priority = 2
+    override_action {
+      none {}
+    }
+    statement {
+      managed_rule_group_statement {
+        name        = "AWSManagedRulesCommonRuleSet"
+        vendor_name = "AWS"
+      }
+    }
+    visibility_config {
+      cloudwatch_metrics_enabled = true
+      metric_name                = "${var.name_prefix}-aws-common"
+      sampled_requests_enabled   = true
+    }
+  }
+
+  rule {
+    name     = "aws-known-bad-inputs"
+    priority = 3
+    override_action {
+      none {}
+    }
+    statement {
+      managed_rule_group_statement {
+        name        = "AWSManagedRulesKnownBadInputsRuleSet"
+        vendor_name = "AWS"
+      }
+    }
+    visibility_config {
+      cloudwatch_metrics_enabled = true
+      metric_name                = "${var.name_prefix}-known-bad-inputs"
+      sampled_requests_enabled   = true
+    }
+  }
+
   visibility_config {
     cloudwatch_metrics_enabled = true
     metric_name                = "${var.name_prefix}-api-waf"
@@ -180,8 +220,9 @@ resource "aws_wafv2_web_acl_association" "api" {
 
 # --- Alarms → SNS ---
 resource "aws_sns_topic" "alerts" {
-  name = "${var.name_prefix}-alerts"
-  tags = { Name = "${var.name_prefix}-alerts" }
+  name              = "${var.name_prefix}-alerts"
+  kms_master_key_id = "alias/aws/sns" # encrypt at rest with the AWS-managed key
+  tags              = { Name = "${var.name_prefix}-alerts" }
 }
 
 resource "aws_sns_topic_subscription" "email" {

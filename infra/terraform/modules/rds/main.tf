@@ -23,6 +23,9 @@ resource "aws_db_instance" "this" {
   vpc_security_group_ids = [var.security_group_id]
   publicly_accessible    = false
 
+  copy_tags_to_snapshot      = true
+  auto_minor_version_upgrade = true
+
   # HA gates the production-safety knobs. In demo mode everything is tuned for a
   # fast, fully destroyable instance (principle #5: destroy must never hang).
   multi_az                  = var.high_availability

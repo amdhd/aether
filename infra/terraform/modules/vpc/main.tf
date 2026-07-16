@@ -33,12 +33,21 @@ resource "aws_internet_gateway" "this" {
 }
 
 resource "aws_subnet" "public" {
-  count                   = local.az_count
-  vpc_id                  = aws_vpc.this.id
-  availability_zone       = local.public_subnets[count.index].az
-  cidr_block              = local.public_subnets[count.index].cidr
-  map_public_ip_on_launch = true
+  count             = local.az_count
+  vpc_id            = aws_vpc.this.id
+  availability_zone = local.public_subnets[count.index].az
+  cidr_block        = local.public_subnets[count.index].cidr
+  # No auto-assigned public IPs: only the ALB (its own DNS) and NAT (its EIP)
+  # live here; nothing is launched needing an auto-assigned address.
+  map_public_ip_on_launch = false
   tags                    = { Name = "${var.name_prefix}-public-${count.index}", Tier = "public" }
+}
+
+# Lock down the VPC's default security group (deny all in/out) so nothing can
+# accidentally rely on it.
+resource "aws_default_security_group" "default" {
+  vpc_id = aws_vpc.this.id
+  tags   = { Name = "${var.name_prefix}-default-deny-all" }
 }
 
 resource "aws_subnet" "app" {

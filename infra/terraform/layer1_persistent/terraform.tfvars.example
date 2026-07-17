@@ -1,0 +1,7 @@
+# Copy to terraform.tfvars. Custom frontend domain on CloudFront (optional).
+# Requires a Route53 public hosted zone you own (create it once, out of band).
+# Leave both empty to use the default *.cloudfront.net HTTPS URL.
+
+# frontend_domain_name = "ahmadhadi.info"   # apex; www is added automatically
+# hosted_zone_name     = "ahmadhadi.info"
+# budget_alert_email   = "you@example.com"

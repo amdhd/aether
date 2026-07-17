@@ -9,8 +9,8 @@ output "api_uses_https" {
 }
 
 output "frontend_url" {
-  description = "The persistent CloudFront SPA URL (from layer1)."
-  value       = "https://${local.cloudfront_domain}"
+  description = "The persistent frontend URL (custom domain or CloudFront default, from layer1)."
+  value       = local.frontend_url
 }
 
 output "ecs_cluster" {

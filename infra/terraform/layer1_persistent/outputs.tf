@@ -13,8 +13,13 @@ output "cloudfront_distribution_id" {
 }
 
 output "cloudfront_domain_name" {
-  description = "Public HTTPS URL of the frontend."
+  description = "CloudFront distribution domain (*.cloudfront.net)."
   value       = aws_cloudfront_distribution.web.domain_name
+}
+
+output "frontend_url" {
+  description = "Canonical frontend URL — the custom domain if set, else the CloudFront default."
+  value       = local.frontend_domain ? "https://${var.frontend_domain_name}" : "https://${aws_cloudfront_distribution.web.domain_name}"
 }
 
 output "app_secret_arn" {

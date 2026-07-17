@@ -15,9 +15,10 @@ data "terraform_remote_state" "layer1" {
 }
 
 locals {
-  app_secret_arn    = data.terraform_remote_state.layer1.outputs.app_secret_arn
-  ecr_repo_url      = data.terraform_remote_state.layer1.outputs.ecr_repository_url
-  cloudfront_domain = data.terraform_remote_state.layer1.outputs.cloudfront_domain_name
+  app_secret_arn = data.terraform_remote_state.layer1.outputs.app_secret_arn
+  ecr_repo_url   = data.terraform_remote_state.layer1.outputs.ecr_repository_url
+  # Canonical frontend URL (custom domain if configured, else *.cloudfront.net).
+  frontend_url = data.terraform_remote_state.layer1.outputs.frontend_url
 
   # A custom domain turns on HTTPS end-to-end (ACM cert + ALB HTTPS listener).
   custom_domain = var.api_domain_name != ""
@@ -31,7 +32,7 @@ locals {
     TRUST_PROXY_HEADERS     = "true"
     REFRESH_COOKIE_SECURE   = "true"
     REFRESH_COOKIE_SAMESITE = "none"
-    FRONTEND_ORIGIN         = "https://${local.cloudfront_domain}"
+    FRONTEND_ORIGIN         = local.frontend_url
   }
 
   # Redis is provisioned only in HA mode. NOTE: the app's in-memory rate limiter

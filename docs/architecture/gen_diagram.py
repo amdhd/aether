@@ -1,250 +1,213 @@
 """
-Aether AWS Architecture Diagram
-Run:  uvx --with "graphviz" python3 gen_diagram.py
+Aether AWS Architecture Diagram — uses diagrams library for real AWS icons.
+Run:  uvx --with diagrams python3 gen_diagram.py
+
+Changes from previous version:
+  1. Single HA ALB (spans both AZs) — not one per AZ
+  2. WAF moved to regional scope in front of ALB (not at CloudFront edge)
+  3. VPC Endpoints cluster added (S3 gateway + ECR api/dkr + Secrets Manager + CW Logs)
+  4. ALB anchored in the public-subnet tier (matches Terraform subnets = public_subnet_ids)
+  5. Explicit internet-facing inbound path IGW → ALB; WAF shown attached to the ALB
+     (regional WAF is associated with the ALB, not a separate network hop)
 """
 
-import graphviz
-
-dot = graphviz.Digraph(
-    "Aether",
-    filename="aether_aws_architecture",
-    format="png",
-    engine="dot",
+from diagrams import Diagram, Cluster, Edge
+from diagrams.aws.network import (
+    Route53, CloudFront, ElbApplicationLoadBalancer,
+    InternetGateway, NATGateway, Privatelink,
 )
+from diagrams.aws.security import ACM, WAF, SecretsManager
+from diagrams.aws.storage import SimpleStorageServiceS3
+from diagrams.aws.compute import Fargate, ECR
+from diagrams.aws.database import RDSPostgresqlInstance, ElasticacheForRedis
+from diagrams.aws.management import Cloudwatch
+from diagrams.aws.integration import SNS
+from diagrams.aws.cost import Budgets
+from diagrams.aws.general import Client
 
-dot.attr(
-    rankdir="TB",
+OUTPUT = "aether_aws_architecture"
+
+GRAPH = dict(
+    fontsize="13",
     bgcolor="white",
-    fontname="Helvetica",
-    fontsize="14",
-    pad="1.0",
-    nodesep="0.65",
-    ranksep="0.9",
+    pad="1.5",
     splines="ortho",
-    compound="true",
-    newrank="true",
-    size="26,18!",
-    dpi="150",
+    nodesep="1.0",
+    ranksep="1.8",
+    fontname="Helvetica Bold",
+    overlap="false",
+    concentrate="false",
 )
 
-def node(g, name, label, fillcolor, fontcolor="white"):
-    g.node(name, label=label,
-           shape="box", style="rounded,filled",
-           fillcolor=fillcolor, fontcolor=fontcolor,
-           fontname="Helvetica", fontsize="11",
-           width="1.65", height="0.82", margin="0.12,0.07")
+BLUE   = "#1565C0"; ORANGE = "#E65100"; GREEN  = "#2E7D32"
+PURPLE = "#6A1B9A"; RED    = "#B71C1C"; DKGRN  = "#1B5E20"
+TEAL   = "#006064"; GREY   = "#9E9E9E"
 
-DNS_C="#8D4FDB"; ACM_C="#DD344C"; CF_C="#8D4FDB"; S3_C="#3F8624"
-WAF_C="#DD344C"; IGW_C="#8C4FFF"; NAT_C="#8C4FFF"; ALB_C="#E7157B"
-FG_C="#ED7100";  RD_C="#C7131F";  RDS_C="#3F48CC"; ECR_C="#ED7100"
-CW_C="#E7157B";  SNS_C="#E7157B"; BUD_C="#3F8624"; EXT_C="#7D7D7D"
+def ef(lbl="", color=BLUE, bold=False, dashed=False):
+    return Edge(
+        label=lbl, color=color,
+        style="bold" if bold else ("dashed" if dashed else "solid"),
+    )
 
-BLUE="#1565C0"; ORANGE="#E65100"; GREEN="#2E7D32"; PURPLE="#6A1B9A"
-RED="#B71C1C";  DKGRN="#1B5E20"; TEAL="#006064"
+def c(**kw):
+    base = dict(style="rounded", fontname="Helvetica Bold", penwidth="2.0")
+    base.update(kw)
+    return base
 
-def e(src, dst, label="", color="#555", style="solid",
-      bold=False, fs="10", constraint="true", w="1"):
-    dot.edge(src, dst,
-             xlabel=label, color=color, fontcolor=color,
-             fontname="Helvetica", fontsize=fs,
-             style="bold" if bold else style,
-             constraint=constraint, arrowsize="0.75",
-             penwidth="1.8" if bold else "1.2",
-             weight=w)
+with Diagram(
+    "Aether — Production AWS Architecture  (High Availability · Multi-AZ)",
+    filename=OUTPUT,
+    show=False,
+    direction="LR",
+    graph_attr=GRAPH,
+):
 
-# ─────────────────────────────────────────────────────────────────────────────
-dot.node("users", "Users", shape="plaintext",
-         fontsize="14", fontname="Helvetica Bold")
+    users = Client("Users")
 
-# ─────────────────────────────────────────────────────────────────────────────
-# EDGE & DNS
-# ─────────────────────────────────────────────────────────────────────────────
-with dot.subgraph(name="cluster_edge") as g:
-    g.attr(label="Edge & DNS", style="rounded,filled", fillcolor="#E3F2FD",
-           pencolor="#1565C0", fontcolor="#1565C0",
-           fontname="Helvetica Bold", fontsize="14", penwidth="2")
-    node(g, "dns", "Route 53\nDNS",                   DNS_C)
-    node(g, "acm", "ACM\nTLS Certificates",            ACM_C)
-    node(g, "waf", "AWS WAF\nRate-limit + Rules",      WAF_C)
-    node(g, "cf",  "CloudFront\nSPA · HTTPS",          CF_C)
-    node(g, "s3",  "S3  Static SPA\n(private · OAC)",  S3_C)
+    # ── EDGE & DNS  (CloudFront edge only — no WAF here) ──────────────────────
+    with Cluster("Edge & DNS", graph_attr=c(
+            bgcolor="#E3F2FD", pencolor=BLUE, fontcolor=BLUE, fontsize="14")):
+        dns = Route53("Route 53\nDNS")
+        acm = ACM("ACM\nTLS Certificates")
+        cf  = CloudFront("CloudFront\nSPA · HTTPS")
+        s3  = SimpleStorageServiceS3("S3\nStatic SPA Build\n(OAC)")
 
-# ─────────────────────────────────────────────────────────────────────────────
-# VPC
-# ─────────────────────────────────────────────────────────────────────────────
-with dot.subgraph(name="cluster_vpc") as vpc:
-    vpc.attr(label="VPC  (2 Availability Zones)", style="rounded,filled",
-             fillcolor="#F1F8E9", pencolor="#2E7D32", fontcolor="#1B5E20",
-             fontname="Helvetica Bold", fontsize="15", penwidth="3")
+    # ── VPC ───────────────────────────────────────────────────────────────────
+    with Cluster("VPC  (2 Availability Zones)", graph_attr=c(
+            bgcolor="#F1F8E9", pencolor=GREEN, fontcolor=GREEN,
+            fontsize="15", penwidth="3.0")):
 
-    node(vpc, "igw", "Internet\nGateway", IGW_C)
-    node(vpc, "ecr", "Amazon ECR\n(scan-on-push)", ECR_C)
+        igw = InternetGateway("Internet\nGateway")
 
-    # AZ A
-    with vpc.subgraph(name="cluster_az_a") as az:
-        az.attr(label="Availability Zone A", style="dashed,rounded",
-                fillcolor="#FFFDE7", pencolor="#F57F17", fontcolor="#E65100",
-                fontname="Helvetica Bold", fontsize="13", penwidth="2")
+        # ── PUBLIC-SUBNET INGRESS TIER: single internet-facing HA ALB that
+        #    spans public subnet A + B; regional WAF attached to it ──────────
+        with Cluster("Public Subnets A + B  ·  Ingress (internet-facing)", graph_attr=c(
+                bgcolor="#FFF8E1", pencolor="#F57F17", fontsize="13")):
+            waf = WAF("AWS WAF\nRegional · attached to ALB\nRate-limit + Managed Rules")
+            alb = ElbApplicationLoadBalancer(
+                "Application Load Balancer\nInternet-facing · HTTPS 443\nspans public subnet A + B")
 
-        with az.subgraph(name="cluster_pub_a") as sg:
-            sg.attr(label="Public Subnet A", style="rounded,filled",
-                    fillcolor="#FFF9C4", pencolor="#F9A825",
-                    fontname="Helvetica Bold", fontsize="12")
-            node(sg, "alb_a", "ALB Node AZ A\nHTTPS 443", ALB_C)
-            node(sg, "nat_a", "NAT Gateway A",             NAT_C)
+        # ── AZ A ──────────────────────────────────────────────────────────────
+        with Cluster("Availability Zone A", graph_attr=c(
+                bgcolor="#FFFDE7", style="dashed",
+                pencolor="#F57F17", fontcolor="#E65100", fontsize="13")):
 
-        with az.subgraph(name="cluster_app_a") as sg:
-            sg.attr(label="Private App Subnet A", style="rounded,filled",
-                    fillcolor="#E8F5E9", pencolor="#388E3C",
-                    fontname="Helvetica Bold", fontsize="12")
-            node(sg, "fargate_a", "ECS Fargate\nFastAPI · ARM64\nAZ A", FG_C)
-            node(sg, "redis_a",   "ElastiCache Redis\nPRIMARY · AZ A",  RD_C)
+            with Cluster("Public Subnet A", graph_attr=c(
+                    bgcolor="#FFF9C4", pencolor="#F9A825", fontsize="12")):
+                nat_a = NATGateway("NAT Gateway A")
 
-        with az.subgraph(name="cluster_db_a") as sg:
-            sg.attr(label="Private DB Subnet A", style="rounded,filled",
-                    fillcolor="#FCE4EC", pencolor="#C62828",
-                    fontname="Helvetica Bold", fontsize="12")
-            node(sg, "rds_a", "RDS PostgreSQL\n+ pgvector\nPRIMARY · AZ A", RDS_C)
+            with Cluster("Private App Subnet A", graph_attr=c(
+                    bgcolor="#E8F5E9", pencolor="#388E3C", fontsize="12")):
+                fargate_a = Fargate("ECS Fargate\nFastAPI · ARM64\nAZ A")
+                redis_a   = ElasticacheForRedis("ElastiCache Redis\nPRIMARY · AZ A")
 
-    # AZ B
-    with vpc.subgraph(name="cluster_az_b") as az:
-        az.attr(label="Availability Zone B", style="dashed,rounded",
-                fillcolor="#E8EAF6", pencolor="#283593", fontcolor="#1A237E",
-                fontname="Helvetica Bold", fontsize="13", penwidth="2")
+            with Cluster("Private DB Subnet A", graph_attr=c(
+                    bgcolor="#FCE4EC", pencolor="#C62828", fontsize="12")):
+                rds_a = RDSPostgresqlInstance("RDS PostgreSQL\n+ pgvector\nPRIMARY · AZ A")
 
-        with az.subgraph(name="cluster_pub_b") as sg:
-            sg.attr(label="Public Subnet B", style="rounded,filled",
-                    fillcolor="#E8EAF6", pencolor="#3949AB",
-                    fontname="Helvetica Bold", fontsize="12")
-            node(sg, "alb_b", "ALB Node AZ B\nHTTPS 443", ALB_C)
-            node(sg, "nat_b", "NAT Gateway B",             NAT_C)
+        # ── AZ B ──────────────────────────────────────────────────────────────
+        with Cluster("Availability Zone B", graph_attr=c(
+                bgcolor="#E8EAF6", style="dashed",
+                pencolor="#283593", fontcolor="#1A237E", fontsize="13")):
 
-        with az.subgraph(name="cluster_app_b") as sg:
-            sg.attr(label="Private App Subnet B", style="rounded,filled",
-                    fillcolor="#E8F5E9", pencolor="#388E3C",
-                    fontname="Helvetica Bold", fontsize="12")
-            node(sg, "fargate_b", "ECS Fargate\nFastAPI · ARM64\nAZ B", FG_C)
-            node(sg, "redis_b",   "ElastiCache Redis\nREPLICA · AZ B",  RD_C)
+            with Cluster("Public Subnet B", graph_attr=c(
+                    bgcolor="#E8EAF6", pencolor="#3949AB", fontsize="12")):
+                nat_b = NATGateway("NAT Gateway B")
 
-        with az.subgraph(name="cluster_db_b") as sg:
-            sg.attr(label="Private DB Subnet B", style="rounded,filled",
-                    fillcolor="#FCE4EC", pencolor="#C62828",
-                    fontname="Helvetica Bold", fontsize="12")
-            node(sg, "rds_b", "RDS PostgreSQL\nSTANDBY · AZ B\n(Multi-AZ)", RDS_C)
+            with Cluster("Private App Subnet B", graph_attr=c(
+                    bgcolor="#E8F5E9", pencolor="#388E3C", fontsize="12")):
+                fargate_b = Fargate("ECS Fargate\nFastAPI · ARM64\nAZ B")
+                redis_b   = ElasticacheForRedis("ElastiCache Redis\nREPLICA · AZ B")
 
-# ─────────────────────────────────────────────────────────────────────────────
-# OBSERVABILITY
-# ─────────────────────────────────────────────────────────────────────────────
-with dot.subgraph(name="cluster_obs") as g:
-    g.attr(label="Observability & Cost", style="rounded,filled",
-           fillcolor="#E0F7FA", pencolor="#00838F", fontcolor="#004D40",
-           fontname="Helvetica Bold", fontsize="14", penwidth="2")
-    node(g, "cw",      "CloudWatch\nLogs · Metrics\nAlarms · Dashboard", CW_C)
-    node(g, "sns",     "SNS\nAlarm Notifications",                        SNS_C)
-    node(g, "budgets", "AWS Budgets\nCost Alert",                         BUD_C)
+            with Cluster("Private DB Subnet B", graph_attr=c(
+                    bgcolor="#FCE4EC", pencolor="#C62828", fontsize="12")):
+                rds_b = RDSPostgresqlInstance("RDS PostgreSQL\nSTANDBY · AZ B\n(Multi-AZ)")
 
-# ─────────────────────────────────────────────────────────────────────────────
-# EXTERNAL APIs
-# ─────────────────────────────────────────────────────────────────────────────
-with dot.subgraph(name="cluster_ext") as g:
-    g.attr(label="External APIs  (internet · via NAT → IGW)",
-           style="rounded,filled", fillcolor="#FFF3E0",
-           pencolor="#E65100", fontcolor="#BF360C",
-           fontname="Helvetica Bold", fontsize="14", penwidth="2")
-    node(g, "deepseek", "DeepSeek\nLLM",       EXT_C)
-    node(g, "openai",   "OpenAI\nEmbeddings",   EXT_C)
-    node(g, "tavily",   "Tavily\nWeb Search",   EXT_C)
-    node(g, "gcal",     "Google\nCalendar API", EXT_C)
+        # ── VPC ENDPOINTS (PrivateLink — stays on AWS backbone) ───────────────
+        with Cluster("VPC Endpoints  (PrivateLink — AWS backbone)", graph_attr=c(
+                bgcolor="#F3E5F5", pencolor="#6A1B9A", fontcolor="#4A148C", fontsize="13")):
+            ep_ecr = Privatelink("Interface Endpoint\nECR api + dkr")
+            ep_sm  = SecretsManager("Interface Endpoint\nSecrets Manager")
+            ep_cw  = Privatelink("Interface Endpoint\nCloudWatch Logs")
+            ep_s3  = Privatelink("Gateway Endpoint\nS3")
+            ecr    = ECR("Amazon ECR\n(scan-on-push)")
 
-# ─────────────────────────────────────────────────────────────────────────────
-# RANK CONSTRAINTS
-# Each node in AT MOST ONE rank= group.
-# No invisible edge creates a cycle with these rank groups.
-# ─────────────────────────────────────────────────────────────────────────────
+    # ── OBSERVABILITY ─────────────────────────────────────────────────────────
+    with Cluster("Observability & Cost", graph_attr=c(
+            bgcolor="#E0F7FA", pencolor=TEAL, fontcolor=TEAL, fontsize="14")):
+        cw      = Cloudwatch("CloudWatch\nLogs · Metrics · Alarms\nDashboard")
+        sns     = SNS("SNS\nAlarm Notifications")
+        budgets = Budgets("AWS Budgets\nmonitors billing\n→ email 80% / 100%")
 
-# ALB + NAT all in the same rank — keeps both inside the public subnet tier
-with dot.subgraph() as s:
-    s.attr(rank="same")
-    s.node("alb_a"); s.node("alb_b")
-    s.node("nat_a"); s.node("nat_b")
+    # ── EXTERNAL APIs ─────────────────────────────────────────────────────────
+    with Cluster("External APIs  (internet · via NAT → IGW)", graph_attr=c(
+            bgcolor="#FFF3E0", pencolor=ORANGE, fontcolor="#BF360C", fontsize="14")):
+        deepseek = Client("DeepSeek\nLLM")
+        openai   = Client("OpenAI\nEmbeddings")
+        tavily   = Client("Tavily\nWeb Search")
+        gcal     = Client("Google\nCalendar API")
 
-# Fargate + ECR at same level
-with dot.subgraph() as s:
-    s.attr(rank="same")
-    s.node("fargate_a"); s.node("fargate_b"); s.node("ecr")
+    # ═════════════════════════════════════════════════════════════════════════
+    # FLOW EDGES
+    # ═════════════════════════════════════════════════════════════════════════
 
-# Redis pair
-with dot.subgraph() as s:
-    s.attr(rank="same"); s.node("redis_a"); s.node("redis_b")
+    # ① SPA load: User → R53 → CloudFront → S3
+    users >> ef("① DNS",           BLUE, bold=True) >> dns
+    dns   >> ef("① SPA (HTTPS)",   BLUE, bold=True) >> cf
+    cf    >> ef("① OAC · private", BLUE, dashed=True) >> s3
+    acm   >> ef("TLS cert",        PURPLE, dashed=True) >> cf
 
-# RDS pair
-with dot.subgraph() as s:
-    s.attr(rank="same"); s.node("rds_a"); s.node("rds_b")
+    # ② API: User → R53 → IGW → ALB (public subnets, both AZs) → Fargate.
+    #    WAF is associated with the ALB and inspects at it (not a separate hop).
+    dns   >> ef("② API (HTTPS)",         ORANGE, bold=True) >> igw
+    igw   >> ef("② inbound → ALB",       ORANGE, bold=True) >> alb
+    waf   >> ef("attached · inspects",   ORANGE, dashed=True) >> alb
+    acm   >> ef("TLS cert",              PURPLE, dashed=True) >> alb
+    alb   >> ef("② → target group AZ A", ORANGE, bold=True) >> fargate_a
+    alb   >> ef("② → target group AZ B", ORANGE, bold=True) >> fargate_b
 
-# AZ A left of AZ B — safe invisible edges (same rank, no vertical conflict)
-dot.edge("alb_a",    "alb_b",     style="invis", weight="5")
-dot.edge("fargate_a","fargate_b", style="invis", weight="5")
-dot.edge("rds_a",    "rds_b",     style="invis", weight="5")
+    # ③ Data: Fargate → RDS PRIMARY (both tasks) + Redis PRIMARY (both tasks)
+    fargate_a >> ef("③ SQL + pgvector", RED,   bold=True) >> rds_a
+    fargate_b >> ef("③ SQL + pgvector", RED,   bold=True) >> rds_a
+    fargate_a >> ef("③ cache r/w",      DKGRN, bold=True) >> redis_a
+    fargate_b >> ef("③ cache r/w",      DKGRN, bold=True) >> redis_a
 
-# Tier ordering within AZ A — only downward, no upward edges
-# alb → nat already in same rank so skip; just use real flow edges for ordering
-# Extra weight on alb→fargate and fargate→rds real edges to strengthen ordering
-# (handled via high weight on real flow edges below)
+    # ④ PrivateLink: Fargate → VPC Endpoints (stays on AWS backbone, no NAT)
+    fargate_a >> ef("④ pull image",     PURPLE, dashed=True) >> ep_ecr
+    fargate_b >> ef("④ pull image",     PURPLE, dashed=True) >> ep_ecr
+    ep_ecr    >> ef("",                 PURPLE, dashed=True) >> ecr
+    fargate_a >> ef("④ secrets",        PURPLE, dashed=True) >> ep_sm
+    fargate_b >> ef("④ secrets",        PURPLE, dashed=True) >> ep_sm
+    fargate_a >> ef("④ ship logs",      PURPLE, dashed=True) >> ep_cw
+    fargate_b >> ef("④ ship logs",      PURPLE, dashed=True) >> ep_cw
+    fargate_a >> ef("④ S3 gateway",     PURPLE, dashed=True) >> ep_s3
+    fargate_b >> ef("④ S3 gateway",     PURPLE, dashed=True) >> ep_s3
+    ep_cw     >> ef("",                 TEAL,   dashed=True) >> cw
 
-# ─────────────────────────────────────────────────────────────────────────────
-# FLOW EDGES
-# ─────────────────────────────────────────────────────────────────────────────
+    # ⑤ Egress: Fargate (private subnet) → NAT (public subnet) → IGW → internet
+    fargate_a >> ef("⑤ LLM / tool calls", ORANGE) >> nat_a
+    fargate_b >> ef("⑤ LLM / tool calls", ORANGE) >> nat_b
+    nat_a     >> ef("⑤ outbound HTTPS",   ORANGE) >> igw
+    nat_b     >> ef("⑤ outbound HTTPS",   ORANGE) >> igw
+    igw >> ef("⑤ DeepSeek", ORANGE) >> deepseek
+    igw >> ef("⑤ OpenAI",   ORANGE) >> openai
+    igw >> ef("⑤ Tavily",   ORANGE) >> tavily
+    igw >> ef("⑤ Google",   ORANGE) >> gcal
 
-# ① SPA load
-e("users","dns", "① DNS lookup",        BLUE,   bold=True)
-e("dns",  "cf",  "① SPA (HTTPS)",        BLUE,   bold=True)
-e("cf",   "s3",  "① OAC · private read", BLUE,   style="dashed")
-e("acm",  "cf",  "TLS cert",             PURPLE, style="dashed", fs="9")
+    # ⑥ Multi-AZ replication
+    rds_a >> ef("⑥ synchronous replication (Multi-AZ failover)", RED,   dashed=True) >> rds_b
+    redis_a >> Edge(
+        label="⑥ async replication\n(replication group)",
+        color=DKGRN, style="dashed", constraint="false",
+    ) >> redis_b
 
-# ② API path
-e("dns",   "waf",      "② API (HTTPS)",    ORANGE, bold=True)
-e("waf",   "alb_a",    "② inspect",        ORANGE, w="3")
-e("waf",   "alb_b",    "② inspect",        ORANGE, w="3")
-e("acm",   "alb_a",    "TLS cert",         PURPLE, style="dashed", fs="9")
-e("acm",   "alb_b",    "TLS cert",         PURPLE, style="dashed", fs="9")
-e("igw",   "alb_a",    "inbound",          GREEN,  style="dashed", fs="9")
-e("igw",   "alb_b",    "inbound",          GREEN,  style="dashed", fs="9")
-# High-weight edges that also enforce Public→App tier ordering
-e("alb_a", "fargate_a","② → target group", ORANGE, bold=True, w="8")
-e("alb_b", "fargate_b","② → target group", ORANGE, bold=True, w="8")
+    # ⑦ Observability: Fargate → CloudWatch alarms → SNS. AWS Budgets is an
+    #    independent billing monitor (emails directly; not fed by CloudWatch) —
+    #    invisible edge only anchors it in the cluster.
+    fargate_a >> ef("⑦ logs + metrics", TEAL, dashed=True) >> cw
+    fargate_b >> ef("⑦ logs + metrics", TEAL, dashed=True) >> cw
+    cw >> ef("⑦ alarms",  TEAL) >> sns
+    cw >> Edge(style="invis") >> budgets
 
-# ③ Data — high weight enforces App→DB ordering
-e("fargate_a","rds_a",   "③ SQL + pgvector", RED,   bold=True, w="8")
-e("fargate_b","rds_a",   "③ SQL + pgvector", RED,   bold=True, w="3")
-e("fargate_a","redis_a", "③ cache r/w",      DKGRN, bold=True, w="5")
-e("fargate_b","redis_a", "③ cache r/w",      DKGRN, bold=True, w="3")
 
-# ④ ECR pull
-e("fargate_a","ecr","④ pull image", PURPLE, style="dashed")
-e("fargate_b","ecr","④ pull image", PURPLE, style="dashed")
-
-# ⑤ Egress — Private App Subnet → NAT Gateway (Public Subnet) → IGW → Internet
-e("fargate_a","nat_a","⑤ LLM / tool calls", ORANGE, constraint="false")
-e("fargate_b","nat_b","⑤ LLM / tool calls", ORANGE, constraint="false")
-e("nat_a",    "igw",  "⑤ outbound HTTPS",   ORANGE, constraint="false")
-e("nat_b",    "igw",  "⑤ outbound HTTPS",   ORANGE, constraint="false")
-e("igw","deepseek","⑤ DeepSeek", ORANGE, fs="9")
-e("igw","openai",  "⑤ OpenAI",   ORANGE, fs="9")
-e("igw","tavily",  "⑤ Tavily",   ORANGE, fs="9")
-e("igw","gcal",    "⑤ Google",   ORANGE, fs="9")
-
-# ⑥ Replication
-e("rds_a",  "rds_b",
-  "⑥ synchronous replication (Multi-AZ failover)", RED,   style="dashed")
-e("redis_a","redis_b",
-  "⑥ async replication (replication group)",       DKGRN, style="dashed")
-
-# ⑦ Observability
-e("fargate_a","cw","⑦ logs + metrics", TEAL, style="dashed", constraint="false")
-e("fargate_b","cw","⑦ logs + metrics", TEAL, style="dashed", constraint="false")
-e("cw","sns",    "⑦ alarms",  TEAL)
-e("cw","budgets","cost alarm", TEAL, style="dashed")
-
-# ─────────────────────────────────────────────────────────────────────────────
-dot.render(cleanup=True)
 print("✅  aether_aws_architecture.png written")

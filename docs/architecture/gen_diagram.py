@@ -20,7 +20,7 @@ dot.attr(
     pad="1.0",
     nodesep="0.65",
     ranksep="0.9",
-    splines="spline",
+    splines="ortho",
     compound="true",
     newrank="true",
     size="26,18!",
@@ -45,7 +45,7 @@ RED="#B71C1C";  DKGRN="#1B5E20"; TEAL="#006064"
 def e(src, dst, label="", color="#555", style="solid",
       bold=False, fs="10", constraint="true", w="1"):
     dot.edge(src, dst,
-             label=label, color=color, fontcolor=color,
+             xlabel=label, color=color, fontcolor=color,
              fontname="Helvetica", fontsize=fs,
              style="bold" if bold else style,
              constraint=constraint, arrowsize="0.75",

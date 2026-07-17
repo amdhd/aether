@@ -214,6 +214,49 @@ resource "aws_elasticache_replication_group" "redis" {
   tags              = { Name = "${var.name_prefix}-redis" }
 }
 
+# --- VPC interface endpoints (PrivateLink) ---
+# Keep ECR pulls, secret fetches, and log shipping on the AWS private backbone
+# instead of egressing through NAT. (The free S3 gateway endpoint for ECR layers
+# is created in the VPC module.) External LLM/tool APIs still use NAT.
+locals {
+  interface_endpoints = var.enable_vpc_endpoints ? toset([
+    "ecr.api", "ecr.dkr", "secretsmanager", "logs",
+  ]) : toset([])
+}
+
+resource "aws_security_group" "vpce" {
+  count       = var.enable_vpc_endpoints ? 1 : 0
+  name_prefix = "${var.name_prefix}-vpce-"
+  description = "VPC interface endpoints: HTTPS from the API tasks"
+  vpc_id      = module.vpc.vpc_id
+  tags        = { Name = "${var.name_prefix}-vpce" }
+
+  lifecycle {
+    create_before_destroy = true
+  }
+}
+
+resource "aws_vpc_security_group_ingress_rule" "vpce_https" {
+  count                        = var.enable_vpc_endpoints ? 1 : 0
+  security_group_id            = aws_security_group.vpce[0].id
+  description                  = "HTTPS from the API tasks"
+  ip_protocol                  = "tcp"
+  from_port                    = 443
+  to_port                      = 443
+  referenced_security_group_id = module.security_groups.api_sg_id
+}
+
+resource "aws_vpc_endpoint" "interface" {
+  for_each            = local.interface_endpoints
+  vpc_id              = module.vpc.vpc_id
+  service_name        = "com.amazonaws.${var.aws_region}.${each.value}"
+  vpc_endpoint_type   = "Interface"
+  subnet_ids          = module.vpc.app_subnet_ids
+  security_group_ids  = [aws_security_group.vpce[0].id]
+  private_dns_enabled = true
+  tags                = { Name = "${var.name_prefix}-vpce-${each.value}" }
+}
+
 # --- WAF: rate-based rule on the ALB (protects the LLM endpoint from abuse) ---
 resource "aws_wafv2_web_acl" "api" {
   name  = "${var.name_prefix}-api-waf"

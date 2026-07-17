@@ -119,7 +119,10 @@ Redis**; ⑥ outbound LLM/tool calls egress via **NAT**; ⑦ logs and alarms flo
 
 - **Networking** — 3-tier subnets (public / app / db) across 2 AZs; compute and
   DB in private subnets; VPC default security group locked to deny-all;
-  reference-based SG chain (ALB → API → RDS/Redis, no CIDR leakage).
+  reference-based SG chain (ALB → API → RDS/Redis, no CIDR leakage);
+  **PrivateLink** — an S3 gateway endpoint plus interface endpoints (ECR api/dkr,
+  Secrets Manager, CloudWatch Logs) so image pulls, secret fetches, and log
+  shipping stay on the AWS backbone instead of egressing through NAT.
 - **Compute** — ECS Fargate on Graviton; deployment **circuit breaker with
   auto-rollback**; target-tracking autoscaling in HA.
 - **Data** — Amazon RDS PostgreSQL + pgvector, **encrypted at rest**; Multi-AZ +

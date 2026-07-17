@@ -104,3 +104,9 @@ variable "waf_rate_limit" {
   type        = number
   default     = 1000
 }
+
+variable "enable_vpc_endpoints" {
+  description = "Create VPC interface endpoints (ECR api/dkr, Secrets Manager, CloudWatch Logs) so those calls use PrivateLink instead of NAT. On in both demo and HA; set false to trim cost."
+  type        = bool
+  default     = true
+}

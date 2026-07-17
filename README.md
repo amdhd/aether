@@ -334,8 +334,16 @@ make down      # destroy the ephemeral layer → hourly billing stops
 ```
 
 Flip `make up HA=true` for the production-grade shape (Multi-AZ RDS, autoscaling,
-Redis). Set `api_domain_name` / `hosted_zone_name` in `terraform.tfvars` to get
-HTTPS on the API via ACM + Route 53.
+Redis).
+
+**Custom domain (Route 53 + ACM).** Create a Route 53 public hosted zone for your
+domain and delegate your registrar's nameservers to it, then:
+- **Frontend** (CloudFront) — set `frontend_domain_name` + `hosted_zone_name` in
+  `layer1_persistent/terraform.tfvars`. Serves the SPA at the apex + `www` over
+  HTTPS (ACM cert auto-created in `us-east-1`).
+- **API** (ALB) — set `api_domain_name` + `hosted_zone_name` in
+  `layer2_ephemeral/terraform.tfvars`. Serves the API at `api.<domain>` over
+  HTTPS (regional ACM cert). Certs are DNS-validated automatically via the zone.
 
 ### Alternative (managed PaaS)
 

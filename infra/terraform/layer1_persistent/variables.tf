@@ -30,3 +30,16 @@ variable "monthly_budget_usd" {
   type        = number
   default     = 10
 }
+
+# --- Custom domain for the SPA frontend (CloudFront) ---
+variable "frontend_domain_name" {
+  description = "Apex domain to serve the SPA on, e.g. ahmadhadi.info. Empty = default *.cloudfront.net HTTPS."
+  type        = string
+  default     = ""
+}
+
+variable "hosted_zone_name" {
+  description = "Route53 hosted zone that owns frontend_domain_name (e.g. ahmadhadi.info). Required when frontend_domain_name is set."
+  type        = string
+  default     = ""
+}

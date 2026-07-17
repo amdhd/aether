@@ -6,6 +6,84 @@
 
 data "aws_caller_identity" "current" {}
 
+locals {
+  # A custom frontend domain swaps CloudFront's default cert for an ACM cert and
+  # adds apex + www aliases.
+  frontend_domain = var.frontend_domain_name != ""
+}
+
+# Hosted zone (must already exist — created once, out of band) for DNS validation
+# and the apex/www alias records.
+data "aws_route53_zone" "main" {
+  count = local.frontend_domain ? 1 : 0
+  name  = var.hosted_zone_name
+}
+
+# ACM cert for the SPA — CloudFront requires it in us-east-1. Covers apex + www.
+resource "aws_acm_certificate" "frontend" {
+  count                     = local.frontend_domain ? 1 : 0
+  provider                  = aws.us_east_1
+  domain_name               = var.frontend_domain_name
+  subject_alternative_names = ["www.${var.frontend_domain_name}"]
+  validation_method         = "DNS"
+
+  lifecycle {
+    create_before_destroy = true
+  }
+  tags = { Name = "${var.name_prefix}-frontend-cert" }
+}
+
+resource "aws_route53_record" "frontend_cert_validation" {
+  for_each = local.frontend_domain ? {
+    for dvo in aws_acm_certificate.frontend[0].domain_validation_options : dvo.domain_name => {
+      name   = dvo.resource_record_name
+      type   = dvo.resource_record_type
+      record = dvo.resource_record_value
+    }
+  } : {}
+
+  zone_id         = data.aws_route53_zone.main[0].zone_id
+  name            = each.value.name
+  type            = each.value.type
+  records         = [each.value.record]
+  ttl             = 60
+  allow_overwrite = true
+}
+
+resource "aws_acm_certificate_validation" "frontend" {
+  count                   = local.frontend_domain ? 1 : 0
+  provider                = aws.us_east_1
+  certificate_arn         = aws_acm_certificate.frontend[0].arn
+  validation_record_fqdns = [for r in aws_route53_record.frontend_cert_validation : r.fqdn]
+}
+
+# Apex + www → the CloudFront distribution.
+resource "aws_route53_record" "frontend_apex" {
+  count   = local.frontend_domain ? 1 : 0
+  zone_id = data.aws_route53_zone.main[0].zone_id
+  name    = var.frontend_domain_name
+  type    = "A"
+
+  alias {
+    name                   = aws_cloudfront_distribution.web.domain_name
+    zone_id                = aws_cloudfront_distribution.web.hosted_zone_id
+    evaluate_target_health = false
+  }
+}
+
+resource "aws_route53_record" "frontend_www" {
+  count   = local.frontend_domain ? 1 : 0
+  zone_id = data.aws_route53_zone.main[0].zone_id
+  name    = "www.${var.frontend_domain_name}"
+  type    = "A"
+
+  alias {
+    name                   = aws_cloudfront_distribution.web.domain_name
+    zone_id                = aws_cloudfront_distribution.web.hosted_zone_id
+    evaluate_target_health = false
+  }
+}
+
 # --- ECR: API image ---
 resource "aws_ecr_repository" "api" {
   name                 = "${var.name_prefix}-api"
@@ -78,6 +156,9 @@ resource "aws_cloudfront_distribution" "web" {
   price_class         = "PriceClass_100" # cheapest edge footprint
   comment             = "${var.name_prefix} SPA"
 
+  # Custom domain(s) served by this distribution (apex + www) when configured.
+  aliases = local.frontend_domain ? [var.frontend_domain_name, "www.${var.frontend_domain_name}"] : null
+
   origin {
     domain_name              = aws_s3_bucket.web.bucket_regional_domain_name
     origin_id                = "s3-web"
@@ -114,7 +195,11 @@ resource "aws_cloudfront_distribution" "web" {
   }
 
   viewer_certificate {
-    cloudfront_default_certificate = true # free *.cloudfront.net HTTPS
+    # Default *.cloudfront.net cert, or the ACM cert for the custom domain.
+    cloudfront_default_certificate = local.frontend_domain ? null : true
+    acm_certificate_arn            = local.frontend_domain ? aws_acm_certificate_validation.frontend[0].certificate_arn : null
+    ssl_support_method             = local.frontend_domain ? "sni-only" : null
+    minimum_protocol_version       = local.frontend_domain ? "TLSv1.2_2021" : null
   }
 }
 

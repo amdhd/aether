@@ -14,6 +14,7 @@ ECR_URL      = $(shell cd $(L1) && $(TF) output -raw ecr_repository_url 2>/dev/n
 WEB_BUCKET   = $(shell cd $(L1) && $(TF) output -raw web_bucket 2>/dev/null)
 CF_ID        = $(shell cd $(L1) && $(TF) output -raw cloudfront_distribution_id 2>/dev/null)
 CF_DOMAIN    = $(shell cd $(L1) && $(TF) output -raw cloudfront_domain_name 2>/dev/null)
+FRONTEND_URL = $(shell cd $(L1) && $(TF) output -raw frontend_url 2>/dev/null)
 ALB_URL      = $(shell cd $(L2) && $(TF) output -raw api_alb_url 2>/dev/null)
 
 .PHONY: help fmt validate init base-up image web up migrate down verify-clean destroy-all
@@ -53,7 +54,7 @@ web:
 	cd web && VITE_API_URL="$(ALB_URL)/api/v1" npm ci && npm run build
 	aws s3 sync web/dist s3://$(WEB_BUCKET) --delete
 	aws cloudfront create-invalidation --distribution-id $(CF_ID) --paths '/*'
-	@echo "Frontend: https://$(CF_DOMAIN)"
+	@echo "Frontend: $(FRONTEND_URL)"
 
 # --- Ephemeral stack ---
 up:

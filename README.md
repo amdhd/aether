@@ -139,8 +139,27 @@ Redis**; ⑥ outbound LLM/tool calls egress via **NAT**; ⑦ logs and alarms flo
 - **CI/CD** — GitHub Actions with **OIDC (no static keys)** and three gates:
   **Infracost** (cost), **Checkov** (IaC), **Trivy** (container CVEs); rolling
   deploy with auto-rollback.
-- **Cost & ops** — CloudWatch alarms → SNS, an **AWS Budgets** alert, and an
-  ephemeral `apply → demo → destroy` model with a `verify-clean` orphan check.
+- **Cost & ops** — CloudWatch alarms → SNS, a **CloudWatch dashboard**
+  (ALB · ECS · RDS), an **AWS Budgets** alert, and an ephemeral
+  `apply → demo → destroy` model with a `verify-clean` orphan check.
+
+### Production roadmap (known next steps)
+
+Deliberately **not** implemented yet — the stack runs as a cost-optimized,
+ephemeral demo, so several standing-production controls are documented as
+accepted trade-offs (see [`infra/terraform/.checkov.yaml`](infra/terraform/.checkov.yaml))
+rather than built. For a permanent production environment, the next steps are:
+
+- **Observability** — distributed tracing (AWS X-Ray / OpenTelemetry ADOT
+  sidecar) to break down request latency across ALB → Fargate → RDS →
+  DeepSeek; CloudWatch **custom LLM metrics** (token/cost per turn via EMF, from
+  the data already in `usage_logs`).
+- **Security & audit** — **CloudTrail** (account API audit), **VPC Flow Logs**,
+  **GuardDuty** threat detection, access logs (ALB/CloudFront/WAF), a
+  **CloudFront-scoped WAF** for the edge, **Secrets Manager rotation**, and
+  customer-managed **KMS keys**.
+- **Resilience / DR** — cross-region RDS snapshot copy + **Route 53** health-check
+  failover; ElastiCache snapshots; NACLs for subnet-level defense-in-depth.
 
 ## Features
 

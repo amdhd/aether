@@ -400,3 +400,65 @@ resource "aws_cloudwatch_metric_alarm" "rds_cpu" {
   alarm_actions       = [aws_sns_topic.alerts.arn]
   tags                = { Name = "${var.name_prefix}-rds-cpu" }
 }
+
+# --- Single-pane service-health dashboard (ALB · ECS · RDS) ---
+resource "aws_cloudwatch_dashboard" "main" {
+  dashboard_name = "${var.name_prefix}-service-health"
+  dashboard_body = jsonencode({
+    widgets = [
+      {
+        type       = "text", x = 0, y = 0, width = 24, height = 1,
+        properties = { markdown = "# Aether — service health · ${var.environment}" }
+      },
+      {
+        type = "metric", x = 0, y = 1, width = 12, height = 6,
+        properties = {
+          title = "ALB — requests & 5xx", region = var.aws_region, view = "timeSeries", period = 60
+          metrics = [
+            ["AWS/ApplicationELB", "RequestCount", "LoadBalancer", module.ecs.alb_arn_suffix, { stat = "Sum", label = "Requests" }],
+            ["AWS/ApplicationELB", "HTTPCode_Target_5XX_Count", "LoadBalancer", module.ecs.alb_arn_suffix, { stat = "Sum", label = "5xx" }]
+          ]
+        }
+      },
+      {
+        type = "metric", x = 12, y = 1, width = 12, height = 6,
+        properties = {
+          title = "ALB — latency (s)", region = var.aws_region, view = "timeSeries", period = 60
+          metrics = [
+            ["AWS/ApplicationELB", "TargetResponseTime", "LoadBalancer", module.ecs.alb_arn_suffix, { stat = "Average", label = "avg" }],
+            ["AWS/ApplicationELB", "TargetResponseTime", "LoadBalancer", module.ecs.alb_arn_suffix, { stat = "p99", label = "p99" }]
+          ]
+        }
+      },
+      {
+        type = "metric", x = 0, y = 7, width = 12, height = 6,
+        properties = {
+          title = "ECS Fargate — CPU & memory %", region = var.aws_region, view = "timeSeries", period = 60
+          metrics = [
+            ["AWS/ECS", "CPUUtilization", "ClusterName", module.ecs.cluster_name, "ServiceName", module.ecs.service_name, { stat = "Average", label = "CPU %" }],
+            ["AWS/ECS", "MemoryUtilization", "ClusterName", module.ecs.cluster_name, "ServiceName", module.ecs.service_name, { stat = "Average", label = "Mem %" }]
+          ]
+        }
+      },
+      {
+        type = "metric", x = 12, y = 7, width = 12, height = 6,
+        properties = {
+          title = "RDS — CPU % & connections", region = var.aws_region, view = "timeSeries", period = 60
+          metrics = [
+            ["AWS/RDS", "CPUUtilization", "DBInstanceIdentifier", module.rds.instance_identifier, { stat = "Average", label = "CPU %" }],
+            ["AWS/RDS", "DatabaseConnections", "DBInstanceIdentifier", module.rds.instance_identifier, { stat = "Average", label = "Connections" }]
+          ]
+        }
+      },
+      {
+        type = "metric", x = 0, y = 13, width = 12, height = 6,
+        properties = {
+          title = "RDS — free storage (bytes)", region = var.aws_region, view = "timeSeries", period = 300
+          metrics = [
+            ["AWS/RDS", "FreeStorageSpace", "DBInstanceIdentifier", module.rds.instance_identifier, { stat = "Average", label = "Free storage" }]
+          ]
+        }
+      }
+    ]
+  })
+}

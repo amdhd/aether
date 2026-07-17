@@ -131,7 +131,9 @@ resource "aws_lb_target_group" "api" {
 }
 
 locals {
-  https_enabled = var.certificate_arn != ""
+  # Must be known at plan time — count/for_each cannot depend on certificate_arn,
+  # which is only computed during apply (from ACM validation).
+  https_enabled = var.enable_https
 }
 
 # HTTP:80 — forwards directly when there's no cert; redirects to HTTPS when a

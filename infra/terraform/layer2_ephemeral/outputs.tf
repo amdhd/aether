@@ -1,5 +1,5 @@
 output "api_alb_url" {
-  description = "Public API entry point (HTTPS when a custom domain is set, else the HTTP ALB DNS). Set VITE_API_URL to \"<this>/api/v1\" and GOOGLE_REDIRECT_URI accordingly."
+  description = "Public API base URL (HTTPS with a custom domain, else the HTTP ALB DNS). VITE_API_URL = this (the SPA appends /api/v1 itself); GOOGLE_REDIRECT_URI = this + /api/v1/integrations/google/callback."
   value       = local.api_url
 }
 

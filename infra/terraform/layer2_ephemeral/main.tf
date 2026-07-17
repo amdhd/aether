@@ -121,7 +121,9 @@ module "ecs" {
   secrets     = local.container_secrets
   secret_arns = [local.app_secret_arn, aws_secretsmanager_secret.db_url.arn]
 
-  # When a domain is configured, hand the validated cert to the ALB HTTPS listener.
+  # enable_https is plan-time (drives the listener's count); certificate_arn is
+  # the apply-time value it uses.
+  enable_https    = local.custom_domain
   certificate_arn = local.custom_domain ? aws_acm_certificate_validation.api[0].certificate_arn : ""
 
   high_availability = var.high_availability

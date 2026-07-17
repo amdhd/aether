@@ -51,7 +51,10 @@ image:
 
 web:
 	@test -n "$(WEB_BUCKET)" || { echo "run 'make base-up' first (no bucket)"; exit 1; }
-	cd web && VITE_API_URL="$(ALB_URL)/api/v1" npm ci && npm run build
+	@api=$$(cd $(L2) && $(TF) output -raw api_alb_url); \
+	 test -n "$$api" || { echo "ERROR: could not read api_alb_url — is layer2 applied and AWS_PROFILE set?"; exit 1; }; \
+	 echo "Building SPA with VITE_API_URL=$$api"; \
+	 (cd web && VITE_API_URL="$$api" npm ci && npm run build)
 	aws s3 sync web/dist s3://$(WEB_BUCKET) --delete
 	aws cloudfront create-invalidation --distribution-id $(CF_ID) --paths '/*'
 	@echo "Frontend: $(FRONTEND_URL)"

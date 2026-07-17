@@ -81,6 +81,12 @@ variable "certificate_arn" {
   default     = ""
 }
 
+variable "enable_https" {
+  description = "Create the HTTPS:443 listener. Must be known at plan time (a bool from the caller), unlike certificate_arn which is computed during apply."
+  type        = bool
+  default     = false
+}
+
 variable "log_retention_days" {
   type    = number
   default = 30

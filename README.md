@@ -1,6 +1,8 @@
+<img width="3665" height="5019" alt="aether_aws_architecture" src="https://github.com/user-attachments/assets/fb71b338-657f-4b7f-8daa-72fcadeb166a" />
+
 # Aether
 
-An AI personal assistant web app: FastAPI + async SQLAlchemy backend, React +
+An AI Marketing assistant web app: FastAPI + async SQLAlchemy backend, React +
 TypeScript frontend, with a DeepSeek-powered tool-calling agent for managing
 your tasks, notes, calendar, and more.
 

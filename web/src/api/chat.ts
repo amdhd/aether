@@ -98,7 +98,14 @@ export async function streamChatMessage(
 
   if (res.status === 401) {
     token = await refreshAccessToken()
-    res = await postChatMessage(conversationId, content, file, token)
+    // A null token means the refresh cookie is gone/expired, and
+    // refreshAccessToken() has already logged out — so the route guard will
+    // bounce to /login. Only retry when we actually got a fresh token;
+    // otherwise fall through with the original 401 instead of firing a second
+    // doomed request that surfaces a confusing raw error.
+    if (token) {
+      res = await postChatMessage(conversationId, content, file, token)
+    }
   }
 
   if (!res.ok || !res.body) {

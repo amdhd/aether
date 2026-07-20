@@ -60,4 +60,28 @@ describe('streamChatMessage auth handling', () => {
     expect(tokens.join('')).toBe('Hi')
     expect(doneTitle).toBe('Trip')
   })
+
+  it('skips a malformed frame instead of aborting the rest of the stream', async () => {
+    const sseBody =
+      'event: token\ndata: {"content":"Hel"}\n\n' +
+      'event: token\ndata: {broken json\n\n' + // malformed — must be skipped, not fatal
+      'event: token\ndata: {"content":"lo"}\n\n' +
+      'event: done\ndata: {"conversation_title":"Trip"}\n\n'
+    fetchMock.mockResolvedValue(
+      new Response(sseBody, { status: 200, headers: { 'Content-Type': 'text/event-stream' } }),
+    )
+
+    const tokens: string[] = []
+    let doneTitle = ''
+    await streamChatMessage(1, 'hi', {
+      onToken: (chunk) => tokens.push(chunk),
+      onDone: (data) => {
+        doneTitle = data.conversation_title
+      },
+    })
+
+    // The good frames on both sides of the malformed one still arrived.
+    expect(tokens.join('')).toBe('Hello')
+    expect(doneTitle).toBe('Trip')
+  })
 })

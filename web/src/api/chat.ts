@@ -67,7 +67,19 @@ async function postChatMessage(
 
 function dispatchEvent(event: string, data: string, handlers: ChatStreamHandlers): void {
   if (!data) return
-  const parsed = JSON.parse(data)
+  // A single malformed frame (truncated/garbled SSE payload) must not throw out
+  // of the read loop and abort an otherwise-healthy stream — skip it instead.
+  let parsed: {
+    content?: string
+    name?: string
+    message?: string
+    conversation_title?: string
+  }
+  try {
+    parsed = JSON.parse(data)
+  } catch {
+    return
+  }
   switch (event) {
     case 'token':
       handlers.onToken?.(parsed.content)
@@ -79,7 +91,7 @@ function dispatchEvent(event: string, data: string, handlers: ChatStreamHandlers
       handlers.onToolCall?.(parsed.name)
       break
     case 'done':
-      handlers.onDone?.(parsed)
+      handlers.onDone?.({ conversation_title: parsed.conversation_title ?? '' })
       break
     case 'error':
       handlers.onError?.(parsed.message)

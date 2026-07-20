@@ -393,7 +393,15 @@ export function ChatPage() {
                     >
                       A
                     </div>
-                    <div className="min-w-0 flex-1 pt-0.5">
+                    <div
+                      className="min-w-0 flex-1 pt-0.5"
+                      // Announce the assistant's reply to screen readers as it
+                      // streams in, rather than leaving them silent until the
+                      // query refetch swaps in the final message.
+                      aria-live="polite"
+                      aria-atomic="false"
+                      aria-busy={isStreaming}
+                    >
                       {streamingToolCalls.map((name, i) => (
                         <p key={i} className="mb-2 flex items-center gap-2 text-sm text-muted-foreground">
                           <span className="inline-block h-1.5 w-1.5 animate-pulse rounded-full bg-muted-foreground" />

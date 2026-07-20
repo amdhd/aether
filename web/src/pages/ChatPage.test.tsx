@@ -1,4 +1,4 @@
-import { screen, waitFor } from '@testing-library/react'
+import { act, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { describe, expect, it, vi } from 'vitest'
 
@@ -101,6 +101,36 @@ describe('ChatPage', () => {
 
     expect(await screen.findByText('Hello Aether')).toBeInTheDocument()
     expect(chatApi.streamChatMessage).toHaveBeenCalledWith(1, 'Hello Aether', expect.any(Object), null)
+
+    resolveStream()
+  })
+
+  it('exposes streamed assistant output in a polite live region', async () => {
+    vi.mocked(chatApi.listConversations).mockResolvedValue(mockConversationsPage(mockConversations))
+    vi.mocked(chatApi.getConversation).mockResolvedValue({ ...mockDetail, messages: [] })
+
+    let capturedHandlers: chatApi.ChatStreamHandlers | undefined
+    let resolveStream: () => void = () => {}
+    vi.mocked(chatApi.streamChatMessage).mockImplementation(
+      (_id, _content, handlers) =>
+        new Promise((resolve) => {
+          capturedHandlers = handlers
+          resolveStream = () => resolve()
+        }),
+    )
+
+    renderWithProviders(<ChatPage />)
+    await screen.findByRole('button', { name: 'Trip planning' })
+
+    const textbox = await screen.findByLabelText('Message')
+    await userEvent.type(textbox, 'Hello Aether')
+    await userEvent.click(screen.getByRole('button', { name: /send message/i }))
+
+    // Drive a streamed token through the captured handler.
+    act(() => capturedHandlers?.onToken?.('Streaming answer'))
+
+    const streamed = await screen.findByText('Streaming answer')
+    expect(streamed.closest('[aria-live="polite"]')).not.toBeNull()
 
     resolveStream()
   })

@@ -96,6 +96,87 @@ async def test_summarizes_on_reasoning_payload_and_meters_usage() -> None:
         assert totals == (100, 1)
 
 
+async def _seed_conversation_with_boundary_tool_group() -> int:
+    """Seed a conversation where the fold boundary (len - KEEP_RECENT_MESSAGES)
+    lands *inside* a tool group: an assistant `tool_calls` turn is the last
+    folded message and its `tool` result is the first kept one. Without the
+    boundary guard the kept window would start with an orphaned tool message."""
+    async with TestingSessionLocal() as db:
+        user = User(email="boundary@example.com", name="Boundary", password_hash="x")
+        db.add(user)
+        await db.commit()
+        await db.refresh(user)
+
+        conversation = Conversation(user_id=user.id, title="t")
+        db.add(conversation)
+        await db.commit()
+        await db.refresh(conversation)
+
+        # 12 messages total, KEEP_RECENT_MESSAGES = 10 -> naive boundary at idx 2.
+        # idx 0: big assistant turn (pushes fold set over threshold)
+        # idx 1: assistant tool_calls  (naive to_fold[-1])
+        # idx 2: tool result           (would be orphaned as kept[0])
+        # idx 3..11: 9 more kept messages
+        db.add(
+            Message(
+                conversation_id=conversation.id,
+                role=MessageRole.assistant,
+                content="",
+                reasoning_content="r" * 13000,
+            )
+        )
+        db.add(
+            Message(
+                conversation_id=conversation.id,
+                role=MessageRole.assistant,
+                content="",
+                reasoning_content="r" * 13000,
+                tool_calls=[{"id": "call_1", "function": {"name": "list_tasks", "arguments": "{}"}}],
+            )
+        )
+        db.add(
+            Message(
+                conversation_id=conversation.id,
+                role=MessageRole.tool,
+                content="{}",
+                tool_call_id="call_1",
+                tool_name="list_tasks",
+            )
+        )
+        for _ in range(9):
+            db.add(Message(conversation_id=conversation.id, role=MessageRole.user, content="hi"))
+        await db.commit()
+        return conversation.id
+
+
+async def test_summary_boundary_does_not_orphan_tool_message() -> None:
+    conversation_id = await _seed_conversation_with_boundary_tool_group()
+    client = _fake_client(_summary_response("A summary."))
+
+    async with TestingSessionLocal() as db:
+        conversation = await db.get(Conversation, conversation_id)
+        await memory.maybe_summarize_history(db, conversation, client)
+
+    async with TestingSessionLocal() as db:
+        conversation = await db.get(Conversation, conversation_id)
+        assert conversation.memory_summarized_until_id is not None
+
+        # The first message kept verbatim after the summary boundary must not be
+        # a `tool` message, or _build_context would rebuild a turn the provider
+        # rejects (tool result with no preceding assistant tool_calls).
+        first_kept = await db.scalar(
+            select(Message)
+            .where(
+                Message.conversation_id == conversation_id,
+                Message.id > conversation.memory_summarized_until_id,
+            )
+            .order_by(Message.id)
+            .limit(1)
+        )
+        assert first_kept is not None
+        assert first_kept.role != MessageRole.tool
+
+
 async def test_no_summary_when_below_threshold() -> None:
     # Small reasoning payloads stay under the threshold -> no LLM call, no usage.
     conversation_id = await _seed_conversation(reasoning_len=100)

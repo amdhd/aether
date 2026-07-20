@@ -300,6 +300,19 @@ resource "aws_wafv2_web_acl" "api" {
       managed_rule_group_statement {
         name        = "AWSManagedRulesCommonRuleSet"
         vendor_name = "AWS"
+
+        # The CommonRuleSet's SizeRestrictions_BODY blocks any request body over
+        # 8 KB, which would 403 legitimate chat attachment uploads (CSV/TSV up to
+        # ~200 KB, see api MAX_ATTACHMENT_BYTES) before they reach the app. Drop
+        # it to Count so WAF still meters oversized bodies while the app's own
+        # size/type validation stays the real gate. All other CRS rules keep
+        # blocking.
+        rule_action_override {
+          name = "SizeRestrictions_BODY"
+          action_to_use {
+            count {}
+          }
+        }
       }
     }
     visibility_config {

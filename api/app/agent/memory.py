@@ -58,7 +58,20 @@ async def maybe_summarize_history(db: AsyncSession, conversation: Conversation, 
     if len(unsummarized) <= KEEP_RECENT_MESSAGES:
         return
 
-    to_fold = unsummarized[:-KEEP_RECENT_MESSAGES]
+    # Never cut between an assistant `tool_calls` message and its `tool` results.
+    # If the kept window would start with orphaned tool messages (their assistant
+    # call folded away), advance the boundary to fold them too — otherwise
+    # _build_context rebuilds a `tool` message with no preceding call and the
+    # provider rejects the turn with a 400.
+    split = len(unsummarized) - KEEP_RECENT_MESSAGES
+    while split < len(unsummarized) and unsummarized[split].role == MessageRole.tool:
+        split += 1
+    if split >= len(unsummarized):
+        # The whole tail is one unbroken tool group; there's nothing we can keep
+        # verbatim without orphaning it. Leave it for a later turn.
+        return
+
+    to_fold = unsummarized[:split]
     if sum(_message_char_len(m) for m in to_fold) < SUMMARIZE_CHAR_THRESHOLD:
         return
 

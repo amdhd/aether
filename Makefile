@@ -53,6 +53,11 @@ web:
 	@test -n "$(WEB_BUCKET)" || { echo "run 'make base-up' first (no bucket)"; exit 1; }
 	@api=$$(cd $(L2) && $(TF) output -raw api_alb_url); \
 	 test -n "$$api" || { echo "ERROR: could not read api_alb_url — is layer2 applied and AWS_PROFILE set?"; exit 1; }; \
+	 case "$$api" in http://*) \
+	   echo "WARNING: API is HTTP-only ($$api). The HTTPS SPA can't call it"; \
+	   echo "         (mixed content) and Secure cookies won't set, so login will fail."; \
+	   echo "         Set api_domain_name/hosted_zone_name in layer2 for a working demo."; ;; \
+	 esac; \
 	 echo "Building SPA with VITE_API_URL=$$api"; \
 	 (cd web && VITE_API_URL="$$api" npm ci && npm run build)
 	aws s3 sync web/dist s3://$(WEB_BUCKET) --delete

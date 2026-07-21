@@ -108,7 +108,7 @@ Redis**; ⑥ outbound LLM/tool calls egress via **NAT**; ⑦ logs and alarms flo
 | Cache / shared rate-limit (HA) | **Amazon ElastiCache for Redis** (Multi-AZ) |
 | Secrets | **Secrets Manager** (injected via `valueFrom`, never in the image) |
 | Container image | **ECR** (scan-on-push) |
-| Edge protection | **AWS WAF** (rate-limit + AWS managed rule groups) |
+| Edge protection | **AWS WAF** (rate-limit + AWS managed rule groups; `SizeRestrictions_BODY` set to *count* so CSV/TSV uploads aren't blocked) |
 | Egress to external LLM/APIs | **NAT Gateway** |
 | Observability / cost | **CloudWatch, SNS, AWS Budgets** |
 
@@ -173,7 +173,8 @@ rather than built. For a permanent production environment, the next steps are:
   and notes, get the weather (data.gov.my), web search (Tavily), and manage
   your Google Calendar.
 - **Memory** — long conversations are automatically summarized so context
-  doesn't grow unbounded.
+  doesn't grow unbounded, folding older turns at a safe boundary that never
+  splits a tool call from its result.
 - **Tasks** — a kanban-style board (To do / Doing / Done) with priorities and
   due dates.
 - **Notes** — notes with tags and **semantic search**: notes are embedded
@@ -186,7 +187,9 @@ rather than built. For a permanent production environment, the next steps are:
   delivered as **HttpOnly cookies** (not readable by JS). Refresh tokens
   **rotate on every use** with **reuse detection**: replaying a rotated token
   revokes the whole token family.
-- **Rate limiting** on chat and external-API tools (web search, calendar).
+- **Rate limiting** on chat and external-API tools (web search, calendar). The
+  in-memory sliding-window limiter periodically evicts idle keys so it stays
+  bounded on a long-running instance (Redis-backed for multi-instance HA).
 - **Prompt-injection guardrail** — the base system prompt marks tool, web, and
   note content as untrusted data: embedded directives are ignored, and
   unrequested destructive actions require explicit confirmation.
@@ -337,6 +340,12 @@ make down      # destroy the ephemeral layer → hourly billing stops
 
 Flip `make up HA=true` for the production-grade shape (Multi-AZ RDS, autoscaling,
 Redis).
+
+> **A custom domain is required for a working end-to-end browser demo.** Without
+> one, the API is served over plaintext HTTP on the ALB — which the HTTPS SPA
+> can't call (mixed content), and `Secure` refresh cookies won't set. `make web`
+> prints a warning when it detects an HTTP-only API URL. Set `api_domain_name`
+> (below) for HTTPS end-to-end.
 
 **Custom domain (Route 53 + ACM).** Create a Route 53 public hosted zone for your
 domain and delegate your registrar's nameservers to it, then:

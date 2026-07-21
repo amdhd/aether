@@ -181,6 +181,12 @@ rather than built. For a permanent production environment, the next steps are:
   (OpenAI `text-embedding-3-small`) and stored in Postgres via **pgvector**, so
   the assistant retrieves by meaning, not just keywords. Falls back to a keyword
   scan when no embedding key is configured.
+- **RAG eval harness** — a reproducible eval suite for the note-search retrieval
+  + generation pipeline, measuring the three canonical **RAGAS** metrics
+  (faithfulness, context precision, answer relevancy) plus retrieval recall over
+  a curated golden dataset, with a documented **failure-mode log**. Runs against
+  the real retriever; keyless offline mode for CI. See
+  [`api/app/eval/`](api/app/eval/README.md) and run it with `make eval`.
 - **Analytics dashboard** — messages and token usage per day, tool-usage
   breakdown, and lifetime totals.
 - **Auth** — short-lived JWT access tokens kept in memory, plus refresh tokens

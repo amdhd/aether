@@ -11,6 +11,7 @@ from app.agent.client import get_deepseek_client
 from app.agent.memory import maybe_summarize_history
 from app.agent.personas import get_system_prompt
 from app.agent.tools import TOOL_SCHEMAS, call_tool
+from app.core import metrics
 from app.core.config import settings
 from app.core.logging import get_logger
 from app.models.conversation import Conversation
@@ -206,15 +207,28 @@ async def _run_agent(
             )
             return
 
+        prompt_tokens = usage["prompt_tokens"] if usage else 0
+        completion_tokens = usage["completion_tokens"] if usage else 0
+        latency_ms = int((time.monotonic() - started_at) * 1000)
         logger.info(
             "llm.turn user_id=%s conversation_id=%s prompt_tokens=%s completion_tokens=%s "
-            "tool_calls=%d latency_ms=%d",
+            "tool_calls=%d latency_ms=%d est_cost_usd=%s",
             user.id,
             conversation.id,
             usage["prompt_tokens"] if usage else None,
             usage["completion_tokens"] if usage else None,
             len(tool_call_chunks),
-            int((time.monotonic() - started_at) * 1000),
+            latency_ms,
+            metrics.estimate_cost_usd(prompt_tokens, completion_tokens),
+        )
+        # Emit the same facts as a CloudWatch EMF metric line (no-op unless
+        # EMF metrics are enabled) so token/cost/latency become alarmable metrics.
+        metrics.emit_llm_turn(
+            model=settings.DEEPSEEK_MODEL,
+            prompt_tokens=prompt_tokens,
+            completion_tokens=completion_tokens,
+            tool_calls=len(tool_call_chunks),
+            latency_ms=latency_ms,
         )
 
         content = "".join(content_parts) or None

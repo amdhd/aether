@@ -86,6 +86,12 @@ variable "alert_email" {
   default     = ""
 }
 
+variable "llm_cost_alarm_threshold_usd" {
+  description = "Alert when estimated LLM spend (from EMF metrics) exceeds this many USD in a single hour. A runaway-cost tripwire, not a billing figure."
+  type        = number
+  default     = 5.0
+}
+
 # --- Custom domain for the API (enables HTTPS on the ALB) ---
 variable "api_domain_name" {
   description = "FQDN to serve the API on, e.g. api.example.com. Empty = HTTP-only demo (no TLS on the ALB)."

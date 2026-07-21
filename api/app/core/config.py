@@ -59,6 +59,21 @@ class Settings(BaseSettings):
     DEEPSEEK_BASE_URL: str = "https://api.deepseek.com"
     DEEPSEEK_MODEL: str = "deepseek-v4-flash"
 
+    # Observability — CloudWatch Embedded Metric Format (EMF). When enabled,
+    # each completed agent turn emits a single EMF JSON line to stdout; the
+    # CloudWatch awslogs driver turns it into custom metrics (tokens, estimated
+    # cost, latency, tool calls) under METRICS_NAMESPACE with no extra
+    # infrastructure. Off in dev so local logs stay human-readable; set
+    # EMF_METRICS_ENABLED=true in deployed environments.
+    EMF_METRICS_ENABLED: bool = False
+    METRICS_NAMESPACE: str = "Aether/LLM"
+    # Approximate LLM token pricing (USD per 1M tokens), used only for the cost
+    # *estimate* metric — this is configuration, not gospel. Set these to your
+    # provider's current published rates; the defaults are order-of-magnitude
+    # placeholders for the configured DeepSeek model.
+    LLM_INPUT_COST_PER_1M_TOKENS: float = 0.27
+    LLM_OUTPUT_COST_PER_1M_TOKENS: float = 1.10
+
     # Rate limiting
     CHAT_RATE_LIMIT_PER_MINUTE: int = 20
     WEB_SEARCH_RATE_LIMIT_PER_MINUTE: int = 10

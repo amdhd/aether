@@ -1,0 +1,2 @@
+# Full per-run reports are throwaway; keep only the committed latest.md summary.
+*.json

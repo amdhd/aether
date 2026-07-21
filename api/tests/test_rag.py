@@ -77,6 +77,30 @@ async def test_search_falls_back_to_keyword(user: User) -> None:
         assert [n.title for n in results] == ["Travel plan"]
 
 
+async def test_keyword_search_matches_natural_language_question(user: User) -> None:
+    # The keyword fallback tokenizes the query, so a full-sentence question
+    # matches notes that mention any of its content words — the old whole-string
+    # LIKE matched nothing because the literal sentence never appears in a note.
+    async with TestingSessionLocal() as db:
+        db.add(Note(user_id=user.id, title="Carbonara recipe", content="2 eggs plus 1 yolk"))
+        db.add(Note(user_id=user.id, title="Groceries", content="milk and bread"))
+        await db.commit()
+        results = await note_search.search_notes(
+            db, user, "How many eggs do I use for carbonara?", limit=5
+        )
+        assert [n.title for n in results] == ["Carbonara recipe"]
+
+
+async def test_keyword_search_ignores_stopword_only_query(user: User) -> None:
+    # A query of nothing but stopwords has no usable terms; it must not match
+    # every note via an empty pattern.
+    async with TestingSessionLocal() as db:
+        db.add(Note(user_id=user.id, title="Anything", content="some content"))
+        await db.commit()
+        results = await note_search.search_notes(db, user, "how do i", limit=5)
+        assert results == []
+
+
 async def test_semantic_below_relevance_floor_falls_back_to_keyword(
     user: User, monkeypatch: pytest.MonkeyPatch
 ) -> None:

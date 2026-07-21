@@ -17,9 +17,10 @@ CF_DOMAIN    = $(shell cd $(L1) && $(TF) output -raw cloudfront_domain_name 2>/d
 FRONTEND_URL = $(shell cd $(L1) && $(TF) output -raw frontend_url 2>/dev/null)
 ALB_URL      = $(shell cd $(L2) && $(TF) output -raw api_alb_url 2>/dev/null)
 
-.PHONY: help fmt validate init base-up image web up migrate down verify-clean destroy-all
+.PHONY: help fmt validate init base-up image web up migrate down verify-clean destroy-all eval
 
 help:
+	@echo "eval          run the RAG eval harness (RAGAS-equivalent metrics)"
 	@echo "base-up       apply layer1 (persistent: ECR, S3, CloudFront, secrets)"
 	@echo "image         build+push the ARM64 API image to ECR"
 	@echo "web           build the SPA and sync to S3 + invalidate CloudFront"
@@ -30,6 +31,14 @@ help:
 	@echo "HA:  make up HA=true   (Multi-AZ RDS + autoscaling + Redis)"
 
 TFVARS = $(if $(HA),-var 'high_availability=$(HA)',) -var 'image_tag=$(IMAGE_TAG)'
+
+# --- RAG evaluation ---
+# Runs the RAGAS-equivalent eval suite (faithfulness / context precision /
+# answer relevancy) over the golden dataset. Uses the LLM backend when
+# DEEPSEEK_API_KEY is set, else the keyless offline heuristic backend. Point at
+# Postgres + pgvector via EVAL_DATABASE_URL for true semantic retrieval.
+eval:
+	cd api && python -m app.eval.run
 
 fmt:
 	$(TF) -chdir=infra/terraform fmt -recursive

@@ -37,7 +37,8 @@ def test_build_document_shape_is_valid_emf(monkeypatch: pytest.MonkeyPatch) -> N
     assert meta["Timestamp"] == 1_700_000_000_000
     directive = meta["CloudWatchMetrics"][0]
     assert directive["Namespace"] == "Aether/LLM"
-    assert directive["Dimensions"] == [["Environment", "Model"]]
+    # Per-(Environment, Model) plus an Environment-only rollup for alarming.
+    assert directive["Dimensions"] == [["Environment", "Model"], ["Environment"]]
 
     # Every declared metric and every referenced dimension must exist as a
     # top-level field, or CloudWatch silently drops the document.

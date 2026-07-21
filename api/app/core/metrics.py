@@ -84,7 +84,11 @@ def build_llm_turn_document(
             "CloudWatchMetrics": [
                 {
                     "Namespace": settings.METRICS_NAMESPACE,
-                    "Dimensions": [["Environment", "Model"]],
+                    # Publish each metric at two granularities: per (Environment,
+                    # Model) for breakdowns, and per Environment alone so a cost
+                    # alarm can target an environment without pinning a model
+                    # string that changes when the model is upgraded.
+                    "Dimensions": [["Environment", "Model"], ["Environment"]],
                     "Metrics": [
                         {"Name": "PromptTokens", "Unit": "Count"},
                         {"Name": "CompletionTokens", "Unit": "Count"},

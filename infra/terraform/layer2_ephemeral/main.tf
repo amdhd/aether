@@ -27,12 +27,22 @@ locals {
   # Non-secret container config. Cross-origin (CloudFront SPA ↔ ALB API) needs
   # Secure + SameSite=None refresh cookies; TRUST_PROXY_HEADERS lets per-IP rate
   # limiting read X-Forwarded-For behind the ALB.
+  # Single-sourced so the metric dimension value and namespace the app emits
+  # can't drift from what the dashboard/alarm below query.
+  app_environment       = "production"
+  llm_metrics_namespace = "Aether/LLM"
+
   base_environment = {
-    ENVIRONMENT             = "production"
+    ENVIRONMENT             = local.app_environment
     TRUST_PROXY_HEADERS     = "true"
     REFRESH_COOKIE_SECURE   = "true"
     REFRESH_COOKIE_SAMESITE = "none"
     FRONTEND_ORIGIN         = local.frontend_url
+    # Turn on per-turn CloudWatch EMF metrics (tokens/cost/latency). Off by
+    # default in the app so local logs stay human-readable; on in the deployed
+    # task so the LLM dashboard/alarm have data.
+    EMF_METRICS_ENABLED = "true"
+    METRICS_NAMESPACE   = local.llm_metrics_namespace
   }
 
   # Redis is provisioned only in HA mode. NOTE: the app's in-memory rate limiter
@@ -417,6 +427,26 @@ resource "aws_cloudwatch_metric_alarm" "rds_cpu" {
   tags                = { Name = "${var.name_prefix}-rds-cpu" }
 }
 
+# Runaway-LLM-spend tripwire, off the app's EMF EstimatedCostUsd metric. Uses
+# the Environment-only dimension rollup so it isn't pinned to a model string.
+# `treat_missing_data = notBreaching`: no turns in an hour = no data, not an
+# alarm (the stack runs ephemerally and sits idle between demos).
+resource "aws_cloudwatch_metric_alarm" "llm_cost" {
+  alarm_name          = "${var.name_prefix}-llm-hourly-cost"
+  comparison_operator = "GreaterThanThreshold"
+  evaluation_periods  = 1
+  metric_name         = "EstimatedCostUsd"
+  namespace           = local.llm_metrics_namespace
+  period              = 3600
+  statistic           = "Sum"
+  threshold           = var.llm_cost_alarm_threshold_usd
+  alarm_description   = "Estimated LLM spend exceeded $${var.llm_cost_alarm_threshold_usd} in an hour"
+  dimensions          = { Environment = local.app_environment }
+  treat_missing_data  = "notBreaching"
+  alarm_actions       = [aws_sns_topic.alerts.arn]
+  tags                = { Name = "${var.name_prefix}-llm-hourly-cost" }
+}
+
 # --- Single-pane service-health dashboard (ALB · ECS · RDS) ---
 resource "aws_cloudwatch_dashboard" "main" {
   dashboard_name = "${var.name_prefix}-service-health"
@@ -472,6 +502,56 @@ resource "aws_cloudwatch_dashboard" "main" {
           title = "RDS — free storage (bytes)", region = var.aws_region, view = "timeSeries", period = 300
           metrics = [
             ["AWS/RDS", "FreeStorageSpace", "DBInstanceIdentifier", module.rds.instance_identifier, { stat = "Average", label = "Free storage" }]
+          ]
+        }
+      },
+
+      # --- LLM (custom EMF metrics from the app) ---
+      # Widgets query the Environment-only rollup so they aggregate across model
+      # versions. Panels stay empty until the app serves traffic.
+      {
+        type       = "text", x = 0, y = 19, width = 24, height = 1,
+        properties = { markdown = "# Aether — LLM usage & cost · namespace ${local.llm_metrics_namespace}" }
+      },
+      {
+        type = "metric", x = 0, y = 20, width = 12, height = 6,
+        properties = {
+          title = "LLM — tokens per minute", region = var.aws_region, view = "timeSeries", period = 60, stacked = true
+          metrics = [
+            [local.llm_metrics_namespace, "PromptTokens", "Environment", local.app_environment, { stat = "Sum", label = "Prompt" }],
+            [local.llm_metrics_namespace, "CompletionTokens", "Environment", local.app_environment, { stat = "Sum", label = "Completion" }]
+          ]
+        }
+      },
+      {
+        type = "metric", x = 12, y = 20, width = 12, height = 6,
+        properties = {
+          title = "LLM — estimated cost (USD/hour)", region = var.aws_region, view = "timeSeries", period = 3600
+          metrics = [
+            [local.llm_metrics_namespace, "EstimatedCostUsd", "Environment", local.app_environment, { stat = "Sum", label = "Est. cost" }]
+          ]
+          annotations = {
+            horizontal = [{ label = "cost alarm", value = var.llm_cost_alarm_threshold_usd }]
+          }
+        }
+      },
+      {
+        type = "metric", x = 0, y = 26, width = 12, height = 6,
+        properties = {
+          title = "LLM — turn latency (ms)", region = var.aws_region, view = "timeSeries", period = 60
+          metrics = [
+            [local.llm_metrics_namespace, "TurnLatencyMs", "Environment", local.app_environment, { stat = "Average", label = "avg" }],
+            [local.llm_metrics_namespace, "TurnLatencyMs", "Environment", local.app_environment, { stat = "p95", label = "p95" }]
+          ]
+        }
+      },
+      {
+        type = "metric", x = 12, y = 26, width = 12, height = 6,
+        properties = {
+          title = "LLM — turns & tool calls", region = var.aws_region, view = "timeSeries", period = 60
+          metrics = [
+            [local.llm_metrics_namespace, "Turns", "Environment", local.app_environment, { stat = "Sum", label = "Turns" }],
+            [local.llm_metrics_namespace, "ToolCalls", "Environment", local.app_environment, { stat = "Sum", label = "Tool calls" }]
           ]
         }
       }

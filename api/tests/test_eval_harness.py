@@ -7,10 +7,14 @@ the harness plumbing (not just the metric math) stays wired together.
 """
 
 import pytest
+from sqlalchemy import func, select
 
 from app.eval.backend import OfflineBackend
 from app.eval.dataset import CORPUS, GOLDEN
 from app.eval.harness import run_eval
+from app.eval.pipeline import seed_corpus
+from app.models.note import Note
+from app.models.user import User
 from tests.conftest import TestingSessionLocal
 
 
@@ -39,6 +43,18 @@ async def test_harness_retrieves_relevant_notes_for_answerable_samples() -> None
     answerable = [s for s in report.samples if s.answerable]
     assert answerable
     assert all(s.retrieval_recall == pytest.approx(1.0) for s in answerable)
+
+
+async def test_seed_corpus_is_idempotent() -> None:
+    # Re-seeding a persistent DB must not collide on the unique eval email or
+    # pile up duplicate notes — it clears the prior corpus and starts clean.
+    async with TestingSessionLocal() as db:
+        await seed_corpus(db)
+        await seed_corpus(db)  # would raise on duplicate email before the fix
+        users = await db.scalar(select(func.count()).select_from(User))
+        notes = await db.scalar(select(func.count()).select_from(Note))
+        assert users == 1
+        assert notes == len(CORPUS)
 
 
 def test_golden_slugs_reference_real_corpus_notes() -> None:

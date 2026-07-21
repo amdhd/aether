@@ -142,8 +142,9 @@ Redis**; ⑥ outbound LLM/tool calls egress via **NAT**; ⑦ logs and alarms flo
   **Infracost** (cost), **Checkov** (IaC), **Trivy** (container CVEs); rolling
   deploy with auto-rollback.
 - **Cost & ops** — CloudWatch alarms → SNS, a **CloudWatch dashboard**
-  (ALB · ECS · RDS), an **AWS Budgets** alert, and an ephemeral
-  `apply → demo → destroy` model with a `verify-clean` orphan check.
+  (ALB · ECS · RDS, plus **LLM token/cost/latency**), an **AWS Budgets** alert, a
+  **runaway-LLM-cost alarm**, and an ephemeral `apply → demo → destroy` model
+  with a `verify-clean` orphan check.
 
 ### Production roadmap (known next steps)
 
@@ -153,9 +154,9 @@ accepted trade-offs (see [`infra/terraform/.checkov.yaml`](infra/terraform/.chec
 rather than built. For a permanent production environment, the next steps are:
 
 - **Observability** — distributed tracing (AWS X-Ray / OpenTelemetry ADOT
-  sidecar) to break down request latency across ALB → Fargate → RDS →
-  DeepSeek; CloudWatch **custom LLM metrics** (token/cost per turn via EMF, from
-  the data already in `usage_logs`).
+  sidecar) to break down request latency across ALB → Fargate → RDS → DeepSeek.
+  (Per-turn LLM **token/cost/latency** are already emitted as CloudWatch custom
+  metrics via EMF — see the Observability feature below.)
 - **Security & audit** — **CloudTrail** (account API audit), **VPC Flow Logs**,
   **GuardDuty** threat detection, access logs (ALB/CloudFront/WAF), a
   **CloudFront-scoped WAF** for the edge, **Secrets Manager rotation**, and
@@ -202,8 +203,12 @@ rather than built. For a permanent production environment, the next steps are:
 - **Encrypted credentials** — Google OAuth tokens are stored Fernet-encrypted
   at rest, and disconnecting revokes the grant at Google's endpoint (not just a
   local delete).
-- **Structured logging** — the agent loop emits greppable `key=value` records
-  for per-turn token/tool/latency summaries, tool calls, and stream failures.
+- **Observability** — the agent loop emits greppable `key=value` logs (per-turn
+  token/tool/latency, tool calls, stream failures) and, in deployed
+  environments, per-turn **CloudWatch EMF metrics** (tokens, estimated cost,
+  latency) that power an **LLM usage/cost dashboard** and a runaway-cost alarm —
+  no metrics agent or `PutMetricData` required. `user_id` is deliberately kept
+  out of the metric dimensions to bound custom-metric cardinality (cost).
 
 ## Stack
 

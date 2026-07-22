@@ -216,6 +216,17 @@ rather than built. For a permanent production environment, the next steps are:
   (SQLite for tests), Pydantic v2, JWT auth.
 - **Frontend**: React 19, TypeScript, Vite, Tailwind CSS v4, shadcn/ui-style
   components, TanStack Query, Recharts, Zustand.
+- **Infrastructure**: **Terraform** (modular, remote state + locking) on **AWS** —
+  VPC, **ECS Fargate** (Graviton) behind an **ALB**, **RDS PostgreSQL + pgvector**,
+  **S3 + CloudFront**, **AWS WAF**, **Secrets Manager**, and CloudWatch/SNS/Budgets
+  for observability and cost. Split into a persistent base layer and an ephemeral
+  stack layer, so a full demo is `make up` / `make down` with idle cost ~$0.
+- **CI/CD**: **GitHub Actions** with **OIDC** (no static keys) — app lint + tests
+  (SQLite *and* Postgres + pgvector legs), and **Infracost** (cost), **Checkov**
+  (IaC), and **Trivy** (container CVE) gates on the infrastructure.
+
+See [Cloud architecture (AWS)](#cloud-architecture-aws) for the full topology,
+and [`infra/terraform/`](infra/terraform/) for the modules.
 
 ## Application architecture
 

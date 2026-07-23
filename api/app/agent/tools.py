@@ -438,7 +438,7 @@ async def _web_search(db: AsyncSession, user: User, args: dict[str, Any]) -> dic
     if not settings.TAVILY_API_KEY:
         return {"error": "Web search is not configured on the server."}
 
-    if not check_tool_rate_limit(user.id, "web_search", settings.WEB_SEARCH_RATE_LIMIT_PER_MINUTE):
+    if not await check_tool_rate_limit(user.id, "web_search", settings.WEB_SEARCH_RATE_LIMIT_PER_MINUTE):
         return {"error": "Web search rate limit reached for this minute. Try again shortly."}
 
     try:
@@ -479,7 +479,7 @@ async def _calendar_guard(db: AsyncSession, user: User) -> tuple[str | None, dic
     access_token = await google_oauth.get_valid_access_token(db, user)
     if access_token is None:
         return None, {"error": "Google Calendar is not connected. Connect it from Settings."}
-    if not check_tool_rate_limit(user.id, "calendar", settings.CALENDAR_RATE_LIMIT_PER_MINUTE):
+    if not await check_tool_rate_limit(user.id, "calendar", settings.CALENDAR_RATE_LIMIT_PER_MINUTE):
         return None, {"error": "Calendar rate limit reached for this minute. Try again shortly."}
     return access_token, None
 

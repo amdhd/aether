@@ -74,6 +74,13 @@ class Settings(BaseSettings):
     LLM_INPUT_COST_PER_1M_TOKENS: float = 0.27
     LLM_OUTPUT_COST_PER_1M_TOKENS: float = 1.10
 
+    # Shared store for rate limiting across instances. When set (e.g. the HA
+    # ElastiCache endpoint), the sliding-window rate limiter enforces limits
+    # globally in Redis instead of per-instance — required for the limits to
+    # hold once more than one API task runs. Unset = in-memory (single instance /
+    # dev / tests). rediss:// enables TLS in transit.
+    REDIS_URL: str = ""
+
     # Rate limiting
     CHAT_RATE_LIMIT_PER_MINUTE: int = 20
     WEB_SEARCH_RATE_LIMIT_PER_MINUTE: int = 10

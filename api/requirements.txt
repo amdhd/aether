@@ -14,3 +14,6 @@ email-validator==2.2.0
 greenlet==3.5.1
 openai==1.59.6
 pgvector==0.3.6
+
+# Rate-limit shared store (used when REDIS_URL is set; HA multi-instance).
+redis==5.2.1

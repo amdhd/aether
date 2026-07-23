@@ -45,10 +45,10 @@ locals {
     METRICS_NAMESPACE   = local.llm_metrics_namespace
   }
 
-  # Redis is provisioned only in HA mode. NOTE: the app's in-memory rate limiter
-  # must be updated to read REDIS_URL before >1 task is safe — that app change is
-  # tracked separately; the infra just makes the store available. rediss:// = TLS
-  # (transit encryption is on); the app connects to the primary endpoint.
+  # Redis is provisioned only in HA mode. The app's sliding-window rate limiter
+  # reads REDIS_URL and enforces limits globally across tasks when it's set, so
+  # limits hold once autoscaling runs >1 task (in-memory per-instance otherwise).
+  # rediss:// = TLS (transit encryption is on); the app connects to the primary.
   redis_environment = var.high_availability ? {
     REDIS_URL = "rediss://${aws_elasticache_replication_group.redis[0].primary_endpoint_address}:6379"
   } : {}

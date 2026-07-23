@@ -194,9 +194,12 @@ rather than built. For a permanent production environment, the next steps are:
   delivered as **HttpOnly cookies** (not readable by JS). Refresh tokens
   **rotate on every use** with **reuse detection**: replaying a rotated token
   revokes the whole token family.
-- **Rate limiting** on chat and external-API tools (web search, calendar). The
-  in-memory sliding-window limiter periodically evicts idle keys so it stays
-  bounded on a long-running instance (Redis-backed for multi-instance HA).
+- **Rate limiting** on chat and external-API tools (web search, calendar) with a
+  sliding-window limiter. When `REDIS_URL` is set (the HA ElastiCache endpoint)
+  limits are enforced **globally in Redis** — a sorted-set window per key — so
+  they hold across every API task once autoscaling runs more than one; otherwise
+  it's an in-memory window that evicts idle keys to stay bounded. A Redis outage
+  degrades to per-instance limiting rather than failing requests.
 - **Prompt-injection guardrail** — the base system prompt marks tool, web, and
   note content as untrusted data: embedded directives are ignored, and
   unrequested destructive actions require explicit confirmation.

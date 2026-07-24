@@ -46,12 +46,24 @@ rather than counted as zero.
 
 ```bash
 cd api
-python -m app.eval.run            # auto: LLM backend if keys are set, else offline
-python -m app.eval.run --offline  # force the keyless heuristic backend
+python -m app.eval.run                  # auto: LLM backend if keys are set, else offline
+python -m app.eval.run --offline        # force the keyless heuristic backend
+python -m app.eval.run --offline --check  # CI gate: exit non-zero below thresholds
 ```
 
 Reports are written to `app/eval/reports/`: a timestamped JSON (full per-sample
 detail) and `latest.md` (a committed human-readable summary).
+
+### CI gate
+
+The **RAG eval gate** job in [`.github/workflows/ci.yml`](../../../.github/workflows/ci.yml)
+runs `--offline --check` on every push/PR. `--check` compares the aggregate
+scores against `GATE_THRESHOLDS` in [`run.py`](run.py) and exits non-zero if any
+metric falls below its floor — so a regression in retrieval or the metric
+pipeline (e.g. [FM-1](FAILURE_MODES.md)) fails the build instead of merging. The
+floors are tuned to the deterministic offline backend and set conservatively
+below current scores, so the gate catches real drops without flaking. Raise them
+(or add an LLM-backend profile) once real numbers are wired into CI.
 
 ### Backends
 

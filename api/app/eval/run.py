@@ -3,6 +3,7 @@
     python -m app.eval.run                 # auto: LLM backend if keys, else offline
     python -m app.eval.run --offline       # force the keyless heuristic backend
     python -m app.eval.run --json-only     # write reports, skip the console table
+    python -m app.eval.run --offline --check   # CI gate: exit non-zero below floors
 
 Database selection (mirrors the test suite):
 
@@ -44,6 +45,18 @@ _METRIC_LABELS = {
     "context_precision": "Context precision",
     "answer_relevancy": "Answer relevancy",
     "retrieval_recall": "Retrieval recall",
+}
+
+# Minimum aggregate scores the CI gate (`--check`) enforces. Tuned to the
+# deterministic *offline* backend, which produces stable scores over the fixed
+# golden set, and set conservatively below current values so the gate catches a
+# real regression (e.g. retrieval breaking, as FM-1 did) without flaking. Raise
+# these — or add an LLM-backend profile — once real numbers are wired in CI.
+GATE_THRESHOLDS: dict[str, float] = {
+    "faithfulness": 0.95,
+    "context_precision": 0.65,
+    "answer_relevancy": 0.30,
+    "retrieval_recall": 0.99,
 }
 
 
@@ -125,7 +138,21 @@ def _write_reports(report: EvalReport) -> tuple[Path, Path]:
     return json_path, md_path
 
 
-async def _main_async(args: argparse.Namespace) -> None:
+def _check_gate(report: EvalReport) -> list[str]:
+    """Return a list of human-readable failures where an aggregate is below its
+    threshold (or undefined). Empty list = the gate passes."""
+    failures: list[str] = []
+    for key, threshold in GATE_THRESHOLDS.items():
+        value = report.aggregates.get(key)
+        label = _METRIC_LABELS.get(key, key)
+        if value is None:
+            failures.append(f"{label}: undefined (expected ≥ {threshold:.2f})")
+        elif value < threshold:
+            failures.append(f"{label}: {value:.3f} < {threshold:.2f}")
+    return failures
+
+
+async def _main_async(args: argparse.Namespace) -> int:
     url = _eval_database_url()
     engine = _make_engine(url)
     await _create_schema(engine)
@@ -143,13 +170,28 @@ async def _main_async(args: argparse.Namespace) -> None:
     print(f"wrote {json_path}")
     print(f"wrote {md_path}")
 
+    if args.check:
+        failures = _check_gate(report)
+        if failures:
+            print("\nEVAL GATE: FAIL")
+            for failure in failures:
+                print(f"  ✗ {failure}")
+            return 1
+        print("\nEVAL GATE: PASS (all metrics at or above thresholds)")
+    return 0
+
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Run the RAG eval harness.")
     parser.add_argument("--offline", action="store_true", help="force the keyless heuristic backend")
     parser.add_argument("--json-only", action="store_true", help="skip the console summary table")
+    parser.add_argument(
+        "--check",
+        action="store_true",
+        help="exit non-zero if any aggregate is below its GATE_THRESHOLDS floor (CI gate)",
+    )
     args = parser.parse_args()
-    asyncio.run(_main_async(args))
+    raise SystemExit(asyncio.run(_main_async(args)))
 
 
 if __name__ == "__main__":

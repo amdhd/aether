@@ -6,7 +6,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.api.router import api_router
 from app.core.config import settings
 from app.core.logging import configure_logging
-from app.db.session import get_db
+from app.core.tracing import configure_tracing
+from app.db.session import engine, get_db
 
 configure_logging()
 
@@ -30,6 +31,10 @@ app.add_middleware(
 )
 
 app.include_router(api_router, prefix=settings.API_V1_PREFIX)
+
+# Auto-instrument HTTP → DB → LLM once routes are registered. No-op unless
+# TRACING_ENABLED, so dev/tests are unaffected.
+configure_tracing(app, engine)
 
 
 @app.get("/health")

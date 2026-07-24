@@ -92,6 +92,12 @@ variable "llm_cost_alarm_threshold_usd" {
   default     = 5.0
 }
 
+variable "enable_tracing" {
+  description = "Run the ADOT collector sidecar and send app OTLP traces to AWS X-Ray (grants the task role X-Ray write). Off by default; a demo add-on, not needed for the core stack."
+  type        = bool
+  default     = false
+}
+
 # --- Custom domain for the API (enables HTTPS on the ALB) ---
 variable "api_domain_name" {
   description = "FQDN to serve the API on, e.g. api.example.com. Empty = HTTP-only demo (no TLS on the ALB)."

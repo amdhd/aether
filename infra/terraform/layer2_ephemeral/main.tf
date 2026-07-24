@@ -53,7 +53,13 @@ locals {
     REDIS_URL = "rediss://${aws_elasticache_replication_group.redis[0].primary_endpoint_address}:6379"
   } : {}
 
-  container_environment = merge(local.base_environment, local.redis_environment)
+  # Point the app at the in-task ADOT sidecar (loopback) when tracing is on.
+  tracing_environment = var.enable_tracing ? {
+    TRACING_ENABLED             = "true"
+    OTEL_EXPORTER_OTLP_ENDPOINT = "http://localhost:4317"
+  } : {}
+
+  container_environment = merge(local.base_environment, local.redis_environment, local.tracing_environment)
 
   # Secret env vars resolved by ECS from Secrets Manager at task start
   # (valueFrom → ARN; principle #2). DATABASE_URL is the whole ephemeral secret;
@@ -137,6 +143,7 @@ module "ecs" {
   certificate_arn = local.custom_domain ? aws_acm_certificate_validation.api[0].certificate_arn : ""
 
   high_availability = var.high_availability
+  enable_tracing    = var.enable_tracing
 }
 
 # --- Custom domain + TLS (only when api_domain_name is set) ---

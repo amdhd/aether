@@ -134,8 +134,9 @@ Redis**; ⑥ outbound LLM/tool calls egress via **NAT**; ⑦ logs and alarms flo
 - **Edge & TLS** — CloudFront (OAC, HSTS + security headers); **ACM cert +
   HTTPS ALB listener** with a TLS 1.2+ policy; HTTP → HTTPS redirect; AWS WAF.
 - **Secrets & IAM** — Secrets Manager via `valueFrom`; **two least-privilege IAM
-  roles** (execution role scoped to specific secret ARNs; an intentionally empty
-  task role — the app calls no AWS APIs).
+  roles** (execution role scoped to specific secret ARNs; a task role that is
+  empty by default — the app calls no AWS APIs — and grants only X-Ray write when
+  the optional tracing sidecar is enabled).
 - **IaC** — Terraform with reusable modules, **remote state + locking**, the
   single `high_availability` toggle, and org tagging via `default_tags`.
 - **CI/CD** — GitHub Actions with **OIDC (no static keys)** and three gates:
@@ -153,10 +154,6 @@ ephemeral demo, so several standing-production controls are documented as
 accepted trade-offs (see [`infra/terraform/.checkov.yaml`](infra/terraform/.checkov.yaml))
 rather than built. For a permanent production environment, the next steps are:
 
-- **Observability** — distributed tracing (AWS X-Ray / OpenTelemetry ADOT
-  sidecar) to break down request latency across ALB → Fargate → RDS → DeepSeek.
-  (Per-turn LLM **token/cost/latency** are already emitted as CloudWatch custom
-  metrics via EMF — see the Observability feature below.)
 - **Security & audit** — **CloudTrail** (account API audit), **VPC Flow Logs**,
   **GuardDuty** threat detection, access logs (ALB/CloudFront/WAF), a
   **CloudFront-scoped WAF** for the edge, **Secrets Manager rotation**, and
@@ -206,12 +203,15 @@ rather than built. For a permanent production environment, the next steps are:
 - **Encrypted credentials** — Google OAuth tokens are stored Fernet-encrypted
   at rest, and disconnecting revokes the grant at Google's endpoint (not just a
   local delete).
-- **Observability** — the agent loop emits greppable `key=value` logs (per-turn
-  token/tool/latency, tool calls, stream failures) and, in deployed
-  environments, per-turn **CloudWatch EMF metrics** (tokens, estimated cost,
-  latency) that power an **LLM usage/cost dashboard** and a runaway-cost alarm —
-  no metrics agent or `PutMetricData` required. `user_id` is deliberately kept
-  out of the metric dimensions to bound custom-metric cardinality (cost).
+- **Observability** — three layers. Greppable `key=value` **logs** (per-turn
+  token/tool/latency, tool calls, stream failures); per-turn **CloudWatch EMF
+  metrics** (tokens, estimated cost, latency) powering an **LLM usage/cost
+  dashboard** and a runaway-cost alarm — no metrics agent or `PutMetricData`
+  required; and optional **distributed tracing** (OpenTelemetry auto-instruments
+  FastAPI + SQLAlchemy + outbound HTTPX, so a request is one trace spanning
+  HTTP → DB → LLM), exported via an **ADOT sidecar to AWS X-Ray** in the deployed
+  stack or to stdout locally. `user_id` is deliberately kept out of the metric
+  dimensions to bound custom-metric cardinality (cost).
 
 ## Stack
 

@@ -67,6 +67,16 @@ class Settings(BaseSettings):
     # EMF_METRICS_ENABLED=true in deployed environments.
     EMF_METRICS_ENABLED: bool = False
     METRICS_NAMESPACE: str = "Aether/LLM"
+
+    # Distributed tracing (OpenTelemetry). Off by default so local dev/tests stay
+    # quiet. When TRACING_ENABLED, the app auto-instruments FastAPI + SQLAlchemy +
+    # outbound HTTPX (DeepSeek/OpenAI/Tavily) so a request is one trace spanning
+    # HTTP → DB → LLM. Exporter: OTLP/gRPC to OTEL_EXPORTER_OTLP_ENDPOINT when set
+    # (prod: the ADOT sidecar, which forwards to AWS X-Ray), else spans print to
+    # stdout for local inspection. X-Ray-compatible trace IDs + propagation are used.
+    TRACING_ENABLED: bool = False
+    OTEL_EXPORTER_OTLP_ENDPOINT: str = ""  # e.g. http://localhost:4317 (ADOT sidecar)
+    OTEL_SERVICE_NAME: str = ""  # defaults to PROJECT_NAME
     # Approximate LLM token pricing (USD per 1M tokens), used only for the cost
     # *estimate* metric — this is configuration, not gospel. Set these to your
     # provider's current published rates; the defaults are order-of-magnitude

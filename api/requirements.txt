@@ -17,3 +17,14 @@ pgvector==0.3.6
 
 # Rate-limit shared store (used when REDIS_URL is set; HA multi-instance).
 redis==5.2.1
+
+# Distributed tracing (OpenTelemetry). Active only when TRACING_ENABLED; the app
+# auto-instruments FastAPI + SQLAlchemy + HTTPX and exports OTLP to the ADOT
+# sidecar (→ AWS X-Ray). SDK 1.x and instrumentation 0.NNb0 version in lockstep.
+opentelemetry-sdk==1.29.0
+opentelemetry-exporter-otlp-proto-grpc==1.29.0
+opentelemetry-instrumentation-fastapi==0.50b0
+opentelemetry-instrumentation-sqlalchemy==0.50b0
+opentelemetry-instrumentation-httpx==0.50b0
+opentelemetry-sdk-extension-aws==2.0.2
+opentelemetry-propagator-aws-xray==1.0.2

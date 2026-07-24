@@ -103,3 +103,15 @@ variable "max_capacity" {
   type        = number
   default     = 4
 }
+
+variable "enable_tracing" {
+  description = "Run the ADOT collector sidecar and grant the task role X-Ray write, so the app's OTLP traces reach AWS X-Ray. Off by default — the task role stays empty until tracing is opted into."
+  type        = bool
+  default     = false
+}
+
+variable "adot_image" {
+  description = "AWS Distro for OpenTelemetry collector image for the tracing sidecar."
+  type        = string
+  default     = "public.ecr.aws/aws-observability/aws-otel-collector:v0.43.2"
+}

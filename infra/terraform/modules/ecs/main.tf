@@ -48,29 +48,23 @@ resource "aws_iam_role_policy" "execution_secrets" {
 
 # Task role: what the APP itself may call in AWS at runtime. This app talks to
 # external HTTP APIs (DeepSeek/OpenAI/Tavily/Google), not AWS, so it needs no AWS
-# permissions — the empty role documents that intent explicitly.
+# permissions — the empty role documents that intent explicitly. The one
+# exception is opt-in tracing: the ADOT sidecar (which assumes this role) needs
+# X-Ray write, attached below only when enable_tracing is set.
 resource "aws_iam_role" "task" {
   name_prefix        = "${var.name_prefix}-task-"
   assume_role_policy = data.aws_iam_policy_document.assume.json
   tags               = { Name = "${var.name_prefix}-task" }
 }
 
-# --- Task definition ---
-resource "aws_ecs_task_definition" "api" {
-  family                   = "${var.name_prefix}-api"
-  requires_compatibilities = ["FARGATE"]
-  network_mode             = "awsvpc"
-  cpu                      = var.cpu
-  memory                   = var.memory
-  execution_role_arn       = aws_iam_role.execution.arn
-  task_role_arn            = aws_iam_role.task.arn
+resource "aws_iam_role_policy_attachment" "task_xray" {
+  count      = var.enable_tracing ? 1 : 0
+  role       = aws_iam_role.task.name
+  policy_arn = "arn:aws:iam::aws:policy/AWSXRayDaemonWriteAccess"
+}
 
-  runtime_platform {
-    cpu_architecture        = "ARM64" # Graviton — cheaper than x86 for the same perf
-    operating_system_family = "LINUX"
-  }
-
-  container_definitions = jsonencode([{
+locals {
+  api_container = {
     name      = "api"
     image     = var.image
     essential = true
@@ -95,7 +89,71 @@ resource "aws_ecs_task_definition" "api" {
       retries     = 3
       startPeriod = 20
     }
-  }])
+  }
+
+  # Minimal ADOT collector config: receive OTLP from the app on loopback and
+  # export traces to X-Ray. Scoped to traces only (metrics already ship via the
+  # app's EMF-to-logs path), so the task role needs just X-Ray write.
+  adot_config = <<-YAML
+    receivers:
+      otlp:
+        protocols:
+          grpc:
+            endpoint: 0.0.0.0:4317
+    processors:
+      batch:
+    exporters:
+      awsxray:
+        region: ${data.aws_region.current.name}
+    service:
+      pipelines:
+        traces:
+          receivers: [otlp]
+          processors: [batch]
+          exporters: [awsxray]
+  YAML
+
+  adot_container = {
+    name        = "aws-otel-collector"
+    image       = var.adot_image
+    essential   = false # a collector crash must not take the API task down
+    command     = ["--config=env:AOT_CONFIG_CONTENT"]
+    environment = [{ name = "AOT_CONFIG_CONTENT", value = local.adot_config }]
+    logConfiguration = {
+      logDriver = "awslogs"
+      options = {
+        "awslogs-group"         = aws_cloudwatch_log_group.api.name
+        "awslogs-region"        = data.aws_region.current.name
+        "awslogs-stream-prefix" = "adot"
+      }
+    }
+  }
+
+  # Always the API; add the ADOT sidecar only when tracing is enabled. A
+  # for-filter (not a ternary) avoids Terraform's inconsistent-tuple-length error
+  # between the two branches.
+  containers = [
+    for container in [local.api_container, local.adot_container] :
+    container if container.name != "aws-otel-collector" || var.enable_tracing
+  ]
+}
+
+# --- Task definition ---
+resource "aws_ecs_task_definition" "api" {
+  family                   = "${var.name_prefix}-api"
+  requires_compatibilities = ["FARGATE"]
+  network_mode             = "awsvpc"
+  cpu                      = var.cpu
+  memory                   = var.memory
+  execution_role_arn       = aws_iam_role.execution.arn
+  task_role_arn            = aws_iam_role.task.arn
+
+  runtime_platform {
+    cpu_architecture        = "ARM64" # Graviton — cheaper than x86 for the same perf
+    operating_system_family = "LINUX"
+  }
+
+  container_definitions = jsonencode(local.containers)
 
   tags = { Name = "${var.name_prefix}-api" }
 }

@@ -79,10 +79,27 @@ jobs:
         if: env.INFRACOST_API_KEY == ''
         run: echo "::notice::INFRACOST_API_KEY not set — cost gate skipped. Add the secret to enable it."
 
-      - uses: infracost/actions/setup@v3
+      # Pin an exact CLI version. The action's default (`0.10.x`) is a semver
+      # *range*, which makes it page through the whole GitHub releases list to
+      # resolve — a call that twice reddened this gate (504, then an API
+      # timeout). An exact version skips that lookup and downloads the release
+      # asset directly. Retry once anyway, so a flaky download doesn't block
+      # the deploy. Bump deliberately, like the pinned Terraform version.
+      - name: Setup Infracost
+        id: infracost_setup
         if: env.INFRACOST_API_KEY != ''
+        continue-on-error: true
+        uses: infracost/actions/setup@v3
         with:
           api-key: ${{ secrets.INFRACOST_API_KEY }}
+          version: "0.10.45"
+
+      - name: Setup Infracost (retry)
+        if: env.INFRACOST_API_KEY != '' && steps.infracost_setup.outcome == 'failure'
+        uses: infracost/actions/setup@v3
+        with:
+          api-key: ${{ secrets.INFRACOST_API_KEY }}
+          version: "0.10.45"
 
       - name: Baseline cost (target branch)
         if: env.INFRACOST_API_KEY != '' && github.event_name == 'pull_request'

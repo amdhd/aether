@@ -79,8 +79,19 @@ jobs:
         if: env.INFRACOST_API_KEY == ''
         run: echo "::notice::INFRACOST_API_KEY not set — cost gate skipped. Add the secret to enable it."
 
-      - uses: infracost/actions/setup@v3
+      # The setup action downloads the CLI from a CDN that intermittently
+      # returns 504s; a flaky download shouldn't fail the gate, so retry once.
+      - name: Setup Infracost
+        id: infracost_setup
         if: env.INFRACOST_API_KEY != ''
+        continue-on-error: true
+        uses: infracost/actions/setup@v3
+        with:
+          api-key: ${{ secrets.INFRACOST_API_KEY }}
+
+      - name: Setup Infracost (retry)
+        if: env.INFRACOST_API_KEY != '' && steps.infracost_setup.outcome == 'failure'
+        uses: infracost/actions/setup@v3
         with:
           api-key: ${{ secrets.INFRACOST_API_KEY }}
 

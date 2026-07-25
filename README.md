@@ -2,6 +2,8 @@
 
 # Aether
 
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+
 An AI Marketing assistant web app: FastAPI + async SQLAlchemy backend, React +
 TypeScript frontend, with a DeepSeek-powered tool-calling agent for managing
 your tasks, notes, calendar, and more.
@@ -406,3 +408,7 @@ redirect URI points at `localhost`. To make it work on a deployed domain:
 
 The same applies to any other origins (`localhost:5173`) referenced in the
 consent screen's *Authorized JavaScript origins*.
+
+## License
+
+Released under the [MIT License](LICENSE).

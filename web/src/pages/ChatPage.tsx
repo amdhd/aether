@@ -1,10 +1,25 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { ChevronRight, Paperclip, Plus, Send, Trash2, X } from 'lucide-react'
-import { useEffect, useRef, useState, type ChangeEvent, type KeyboardEvent } from 'react'
+import {
+  BookOpen,
+  ChevronRight,
+  Megaphone,
+  Paperclip,
+  Plus,
+  Send,
+  Smile,
+  Sparkles,
+  X,
+  Zap,
+  type LucideIcon,
+} from 'lucide-react'
+import { useCallback, useEffect, useRef, useState, type ChangeEvent, type KeyboardEvent } from 'react'
 import ReactMarkdown from 'react-markdown'
+import { useSearchParams } from 'react-router-dom'
 import remarkGfm from 'remark-gfm'
 
 import {
+  CONVERSATIONS_PAGE_SIZE,
+  CONVERSATION_PARAM,
   createConversation,
   deleteConversation,
   getConversation,
@@ -12,22 +27,59 @@ import {
   streamChatMessage,
   updateConversation,
 } from '@/api/chat'
-import { ConfirmDialog } from '@/components/ConfirmDialog'
 import { Button } from '@/components/ui/button'
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Skeleton } from '@/components/ui/skeleton'
 import { useCrudMutations } from '@/hooks/useCrudMutations'
 import { cn } from '@/lib/utils'
 import type { Conversation, ConversationCreateInput, MessageRole, Persona } from '@/types'
 
-const CONVERSATIONS_PAGE_SIZE = 50
-const CONVERSATIONS_MAX_LIMIT = 100
 
-const PERSONA_LABELS: Record<Persona, string> = {
-  productivity_coach: 'Productivity Coach',
-  research_assistant: 'Research Assistant',
-  casual_friend: 'Casual Friend',
-  marketing_coach: 'Marketing Coach',
+// Short labels + icons for the welcome-screen persona picker.
+const PERSONA_OPTIONS: { value: Persona; label: string; Icon: LucideIcon }[] = [
+  { value: 'productivity_coach', label: 'Productivity', Icon: Zap },
+  { value: 'marketing_coach', label: 'Marketing', Icon: Megaphone },
+  { value: 'research_assistant', label: 'Research', Icon: BookOpen },
+  { value: 'casual_friend', label: 'Casual', Icon: Smile },
+]
+
+function PersonaPicker({
+  value,
+  onSelect,
+  disabled,
+}: {
+  value: Persona
+  onSelect: (persona: Persona) => void
+  disabled?: boolean
+}) {
+  return (
+    <div
+      role="group"
+      aria-label="Assistant persona"
+      className="inline-flex flex-wrap items-center justify-center gap-1 rounded-full border border-border bg-surface-muted p-1"
+    >
+      {PERSONA_OPTIONS.map(({ value: personaValue, label, Icon }) => {
+        const active = personaValue === value
+        return (
+          <button
+            key={personaValue}
+            type="button"
+            aria-pressed={active}
+            disabled={disabled}
+            onClick={() => onSelect(personaValue)}
+            className={cn(
+              'inline-flex items-center gap-2 rounded-full px-4 py-2 text-sm font-medium transition-colors focus-ring disabled:cursor-not-allowed disabled:opacity-60',
+              active
+                ? 'bg-foreground text-background shadow-sm'
+                : 'text-muted-foreground hover:text-foreground',
+            )}
+          >
+            <Icon className="h-4 w-4" />
+            {label}
+          </button>
+        )
+      })}
+    </div>
+  )
 }
 
 const ATTACHMENT_ACCEPT = '.csv,.tsv'
@@ -35,10 +87,45 @@ const ATTACHMENT_ACCEPT = '.csv,.tsv'
 const PROSE =
   'text-[15px] leading-7 [&_a]:font-medium [&_a]:text-foreground [&_a]:underline [&_a]:underline-offset-2 [&_code]:rounded [&_code]:bg-surface-muted [&_code]:px-1.5 [&_code]:py-0.5 [&_code]:text-[13px] [&_h1]:mb-2 [&_h1]:mt-4 [&_h1]:text-lg [&_h1]:font-semibold [&_h2]:mb-2 [&_h2]:mt-4 [&_h2]:text-base [&_h2]:font-semibold [&_h3]:mb-1.5 [&_h3]:mt-3 [&_h3]:font-semibold [&_li]:mb-1 [&_ol]:mb-3 [&_ol]:list-decimal [&_ol]:pl-5 [&_p:last-child]:mb-0 [&_p]:mb-3 [&_pre]:mb-3 [&_pre]:overflow-x-auto [&_pre]:rounded-lg [&_pre]:border [&_pre]:border-border [&_pre]:bg-surface-muted [&_pre]:p-3 [&_pre]:text-[13px] [&_pre_code]:bg-transparent [&_pre_code]:p-0 [&_ul]:mb-3 [&_ul]:list-disc [&_ul]:pl-5'
 
+const MARKDOWN_COMPONENTS = {
+  table: ({ children, ...props }: React.ComponentPropsWithoutRef<'table'>) => (
+    <div className="mb-3 w-full overflow-x-auto rounded-lg border border-border">
+      <table className="w-full border-collapse text-[13px]" {...props}>
+        {children}
+      </table>
+    </div>
+  ),
+  thead: ({ children, ...props }: React.ComponentPropsWithoutRef<'thead'>) => (
+    <thead className="bg-surface-muted" {...props}>
+      {children}
+    </thead>
+  ),
+  th: ({ children, ...props }: React.ComponentPropsWithoutRef<'th'>) => (
+    <th
+      className="whitespace-nowrap border-b border-border px-3 py-2 text-left font-semibold"
+      {...props}
+    >
+      {children}
+    </th>
+  ),
+  td: ({ children, ...props }: React.ComponentPropsWithoutRef<'td'>) => (
+    <td className="whitespace-nowrap border-b border-border/60 px-3 py-2 align-top" {...props}>
+      {children}
+    </td>
+  ),
+  tbody: ({ children, ...props }: React.ComponentPropsWithoutRef<'tbody'>) => (
+    <tbody className="[&>tr:last-child>td]:border-b-0" {...props}>
+      {children}
+    </tbody>
+  ),
+}
+
 function MessageContent({ content }: { content: string }) {
   return (
     <div className={PROSE}>
-      <ReactMarkdown remarkPlugins={[remarkGfm]}>{content}</ReactMarkdown>
+      <ReactMarkdown remarkPlugins={[remarkGfm]} components={MARKDOWN_COMPONENTS}>
+        {content}
+      </ReactMarkdown>
     </div>
   )
 }
@@ -104,8 +191,32 @@ function Message({
 
 export function ChatPage() {
   const queryClient = useQueryClient()
-  const [selectedId, setSelectedId] = useState<number | null>(null)
+  // Selection lives in the URL (?c=<id>) so the sidebar history can drive it.
+  const [searchParams, setSearchParams] = useSearchParams()
+  const selectedParam = searchParams.get(CONVERSATION_PARAM)
+  const selectedId = selectedParam !== null && /^\d+$/.test(selectedParam) ? Number(selectedParam) : null
+  const setSelectedId = useCallback(
+    (id: number | null) => {
+      setSearchParams(
+        (prev: URLSearchParams) => {
+          const next = new URLSearchParams(prev)
+          if (id === null) next.delete(CONVERSATION_PARAM)
+          else next.set(CONVERSATION_PARAM, String(id))
+          return next
+        },
+        { replace: true },
+      )
+    },
+    [setSearchParams],
+  )
   const [draft, setDraft] = useState('')
+  // Persona highlighted on the landing screen (no active conversation yet);
+  // picking one starts a new chat with that persona.
+  const [landingPersona, setLandingPersona] = useState<Persona>('productivity_coach')
+  // Persona picked for a conversation but not yet confirmed by the server, so
+  // the picker highlights on click instead of after the refetch round-trip.
+  // Scoped to a conversation id so it can't leak onto the next chat.
+  const [pendingPersona, setPendingPersona] = useState<{ id: number; persona: Persona } | null>(null)
   const [attachedFile, setAttachedFile] = useState<File | null>(null)
   const [attachError, setAttachError] = useState<string | null>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
@@ -116,29 +227,29 @@ export function ChatPage() {
   const [streamingReasoning, setStreamingReasoning] = useState('')
   const [streamingToolCalls, setStreamingToolCalls] = useState<string[]>([])
   const [errorMessage, setErrorMessage] = useState<string | null>(null)
-  const [conversationsLimit, setConversationsLimit] = useState(CONVERSATIONS_PAGE_SIZE)
-  const [deletingConversationId, setDeletingConversationId] = useState<number | null>(null)
   const scrollRef = useRef<HTMLDivElement>(null)
 
-  const { data: conversationsPage, isLoading: conversationsLoading } = useQuery({
-    queryKey: ['conversations', conversationsLimit],
-    queryFn: () => listConversations(conversationsLimit),
+  // Same key as the sidebar history, so the two share one request.
+  const { data: conversationsPage } = useQuery({
+    queryKey: ['conversations', CONVERSATIONS_PAGE_SIZE],
+    queryFn: () => listConversations(CONVERSATIONS_PAGE_SIZE),
   })
   const conversations = conversationsPage?.items ?? []
-  const canLoadMoreConversations =
-    conversationsPage !== undefined &&
-    conversations.length < conversationsPage.total &&
-    conversationsLimit < CONVERSATIONS_MAX_LIMIT
 
   const activeId = selectedId ?? conversations[0]?.id ?? null
 
-  const { data: conversation, isLoading: conversationLoading } = useQuery({
+  const {
+    data: conversation,
+    isLoading: conversationLoading,
+    isError: conversationFailed,
+    refetch: refetchConversation,
+  } = useQuery({
     queryKey: ['conversation', activeId],
     queryFn: () => getConversation(activeId as number),
     enabled: activeId !== null,
   })
 
-  const { createMutation, deleteMutation } = useCrudMutations<Conversation, ConversationCreateInput>({
+  const { createMutation } = useCrudMutations<Conversation, ConversationCreateInput>({
     queryKey: ['conversations'],
     create: createConversation,
     update: updateConversation,
@@ -151,17 +262,37 @@ export function ChatPage() {
       if (activeId === deletedId) {
         setSelectedId(null)
       }
-      setDeletingConversationId(null)
     },
   })
 
   const personaMutation = useMutation({
     mutationFn: ({ id, persona }: { id: number; persona: Persona }) => updateConversation(id, { persona }),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['conversation', activeId] })
-      queryClient.invalidateQueries({ queryKey: ['conversations'] })
+    onMutate: ({ id, persona }) => {
+      setErrorMessage(null)
+      setPendingPersona({ id, persona })
+    },
+    // Hold the optimistic highlight until the refetch lands, otherwise it
+    // flashes back to the old persona while the query is in flight.
+    onSuccess: async (_data, { id }) => {
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ['conversation', id] }),
+        queryClient.invalidateQueries({ queryKey: ['conversations'] }),
+      ])
+      setPendingPersona((pending) => (pending?.id === id ? null : pending))
+    },
+    onError: (_error, { id }) => {
+      setPendingPersona((pending) => (pending?.id === id ? null : pending))
+      setErrorMessage('Could not switch persona. Please try again.')
     },
   })
+
+  // The conversation detail can still be loading (or have failed) while the
+  // empty state is on screen, so fall back to the list row before the default.
+  const activePersona: Persona =
+    (pendingPersona?.id === activeId ? pendingPersona.persona : undefined) ??
+    conversation?.persona ??
+    conversations.find((c) => c.id === activeId)?.persona ??
+    'productivity_coach'
 
   useEffect(() => {
     scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: 'smooth' })
@@ -237,126 +368,59 @@ export function ChatPage() {
   const visibleMessages = (conversation?.messages ?? []).filter(
     (message) => message.role !== 'tool' && message.content,
   )
+  // A failed detail fetch must not fall through to the welcome screen: that
+  // renders a persona picker with no conversation behind it, so every click is
+  // silently dropped and the chat looks merely empty rather than broken.
   const isEmptyConversation =
     activeId !== null &&
     !conversationLoading &&
+    !conversationFailed &&
     visibleMessages.length === 0 &&
     pendingUserContent === null &&
     !isStreaming
 
   return (
-    <div className="flex h-[calc(100vh-2rem)] gap-6 sm:h-[calc(100vh-3rem)]">
-      <aside className="hidden w-64 flex-col gap-3 sm:flex">
-        <Button onClick={() => createMutation.mutate({})} disabled={createMutation.isPending}>
-          <Plus className="h-4 w-4" />
-          New chat
-        </Button>
-        <div className="flex-1 space-y-0.5 overflow-y-auto">
-          {conversationsLoading ? (
-            [...Array(3)].map((_, i) => <Skeleton key={i} className="h-9 w-full" />)
-          ) : conversations.length === 0 ? (
-            <p className="px-2 py-1.5 text-sm text-muted-foreground">No conversations yet.</p>
-          ) : (
-            <>
-              {conversations.map((c) => (
-                <div
-                  key={c.id}
-                  className={cn(
-                    'group flex items-center gap-1 rounded-md px-2.5 py-2 text-sm transition-colors',
-                    c.id === activeId
-                      ? 'bg-surface-muted font-medium text-foreground'
-                      : 'text-muted-foreground hover:bg-surface-muted/60 hover:text-foreground',
-                  )}
-                >
-                  <button className="flex-1 truncate text-left focus-ring" onClick={() => setSelectedId(c.id)}>
-                    {c.title}
-                  </button>
-                  <button
-                    aria-label={`Delete conversation ${c.title}`}
-                    className="opacity-0 focus-ring group-hover:opacity-100"
-                    onClick={() => setDeletingConversationId(c.id)}
-                  >
-                    <Trash2 className="h-3.5 w-3.5 text-muted-foreground hover:text-red-600" />
-                  </button>
-                </div>
-              ))}
-              {canLoadMoreConversations && (
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  className="w-full text-muted-foreground"
-                  onClick={() => setConversationsLimit((prev) => Math.min(prev + CONVERSATIONS_PAGE_SIZE, CONVERSATIONS_MAX_LIMIT))}
-                >
-                  Load more
-                </Button>
-              )}
-            </>
-          )}
-        </div>
-      </aside>
+    <div className="flex h-full flex-col">
+      <div className="flex min-h-0 flex-1 flex-col">
 
-      <div className="flex flex-1 flex-col">
-        {conversations.length > 0 && (
-          <Select
-            value={activeId !== null ? String(activeId) : undefined}
-            onValueChange={(value) => setSelectedId(Number(value))}
-          >
-            <SelectTrigger aria-label="Select conversation" className="mb-3 sm:hidden">
-              <SelectValue placeholder="Select a conversation" />
-            </SelectTrigger>
-            <SelectContent>
-              {conversations.map((c) => (
-                <SelectItem key={c.id} value={String(c.id)}>
-                  {c.title}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-        )}
-
-        <div className="flex items-center justify-between gap-2 pb-4">
+        <div className="flex shrink-0 items-center justify-between gap-2 pb-4">
           <h1 className="min-w-0 truncate text-base font-semibold tracking-tight">
             {conversation?.title ?? 'Chat'}
           </h1>
-          <div className="flex items-center gap-2">
-            <Button
-              variant="outline"
-              size="icon"
-              className="shrink-0 sm:hidden"
-              aria-label="New chat"
-              onClick={() => createMutation.mutate({})}
-              disabled={createMutation.isPending}
-            >
-              <Plus className="h-4 w-4" />
-            </Button>
-            {conversation && (
-              <Select
-                value={conversation.persona}
-                onValueChange={(value) => personaMutation.mutate({ id: conversation.id, persona: value as Persona })}
-              >
-                <SelectTrigger aria-label="Assistant persona" className="h-9 w-44 shrink-0 text-sm">
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  {Object.entries(PERSONA_LABELS).map(([value, label]) => (
-                    <SelectItem key={value} value={value}>
-                      {label}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            )}
-          </div>
+          <Button
+            variant="outline"
+            size="sm"
+            className="shrink-0"
+            onClick={() => createMutation.mutate({})}
+            disabled={createMutation.isPending}
+          >
+            <Plus className="h-4 w-4" />
+            <span className="hidden sm:inline">New chat</span>
+          </Button>
         </div>
 
-        <div ref={scrollRef} className="flex-1 overflow-y-auto">
+        <div ref={scrollRef} className="min-h-0 flex-1 overflow-y-auto">
           <div className="mx-auto w-full max-w-3xl px-1 pb-6">
             {activeId === null ? (
               <div className="flex min-h-[50vh] flex-col items-center justify-center text-center">
-                <h2 className="text-2xl font-semibold tracking-tight">Start a new conversation</h2>
-                <p className="mt-2 text-sm text-muted-foreground">
-                  Create a chat from the sidebar to begin talking with Aether.
+                <div className="flex items-center gap-3">
+                  <Sparkles className="h-7 w-7 shrink-0 text-foreground" aria-hidden />
+                  <h2 className="text-2xl font-semibold tracking-tight">Start chatting with Aether</h2>
+                </div>
+                <p className="mt-2 max-w-md text-sm text-muted-foreground">
+                  Choose a persona to start a new conversation — ask about your tasks, notes,
+                  campaigns, the weather, or anything else.
                 </p>
+                <div className="mt-6">
+                  <PersonaPicker
+                    value={landingPersona}
+                    disabled={createMutation.isPending}
+                    onSelect={(persona) => {
+                      setLandingPersona(persona)
+                      createMutation.mutate({ persona })
+                    }}
+                  />
+                </div>
               </div>
             ) : conversationLoading ? (
               <div className="space-y-6 pt-2">
@@ -364,12 +428,34 @@ export function ChatPage() {
                   <Skeleton key={i} className="h-16 w-2/3" />
                 ))}
               </div>
+            ) : conversationFailed ? (
+              <div className="flex min-h-[50vh] flex-col items-center justify-center text-center">
+                <h2 className="text-lg font-semibold tracking-tight">Couldn’t load this conversation</h2>
+                <p className="mt-2 max-w-md text-sm text-muted-foreground">
+                  Its messages and persona are unavailable right now.
+                </p>
+                <Button variant="outline" size="sm" className="mt-4" onClick={() => void refetchConversation()}>
+                  Try again
+                </Button>
+              </div>
             ) : isEmptyConversation ? (
               <div className="flex min-h-[50vh] flex-col items-center justify-center text-center">
-                <h2 className="text-2xl font-semibold tracking-tight">How can I help?</h2>
-                <p className="mt-2 text-sm text-muted-foreground">
-                  Ask about your tasks, notes, the weather, or anything else.
+                <div className="flex items-center gap-3">
+                  <Sparkles className="h-7 w-7 shrink-0 text-foreground" aria-hidden />
+                  <h2 className="text-2xl font-semibold tracking-tight">Start chatting with Aether</h2>
+                </div>
+                <p className="mt-2 max-w-md text-sm text-muted-foreground">
+                  Choose a persona, then ask about your tasks, notes, campaigns, the weather, or
+                  anything else.
                 </p>
+                <div className="mt-6">
+                  <PersonaPicker
+                    value={activePersona}
+                    onSelect={(persona) =>
+                      activeId !== null && personaMutation.mutate({ id: activeId, persona })
+                    }
+                  />
+                </div>
               </div>
             ) : (
               <div className="space-y-6 pt-2">
@@ -491,19 +577,10 @@ export function ChatPage() {
           </div>
           {attachError && <p className="px-1 pt-1 text-xs text-red-600 dark:text-red-400">{attachError}</p>}
           <p className="py-2 text-center text-xs text-muted-foreground">
-            Aether can make mistakes. Attach a .csv to analyze campaign data. Press Enter to send, Shift+Enter for a new line.
+            Aether can make mistakes. Attach a .csv to analyze campaign data.
           </p>
         </div>
       </div>
-
-      <ConfirmDialog
-        open={deletingConversationId !== null}
-        onOpenChange={(open) => !open && setDeletingConversationId(null)}
-        title="Delete this conversation?"
-        description="This action cannot be undone."
-        isConfirming={deleteMutation.isPending}
-        onConfirm={() => deletingConversationId !== null && deleteMutation.mutate(deletingConversationId)}
-      />
     </div>
   )
 }

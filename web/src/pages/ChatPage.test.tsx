@@ -63,8 +63,8 @@ describe('ChatPage', () => {
 
     renderWithProviders(<ChatPage />)
 
-    expect(await screen.findByText(/no conversations yet/i)).toBeInTheDocument()
-    expect(screen.getByText(/start a new conversation/i)).toBeInTheDocument()
+    expect(await screen.findByText(/start chatting with aether/i)).toBeInTheDocument()
+    expect(screen.getByText(/choose a persona to start a new conversation/i)).toBeInTheDocument()
   })
 
   it('renders conversations and loads the active conversation messages', async () => {
@@ -73,10 +73,55 @@ describe('ChatPage', () => {
 
     renderWithProviders(<ChatPage />)
 
-    expect(await screen.findByRole('button', { name: 'Trip planning' })).toBeInTheDocument()
-    expect(screen.getByRole('button', { name: 'Daily standup' })).toBeInTheDocument()
+    // The header names the active conversation and loads its messages. The
+    // history list itself lives in the sidebar (see ChatHistoryNav).
+    expect(await screen.findByRole('heading', { name: 'Trip planning' })).toBeInTheDocument()
     expect(await screen.findByText('Hi there')).toBeInTheDocument()
     expect(screen.getByText('Hello! How can I help?')).toBeInTheDocument()
+  })
+
+  it('switches persona from the empty-conversation picker', async () => {
+    const emptyConversation: Conversation = {
+      id: 3,
+      title: 'New conversation',
+      persona: 'productivity_coach',
+      created_at: '2026-01-01T00:00:00Z',
+      updated_at: '2026-01-01T00:00:00Z',
+    }
+    vi.mocked(chatApi.listConversations).mockResolvedValue(mockConversationsPage([emptyConversation]))
+    vi.mocked(chatApi.getConversation).mockResolvedValue({ ...emptyConversation, messages: [] })
+    vi.mocked(chatApi.updateConversation).mockImplementation(async (_id, input) => {
+      const updated = { ...emptyConversation, ...input } as Conversation
+      vi.mocked(chatApi.getConversation).mockResolvedValue({ ...updated, messages: [] })
+      vi.mocked(chatApi.listConversations).mockResolvedValue(mockConversationsPage([updated]))
+      return updated
+    })
+
+    renderWithProviders(<ChatPage />)
+
+    await screen.findByText(/choose a persona, then ask about/i)
+    // Re-query each time: the picker remounts as the conversation query settles.
+    const casual = () => screen.getByRole('button', { name: /^casual$/i })
+    await waitFor(() => expect(casual()).toHaveAttribute('aria-pressed', 'false'))
+
+    await userEvent.click(casual())
+
+    await waitFor(() =>
+      expect(chatApi.updateConversation).toHaveBeenCalledWith(3, { persona: 'casual_friend' }),
+    )
+    await waitFor(() => expect(casual()).toHaveAttribute('aria-pressed', 'true'))
+  })
+
+  it('surfaces an error instead of a dead persona picker when the detail fetch fails', async () => {
+    vi.mocked(chatApi.listConversations).mockResolvedValue(mockConversationsPage(mockConversations))
+    vi.mocked(chatApi.getConversation).mockRejectedValue(new Error('boom'))
+
+    renderWithProviders(<ChatPage />)
+
+    expect(await screen.findByText(/couldn’t load this conversation/i)).toBeInTheDocument()
+    // The welcome screen must not stand in for a failed load — its picker has
+    // no conversation behind it, so every click would be silently dropped.
+    expect(screen.queryByRole('button', { name: /^casual$/i })).not.toBeInTheDocument()
   })
 
   it('sends a message and shows it optimistically while streaming', async () => {
@@ -93,7 +138,7 @@ describe('ChatPage', () => {
 
     renderWithProviders(<ChatPage />)
 
-    await screen.findByRole('button', { name: 'Trip planning' })
+    await screen.findByRole('heading', { name: 'Trip planning' })
 
     const textbox = await screen.findByLabelText('Message')
     await userEvent.type(textbox, 'Hello Aether')
@@ -120,7 +165,7 @@ describe('ChatPage', () => {
     )
 
     renderWithProviders(<ChatPage />)
-    await screen.findByRole('button', { name: 'Trip planning' })
+    await screen.findByRole('heading', { name: 'Trip planning' })
 
     const textbox = await screen.findByLabelText('Message')
     await userEvent.type(textbox, 'Hello Aether')
@@ -135,21 +180,4 @@ describe('ChatPage', () => {
     resolveStream()
   })
 
-  it('confirms before deleting a conversation', async () => {
-    vi.mocked(chatApi.listConversations).mockResolvedValue(mockConversationsPage(mockConversations))
-    vi.mocked(chatApi.getConversation).mockResolvedValue(mockDetail)
-    vi.mocked(chatApi.deleteConversation).mockResolvedValue(undefined)
-
-    renderWithProviders(<ChatPage />)
-
-    await screen.findByRole('button', { name: 'Trip planning' })
-    await userEvent.click(screen.getByRole('button', { name: /delete conversation trip planning/i }))
-
-    expect(await screen.findByRole('heading', { name: /delete this conversation\?/i })).toBeInTheDocument()
-    expect(chatApi.deleteConversation).not.toHaveBeenCalled()
-
-    await userEvent.click(screen.getByRole('button', { name: /^delete$/i }))
-
-    await waitFor(() => expect(chatApi.deleteConversation).toHaveBeenCalledWith(1))
-  })
 })

@@ -84,6 +84,12 @@ class Settings(BaseSettings):
     LLM_INPUT_COST_PER_1M_TOKENS: float = 0.27
     LLM_OUTPUT_COST_PER_1M_TOKENS: float = 1.10
 
+    # Per-user spend ceiling for a UTC calendar month, priced with the rates
+    # above. Rate limits cap requests per minute but not spend per month, so this
+    # is what actually bounds a single account's cost. Accuracy follows directly
+    # from the rates above being correct. Set to 0 to disable the cap.
+    MONTHLY_COST_CAP_USD: float = 10.0
+
     # Shared store for rate limiting across instances. When set (e.g. the HA
     # ElastiCache endpoint), the sliding-window rate limiter enforces limits
     # globally in Redis instead of per-instance — required for the limits to

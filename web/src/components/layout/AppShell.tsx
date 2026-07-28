@@ -1,6 +1,7 @@
 import { BarChart3, CheckSquare, LayoutDashboard, MessageSquare, NotebookPen, Settings } from 'lucide-react'
-import { NavLink, Outlet, useNavigate } from 'react-router-dom'
+import { NavLink, Outlet, useLocation, useNavigate } from 'react-router-dom'
 
+import { ChatHistoryNav } from '@/components/layout/ChatHistoryNav'
 import { Button } from '@/components/ui/button'
 import { ThemeToggle } from '@/components/ThemeToggle'
 import { UserAvatar } from '@/components/UserAvatar'
@@ -19,6 +20,9 @@ const navItems = [
 
 export function AppShell() {
   const navigate = useNavigate()
+  const { pathname } = useLocation()
+  // Recent chats hang off the Chat item, and only while that section is open.
+  const onChat = pathname === '/chat' || pathname.startsWith('/chat/')
   const user = useAuthStore((state) => state.user)
   const logout = useAuthStore((state) => state.logout)
 
@@ -34,27 +38,29 @@ export function AppShell() {
   }
 
   return (
-    <div className="flex min-h-screen">
-      <aside className="hidden w-60 flex-col border-r border-border bg-surface p-4 sm:flex">
+    <div className="flex h-screen overflow-hidden">
+      <aside className="hidden w-60 shrink-0 flex-col overflow-y-auto border-r border-border bg-surface p-4 sm:flex">
         <div className="mb-6 px-2 text-xl font-bold text-brand-700 dark:text-brand-300">Aether</div>
         <nav className="flex flex-1 flex-col gap-1" aria-label="Primary">
           {navItems.map(({ to, label, icon: Icon, end }) => (
-            <NavLink
-              key={to}
-              to={to}
-              end={end}
-              className={({ isActive }) =>
-                cn(
-                  'flex items-center gap-3 rounded-md px-3 py-2 text-sm font-medium transition-colors focus-ring',
-                  isActive
-                    ? 'bg-brand-50 text-brand-700 dark:bg-brand-500/15 dark:text-brand-200'
-                    : 'text-muted-foreground hover:bg-surface-muted hover:text-foreground',
-                )
-              }
-            >
-              <Icon className="h-4 w-4" />
-              {label}
-            </NavLink>
+            <div key={to}>
+              <NavLink
+                to={to}
+                end={end}
+                className={({ isActive }) =>
+                  cn(
+                    'flex items-center gap-3 rounded-md px-3 py-2 text-sm font-medium transition-colors focus-ring',
+                    isActive
+                      ? 'bg-brand-50 text-brand-700 dark:bg-brand-500/15 dark:text-brand-200'
+                      : 'text-muted-foreground hover:bg-surface-muted hover:text-foreground',
+                  )
+                }
+              >
+                <Icon className="h-4 w-4" />
+                {label}
+              </NavLink>
+              {to === '/chat' && onChat && <ChatHistoryNav />}
+            </div>
           ))}
         </nav>
         <div className="mt-auto border-t border-border pt-4">
@@ -76,8 +82,8 @@ export function AppShell() {
         </div>
       </aside>
 
-      <div className="flex min-h-screen flex-1 flex-col">
-        <header className="flex items-center justify-between border-b border-border bg-surface px-4 py-3 sm:hidden">
+      <div className="flex min-w-0 flex-1 flex-col overflow-hidden">
+        <header className="flex shrink-0 items-center justify-between border-b border-border bg-surface px-4 py-3 sm:hidden">
           <span className="text-lg font-bold text-brand-700 dark:text-brand-300">Aether</span>
           <div className="flex items-center gap-2">
             <ThemeToggle />
@@ -87,7 +93,7 @@ export function AppShell() {
           </div>
         </header>
 
-        <main className="flex-1 p-4 pb-24 sm:p-6">
+        <main className="min-h-0 flex-1 overflow-y-auto p-4 pb-24 sm:p-6">
           <Outlet />
         </main>
 

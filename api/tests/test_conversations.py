@@ -1,3 +1,4 @@
+import json
 import logging
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
@@ -306,7 +307,15 @@ async def test_chat_message_simple_response(
     assert resp.status_code == 200
     body = resp.text
     assert "event: token" in body
-    assert '"content": "Hello"' in body
+    # Assert the reassembled text, not chunk boundaries: the vendor-name redactor
+    # sits between the upstream stream and the client, so token events don't map
+    # one-to-one onto provider chunks. The client concatenates them regardless.
+    streamed = "".join(
+        json.loads(line[len("data: ") :])["content"]
+        for line in body.splitlines()
+        if line.startswith("data: ") and '"content"' in line
+    )
+    assert streamed == "Hello there!"
     assert "event: done" in body
 
     detail = await client.get(f"/api/v1/conversations/{conversation_id}", headers=auth_headers)

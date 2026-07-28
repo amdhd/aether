@@ -16,6 +16,7 @@ from app.core.config import settings
 from app.core.logging import get_logger
 from app.models.conversation import Conversation
 from app.models.message import Message, MessageRole
+from app.agent.redaction import VendorRedactor
 from app.models.usage_log import UsageLog
 from app.models.user import User
 
@@ -149,6 +150,10 @@ async def _run_agent(
         reasoning_parts: list[str] = []
         tool_call_chunks: dict[int, dict[str, str]] = {}
         usage: dict[str, int] | None = None
+        # Redact vendor names from both streams. Applied to what is *appended* to
+        # the parts lists too, so the stored message matches what the user saw.
+        content_redactor = VendorRedactor()
+        reasoning_redactor = VendorRedactor()
 
         # The upstream call and the token stream can fail mid-flight (provider
         # 5xx, network drop). Because response headers are already sent by the
@@ -178,12 +183,16 @@ async def _run_agent(
                 delta = chunk.choices[0].delta
 
                 if getattr(delta, "reasoning_content", None):
-                    reasoning_parts.append(delta.reasoning_content)
-                    yield _sse_event("reasoning", {"content": delta.reasoning_content})
+                    safe = reasoning_redactor.feed(delta.reasoning_content)
+                    if safe:
+                        reasoning_parts.append(safe)
+                        yield _sse_event("reasoning", {"content": safe})
 
                 if delta.content:
-                    content_parts.append(delta.content)
-                    yield _sse_event("token", {"content": delta.content})
+                    safe = content_redactor.feed(delta.content)
+                    if safe:
+                        content_parts.append(safe)
+                        yield _sse_event("token", {"content": safe})
 
                 if delta.tool_calls:
                     for tc in delta.tool_calls:
@@ -195,6 +204,16 @@ async def _run_agent(
                                 entry["name"] += tc.function.name
                             if tc.function.arguments:
                                 entry["arguments"] += tc.function.arguments
+
+            # Release each redactor's held-back tail now the stream has ended.
+            for redactor, parts, event in (
+                (reasoning_redactor, reasoning_parts, "reasoning"),
+                (content_redactor, content_parts, "token"),
+            ):
+                tail = redactor.flush()
+                if tail:
+                    parts.append(tail)
+                    yield _sse_event(event, {"content": tail})
         except Exception:
             logger.exception(
                 "llm.turn.failed user_id=%s conversation_id=%s latency_ms=%d",

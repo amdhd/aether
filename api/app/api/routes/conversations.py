@@ -6,6 +6,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from app.agent.loop import stream_agent_response
 from app.api.deps import get_current_user, get_owned_or_404
 from app.core.config import settings
+from app.core.cost_cap import enforce_monthly_cost_cap
 from app.core.rate_limit import enforce_chat_rate_limit
 from app.db.session import get_db, get_session_factory
 from app.models.conversation import Conversation
@@ -97,6 +98,7 @@ async def send_message(
     content: str = Form(..., min_length=1, max_length=MAX_MESSAGE_CHARS),
     file: UploadFile | None = File(default=None),
     current_user: User = Depends(enforce_chat_rate_limit),
+    _budget: User = Depends(enforce_monthly_cost_cap),
     db: AsyncSession = Depends(get_db),
     session_factory: async_sessionmaker[AsyncSession] = Depends(get_session_factory),
 ) -> StreamingResponse:

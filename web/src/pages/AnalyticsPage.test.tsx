@@ -48,4 +48,18 @@ describe('AnalyticsPage', () => {
     expect(screen.getByText('Messages sent')).toBeInTheDocument()
     expect(screen.getByText('10')).toBeInTheDocument()
   })
+
+  it('labels tool usage in plain language rather than raw tool names', async () => {
+    vi.mocked(analyticsApi.getAnalyticsSummary).mockResolvedValue({
+      messages_per_day: [{ date: '2026-06-01', count: 5 }],
+      tokens_per_day: [{ date: '2026-06-01', prompt_tokens: 100, completion_tokens: 50 }],
+      tool_usage: [{ tool_name: 'list_tasks', count: 1 }],
+      totals: { conversations: 2, messages: 10, prompt_tokens: 1000, completion_tokens: 500 },
+    })
+
+    renderWithProviders(<AnalyticsPage />)
+
+    expect(await screen.findByText('What Aether did for you')).toBeInTheDocument()
+    expect(screen.queryByText(/list_tasks/)).not.toBeInTheDocument()
+  })
 })

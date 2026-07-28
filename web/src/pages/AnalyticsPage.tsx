@@ -15,9 +15,10 @@ import {
 } from 'recharts'
 import type { PieLabelRenderProps } from 'recharts'
 
-import { getAnalyticsSummary, type ToolUsageCount } from '@/api/analytics'
+import { getAnalyticsSummary } from '@/api/analytics'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Skeleton } from '@/components/ui/skeleton'
+import { toolLabel } from '@/lib/toolLabels'
 import { useThemeStore } from '@/store/theme'
 
 const TOOL_COLORS = ['#4f46e5', '#0ea5e9', '#22c55e', '#f59e0b', '#ef4444', '#a855f7']
@@ -27,9 +28,15 @@ function formatShortDate(value: unknown): string {
   return date.toLocaleDateString(undefined, { month: 'short', day: 'numeric', timeZone: 'UTC' })
 }
 
+interface ToolSlice {
+  tool_name: string
+  label: string
+  count: number
+}
+
 function renderToolLabel(props: PieLabelRenderProps): string {
-  const { tool_name, count } = props as unknown as ToolUsageCount
-  return `${tool_name} (${count})`
+  const { label, count } = props as unknown as ToolSlice
+  return `${label} (${count})`
 }
 
 export function AnalyticsPage() {
@@ -45,6 +52,9 @@ export function AnalyticsPage() {
   })
 
   const hasData = (data?.totals.messages ?? 0) > 0 || (data?.totals.conversations ?? 0) > 0
+
+  const toolSlices: ToolSlice[] =
+    data?.tool_usage.map((entry) => ({ ...entry, label: toolLabel(entry.tool_name) })) ?? []
 
   return (
     <div className="space-y-6">
@@ -151,28 +161,28 @@ export function AnalyticsPage() {
 
           <Card>
             <CardHeader>
-              <CardTitle>Tool call breakdown</CardTitle>
-              <CardDescription>Which tools the assistant has used on your behalf</CardDescription>
+              <CardTitle>What Aether did for you</CardTitle>
+              <CardDescription>Actions the assistant took on your behalf</CardDescription>
             </CardHeader>
             <CardContent className="h-72">
-              {data.tool_usage.length === 0 ? (
+              {toolSlices.length === 0 ? (
                 <div className="flex h-full items-center justify-center text-sm text-muted-foreground">
                   <Wrench className="mr-2 h-4 w-4" />
-                  No tool calls yet.
+                  No actions yet.
                 </div>
               ) : (
                 <ResponsiveContainer width="100%" height="100%">
                   <PieChart>
                     <Pie
-                      data={data.tool_usage}
+                      data={toolSlices}
                       dataKey="count"
-                      nameKey="tool_name"
+                      nameKey="label"
                       cx="50%"
                       cy="50%"
                       outerRadius={90}
                       label={renderToolLabel}
                     >
-                      {data.tool_usage.map((entry, index) => (
+                      {toolSlices.map((entry, index) => (
                         <Cell key={entry.tool_name} fill={TOOL_COLORS[index % TOOL_COLORS.length]} />
                       ))}
                     </Pie>

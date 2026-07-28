@@ -8,6 +8,12 @@ import type {
   Page,
 } from '@/types'
 
+// Shared so the chat page and the sidebar history hit the same query key and
+// therefore the same cached request.
+export const CONVERSATIONS_PAGE_SIZE = 50
+// Active conversation id, carried in the URL so the sidebar can drive the page.
+export const CONVERSATION_PARAM = 'c'
+
 export function listConversations(limit?: number, offset?: number) {
   const params = new URLSearchParams()
   if (limit !== undefined) params.set('limit', String(limit))

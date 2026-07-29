@@ -147,6 +147,16 @@ def _get_redis_limiter() -> _RedisLimiter | None:
     return _redis_limiter
 
 
+def get_redis_client():
+    """The shared Redis connection, or None when running on the in-memory backend.
+
+    Exposed so other per-user guards (see ``app.core.inflight``) reuse this one
+    connection and this one REDIS_URL rather than opening their own.
+    """
+    limiter = _get_redis_limiter()
+    return limiter._redis if limiter is not None else None
+
+
 def set_redis_limiter_for_test(limiter: _RedisLimiter | None) -> None:
     """Test hook: inject (or clear) the Redis limiter without a real REDIS_URL."""
     global _redis_limiter, _redis_limiter_ready

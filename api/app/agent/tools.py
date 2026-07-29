@@ -473,6 +473,23 @@ def _truncate(text: str | None, max_chars: int) -> str | None:
     return text[:max_chars].rstrip() + "..."
 
 
+def _google_error_message(exc: httpx.HTTPError) -> str:
+    """Google's actual reason for a failed Calendar call, when there is one.
+
+    httpx's default str(exc) is just "403 Forbidden" with no body, which is
+    useless for telling "Calendar API not enabled" apart from "token revoked"
+    apart from an actual rate limit. Google puts the real reason in the JSON
+    body, so surface that instead when the failure is an HTTP error response.
+    """
+    if isinstance(exc, httpx.HTTPStatusError):
+        try:
+            detail = exc.response.json()["error"]
+            return detail.get("message") or str(exc)
+        except (ValueError, KeyError, TypeError):
+            pass
+    return str(exc)
+
+
 async def _calendar_guard(db: AsyncSession, user: User) -> tuple[str | None, dict[str, Any] | None]:
     """Return (access_token, None) when the user can call Google Calendar, or
     (None, error) when Calendar isn't connected or the rate limit is reached."""
@@ -507,7 +524,7 @@ async def _calendar_list_events(db: AsyncSession, user: User, args: dict[str, An
             resp.raise_for_status()
             data = resp.json()
     except httpx.HTTPError as exc:
-        return {"error": f"Google Calendar request failed: {exc}"}
+        return {"error": f"Google Calendar request failed: {_google_error_message(exc)}"}
 
     events = [
         {
@@ -547,7 +564,7 @@ async def _calendar_create_event(db: AsyncSession, user: User, args: dict[str, A
             resp.raise_for_status()
             data = resp.json()
     except httpx.HTTPError as exc:
-        return {"error": f"Google Calendar request failed: {exc}"}
+        return {"error": f"Google Calendar request failed: {_google_error_message(exc)}"}
 
     return {
         "event": {
@@ -575,7 +592,7 @@ async def _calendar_delete_event(db: AsyncSession, user: User, args: dict[str, A
             )
             resp.raise_for_status()
     except httpx.HTTPError as exc:
-        return {"error": f"Google Calendar request failed: {exc}"}
+        return {"error": f"Google Calendar request failed: {_google_error_message(exc)}"}
 
     return {"deleted": args["event_id"]}
 

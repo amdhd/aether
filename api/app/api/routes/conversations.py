@@ -7,6 +7,7 @@ from app.agent.loop import stream_agent_response
 from app.api.deps import get_current_user, get_owned_or_404
 from app.core.config import settings
 from app.core.cost_cap import enforce_monthly_cost_cap
+from app.core.inflight import acquire_turn_slot
 from app.core.rate_limit import enforce_chat_rate_limit
 from app.db.session import get_db, get_session_factory
 from app.models.conversation import Conversation
@@ -119,6 +120,16 @@ async def send_message(
         # parse_tabular_file validates the size, extension, and contents,
         # raising HTTP 422 with a user-facing message on any problem.
         attachment_name, attachment_content = parse_tabular_file(file.filename, raw)
+
+    # Claimed here rather than in a dependency so a rejected upload above can't
+    # strand a slot: from this point the generator below always runs and always
+    # releases it. The cost cap depends on this ceiling to be enforceable at all.
+    if not await acquire_turn_slot(current_user.id):
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail="Another reply is still in progress. Wait for it to finish and try again.",
+            headers={"Retry-After": "5"},
+        )
 
     return StreamingResponse(
         stream_agent_response(

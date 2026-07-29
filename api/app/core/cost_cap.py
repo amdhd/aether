@@ -10,6 +10,12 @@ The check is intentionally *pre-turn* and therefore approximate — the turn tha
 crosses the line is allowed to finish, so a user can end the month slightly over
 the cap. Bounding a single turn matters less than bounding the month, and the
 per-request message cap already limits how large one turn can get.
+
+That approximation only holds because a user's turns are also bounded in
+*parallel*: a turn's tokens land in ``UsageLog`` when it ends, so simultaneous
+requests would otherwise all read the same month-to-date total and all pass.
+``app.core.inflight`` caps concurrent turns per user, which keeps the overshoot
+to a small multiple of one turn instead of however many tabs are open.
 """
 
 from datetime import datetime, timezone

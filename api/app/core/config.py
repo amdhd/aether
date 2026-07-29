@@ -90,6 +90,13 @@ class Settings(BaseSettings):
     # from the rates above being correct. Set to 0 to disable the cap.
     MONTHLY_COST_CAP_USD: float = 10.0
 
+    # How many chat turns one user may have running at once. The cost cap reads
+    # spend that is only recorded when a turn ends, so without this a burst of
+    # parallel requests all pass the same check and blow past the cap together.
+    # Two leaves room for a second tab while keeping the overshoot bounded.
+    # Set to 0 to disable the ceiling.
+    CHAT_MAX_CONCURRENT_TURNS: int = 2
+
     # Shared store for rate limiting across instances. When set (e.g. the HA
     # ElastiCache endpoint), the sliding-window rate limiter enforces limits
     # globally in Redis instead of per-instance — required for the limits to

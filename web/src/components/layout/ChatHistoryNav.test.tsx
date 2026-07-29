@@ -41,6 +41,32 @@ describe('ChatHistoryNav', () => {
     expect(screen.queryByRole('button', { name: 'Chat 7' })).not.toBeInTheDocument()
   })
 
+  it('reveals the rest of the list via Show all, and can collapse back', async () => {
+    const items = [1, 2, 3, 4, 5, 6, 7].map((n) => conversation(n, `Chat ${n}`))
+    vi.mocked(chatApi.listConversations).mockResolvedValue(conversationsPage(items))
+
+    renderWithProviders(<ChatHistoryNav />, { route: '/chat' })
+
+    await screen.findByRole('button', { name: 'Chat 1' })
+    expect(screen.queryByRole('button', { name: 'Chat 7' })).not.toBeInTheDocument()
+
+    await userEvent.click(screen.getByRole('button', { name: /show all \(7\)/i }))
+    expect(screen.getByRole('button', { name: 'Chat 7' })).toBeInTheDocument()
+
+    await userEvent.click(screen.getByRole('button', { name: /show less/i }))
+    expect(screen.queryByRole('button', { name: 'Chat 7' })).not.toBeInTheDocument()
+  })
+
+  it('has no Show all toggle when everything already fits', async () => {
+    const items = [1, 2, 3].map((n) => conversation(n, `Chat ${n}`))
+    vi.mocked(chatApi.listConversations).mockResolvedValue(conversationsPage(items))
+
+    renderWithProviders(<ChatHistoryNav />, { route: '/chat' })
+
+    await screen.findByRole('button', { name: 'Chat 1' })
+    expect(screen.queryByRole('button', { name: /show all/i })).not.toBeInTheDocument()
+  })
+
   it('collapses and expands the list', async () => {
     vi.mocked(chatApi.listConversations).mockResolvedValue(
       conversationsPage([conversation(1, 'Trip planning')]),

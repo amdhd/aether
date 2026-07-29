@@ -33,7 +33,6 @@ import { useCrudMutations } from '@/hooks/useCrudMutations'
 import { cn } from '@/lib/utils'
 import type { Conversation, ConversationCreateInput, MessageRole, Persona } from '@/types'
 
-
 // Short labels + icons for the welcome-screen persona picker.
 const PERSONA_OPTIONS: { value: Persona; label: string; Icon: LucideIcon }[] = [
   { value: 'productivity_coach', label: 'Productivity', Icon: Zap },
@@ -83,6 +82,10 @@ function PersonaPicker({
 }
 
 const ATTACHMENT_ACCEPT = '.csv,.tsv'
+
+// Distance from the bottom that still counts as "following along". Roughly one
+// line of prose, so a stray trackpad nudge doesn't detach the view.
+const SCROLL_PIN_THRESHOLD_PX = 100
 
 const PROSE =
   'text-[15px] leading-7 [&_a]:font-medium [&_a]:text-foreground [&_a]:underline [&_a]:underline-offset-2 [&_code]:rounded [&_code]:bg-surface-muted [&_code]:px-1.5 [&_code]:py-0.5 [&_code]:text-[13px] [&_h1]:mb-2 [&_h1]:mt-4 [&_h1]:text-lg [&_h1]:font-semibold [&_h2]:mb-2 [&_h2]:mt-4 [&_h2]:text-base [&_h2]:font-semibold [&_h3]:mb-1.5 [&_h3]:mt-3 [&_h3]:font-semibold [&_li]:mb-1 [&_ol]:mb-3 [&_ol]:list-decimal [&_ol]:pl-5 [&_p:last-child]:mb-0 [&_p]:mb-3 [&_pre]:mb-3 [&_pre]:overflow-x-auto [&_pre]:rounded-lg [&_pre]:border [&_pre]:border-border [&_pre]:bg-surface-muted [&_pre]:p-3 [&_pre]:text-[13px] [&_pre_code]:bg-transparent [&_pre_code]:p-0 [&_ul]:mb-3 [&_ul]:list-disc [&_ul]:pl-5'
@@ -220,7 +223,11 @@ export function ChatPage() {
   const [attachedFile, setAttachedFile] = useState<File | null>(null)
   const [attachError, setAttachError] = useState<string | null>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
-  const [isStreaming, setIsStreaming] = useState(false)
+  const textareaRef = useRef<HTMLTextAreaElement>(null)
+  // Which conversation the in-flight turn belongs to, so its optimistic bubble
+  // and streamed reply can't be drawn under a different chat the user switches
+  // to mid-stream. Null means nothing is streaming.
+  const [streamingFor, setStreamingFor] = useState<number | null>(null)
   const [pendingUserContent, setPendingUserContent] = useState<string | null>(null)
   const [pendingAttachmentName, setPendingAttachmentName] = useState<string | null>(null)
   const [streamingContent, setStreamingContent] = useState('')
@@ -228,6 +235,9 @@ export function ChatPage() {
   const [streamingToolCalls, setStreamingToolCalls] = useState<string[]>([])
   const [errorMessage, setErrorMessage] = useState<string | null>(null)
   const scrollRef = useRef<HTMLDivElement>(null)
+  // Only follow the tail while the reader is already at it — otherwise scrolling
+  // up to re-read something yanks you back down on the next token.
+  const pinnedToBottomRef = useRef(true)
 
   // Same key as the sidebar history, so the two share one request.
   const { data: conversationsPage } = useQuery({
@@ -237,6 +247,14 @@ export function ChatPage() {
   const conversations = conversationsPage?.items ?? []
 
   const activeId = selectedId ?? conversations[0]?.id ?? null
+  const isStreaming = streamingFor !== null
+  // The turn belongs to the chat on screen, so its bubbles should be drawn.
+  const isStreamingHere = streamingFor !== null && streamingFor === activeId
+  // Read inside the async send, which outlives the render that started it.
+  const activeIdRef = useRef(activeId)
+  useEffect(() => {
+    activeIdRef.current = activeId
+  }, [activeId])
 
   const {
     data: conversation,
@@ -294,9 +312,21 @@ export function ChatPage() {
     conversations.find((c) => c.id === activeId)?.persona ??
     'productivity_coach'
 
+  const handleScroll = () => {
+    const el = scrollRef.current
+    if (!el) return
+    pinnedToBottomRef.current = el.scrollHeight - el.scrollTop - el.clientHeight <= SCROLL_PIN_THRESHOLD_PX
+  }
+
   useEffect(() => {
+    if (!pinnedToBottomRef.current) return
     scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: 'smooth' })
   }, [conversation?.messages.length, streamingContent, pendingUserContent])
+
+  // A different chat starts at its own tail, however the last one was left.
+  useEffect(() => {
+    pinnedToBottomRef.current = true
+  }, [activeId])
 
   const resetStreamingState = () => {
     setStreamingContent('')
@@ -324,6 +354,7 @@ export function ChatPage() {
     const content = draft.trim()
     if (activeId === null || !content || isStreaming) return
 
+    const sendingTo = activeId
     const file = attachedFile
     setDraft('')
     setAttachedFile(null)
@@ -332,11 +363,11 @@ export function ChatPage() {
     setPendingAttachmentName(file?.name ?? null)
     resetStreamingState()
     setErrorMessage(null)
-    setIsStreaming(true)
+    setStreamingFor(sendingTo)
 
     try {
       await streamChatMessage(
-        activeId,
+        sendingTo,
         content,
         {
           onToken: (chunk) => setStreamingContent((prev) => prev + chunk),
@@ -348,10 +379,17 @@ export function ChatPage() {
       )
     } catch (err) {
       setErrorMessage(err instanceof Error ? err.message : 'Something went wrong. Please try again.')
+      // The turn never landed, so the composer was cleared for nothing. Hand the
+      // message back rather than making them retype it — but only into the chat
+      // it was written for, and never over something typed since.
+      if (activeIdRef.current === sendingTo) {
+        setDraft((current) => current || content)
+        setAttachedFile((current) => current ?? file)
+      }
     } finally {
-      await queryClient.invalidateQueries({ queryKey: ['conversation', activeId] })
+      await queryClient.invalidateQueries({ queryKey: ['conversation', sendingTo] })
       await queryClient.invalidateQueries({ queryKey: ['conversations'] })
-      setIsStreaming(false)
+      setStreamingFor(null)
       setPendingUserContent(null)
       setPendingAttachmentName(null)
       resetStreamingState()
@@ -359,6 +397,9 @@ export function ChatPage() {
   }
 
   const handleKeyDown = (event: KeyboardEvent<HTMLTextAreaElement>) => {
+    // An IME uses Enter to accept a candidate word; sending on that would fire
+    // the message off half-composed for CJK input.
+    if (event.nativeEvent.isComposing) return
     if (event.key === 'Enter' && !event.shiftKey) {
       event.preventDefault()
       void handleSend()
@@ -376,13 +417,101 @@ export function ChatPage() {
     !conversationLoading &&
     !conversationFailed &&
     visibleMessages.length === 0 &&
-    pendingUserContent === null &&
-    !isStreaming
+    !isStreamingHere
+
+  // Clicking "New chat" while already sitting in an unused one would just pile
+  // up identical empty conversations in the history, so the button lands you in
+  // the composer of the one you already have instead of creating another.
+  const handleNewChat = () => {
+    if (isEmptyConversation) {
+      textareaRef.current?.focus()
+      return
+    }
+    createMutation.mutate({})
+  }
+
+  // With nothing to read yet, the composer is the whole point of the screen, so
+  // it sits with the greeting in the middle rather than pinned to the bottom of
+  // an empty page. Once there's a transcript it returns to the bottom.
+  const showWelcome = activeId === null || isEmptyConversation
+
+  const composer = (
+    <div className="w-full">
+      <input
+        ref={fileInputRef}
+        type="file"
+        accept={ATTACHMENT_ACCEPT}
+        className="hidden"
+        aria-hidden
+        onChange={handleFileSelect}
+      />
+      <div className="relative rounded-2xl border border-border bg-surface shadow-sm transition-colors focus-within:border-foreground/25">
+        {attachedFile && (
+          <div className="flex px-3 pt-3">
+            <span className="inline-flex max-w-full items-center gap-1.5 rounded-md border border-border bg-surface-muted px-2 py-1 text-xs text-muted-foreground">
+              <Paperclip className="h-3 w-3 shrink-0" />
+              <span className="truncate">{attachedFile.name}</span>
+              <button
+                type="button"
+                aria-label="Remove attachment"
+                className="focus-ring shrink-0 hover:text-foreground"
+                onClick={() => setAttachedFile(null)}
+              >
+                <X className="h-3 w-3" />
+              </button>
+            </span>
+          </div>
+        )}
+        <textarea
+          ref={textareaRef}
+          value={draft}
+          onChange={(e) => setDraft(e.target.value)}
+          onKeyDown={handleKeyDown}
+          placeholder={activeId === null ? 'Start a new conversation first' : 'Message Aether…'}
+          aria-label="Message"
+          disabled={activeId === null || isStreaming}
+          rows={1}
+          className="block max-h-40 min-h-[52px] w-full resize-none rounded-2xl bg-transparent py-3.5 pl-12 pr-14 text-[15px] leading-6 placeholder:text-muted-foreground focus:outline-none disabled:cursor-not-allowed disabled:opacity-60"
+        />
+        <Button
+          variant="ghost"
+          size="icon"
+          className="absolute bottom-2.5 left-2.5 h-9 w-9 rounded-lg text-muted-foreground"
+          aria-label="Attach CSV file"
+          onClick={() => fileInputRef.current?.click()}
+          disabled={activeId === null || isStreaming}
+        >
+          <Paperclip className="h-4 w-4" />
+        </Button>
+        <Button
+          size="icon"
+          className="absolute bottom-2.5 right-2.5 h-9 w-9 rounded-lg"
+          aria-label="Send message"
+          onClick={() => void handleSend()}
+          disabled={activeId === null || !draft.trim() || isStreaming}
+        >
+          <Send className="h-4 w-4" />
+        </Button>
+      </div>
+      {attachError && <p className="px-1 pt-1 text-xs text-red-600 dark:text-red-400">{attachError}</p>}
+      <p className="py-2 text-center text-xs text-muted-foreground">
+        Aether can make mistakes. Attach a .csv to analyze campaign data.
+      </p>
+    </div>
+  )
+
+  const errorBanner = errorMessage && (
+    <p
+      role="alert"
+      className="mt-4 rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700 dark:border-red-900/50 dark:bg-red-950/40 dark:text-red-300"
+    >
+      {errorMessage}
+    </p>
+  )
 
   return (
     <div className="flex h-full flex-col">
       <div className="flex min-h-0 flex-1 flex-col">
-
         <div className="flex shrink-0 items-center justify-between gap-2 pb-4">
           <h1 className="min-w-0 truncate text-base font-semibold tracking-tight">
             {conversation?.title ?? 'Chat'}
@@ -391,7 +520,7 @@ export function ChatPage() {
             variant="outline"
             size="sm"
             className="shrink-0"
-            onClick={() => createMutation.mutate({})}
+            onClick={handleNewChat}
             disabled={createMutation.isPending}
           >
             <Plus className="h-4 w-4" />
@@ -399,187 +528,134 @@ export function ChatPage() {
           </Button>
         </div>
 
-        <div ref={scrollRef} className="min-h-0 flex-1 overflow-y-auto">
-          <div className="mx-auto w-full max-w-3xl px-1 pb-6">
-            {activeId === null ? (
-              <div className="flex min-h-[50vh] flex-col items-center justify-center text-center">
+        {showWelcome ? (
+          // True vertical centering reads as low — the eye weighs the page
+          // (and the header above this block) as part of the frame, so a
+          // slight upward bias is what actually looks centered.
+          <div className="flex min-h-0 flex-1 flex-col items-center justify-center overflow-y-auto pb-[12vh]">
+            <div className="w-full max-w-3xl px-1 py-6">
+              <div className="flex flex-col items-center text-center">
                 <div className="flex items-center gap-3">
                   <Sparkles className="h-7 w-7 shrink-0 text-foreground" aria-hidden />
                   <h2 className="text-2xl font-semibold tracking-tight">Start chatting with Aether</h2>
                 </div>
                 <p className="mt-2 max-w-md text-sm text-muted-foreground">
-                  Choose a persona to start a new conversation — ask about your tasks, notes,
-                  campaigns, the weather, or anything else.
+                  {activeId === null
+                    ? 'Choose a persona to start a new conversation — ask about your tasks, notes, campaigns, the weather, or anything else.'
+                    : 'Choose a persona, then ask about your tasks, notes, campaigns, the weather, or anything else.'}
                 </p>
                 <div className="mt-6">
-                  <PersonaPicker
-                    value={landingPersona}
-                    disabled={createMutation.isPending}
-                    onSelect={(persona) => {
-                      setLandingPersona(persona)
-                      createMutation.mutate({ persona })
-                    }}
-                  />
+                  {activeId === null ? (
+                    <PersonaPicker
+                      value={landingPersona}
+                      disabled={createMutation.isPending}
+                      onSelect={(persona) => {
+                        setLandingPersona(persona)
+                        createMutation.mutate({ persona })
+                      }}
+                    />
+                  ) : (
+                    <PersonaPicker
+                      value={activePersona}
+                      onSelect={(persona) => personaMutation.mutate({ id: activeId, persona })}
+                    />
+                  )}
                 </div>
               </div>
-            ) : conversationLoading ? (
-              <div className="space-y-6 pt-2">
-                {[...Array(3)].map((_, i) => (
-                  <Skeleton key={i} className="h-16 w-2/3" />
-                ))}
-              </div>
-            ) : conversationFailed ? (
-              <div className="flex min-h-[50vh] flex-col items-center justify-center text-center">
-                <h2 className="text-lg font-semibold tracking-tight">Couldn’t load this conversation</h2>
-                <p className="mt-2 max-w-md text-sm text-muted-foreground">
-                  Its messages and persona are unavailable right now.
-                </p>
-                <Button variant="outline" size="sm" className="mt-4" onClick={() => void refetchConversation()}>
-                  Try again
-                </Button>
-              </div>
-            ) : isEmptyConversation ? (
-              <div className="flex min-h-[50vh] flex-col items-center justify-center text-center">
-                <div className="flex items-center gap-3">
-                  <Sparkles className="h-7 w-7 shrink-0 text-foreground" aria-hidden />
-                  <h2 className="text-2xl font-semibold tracking-tight">Start chatting with Aether</h2>
-                </div>
-                <p className="mt-2 max-w-md text-sm text-muted-foreground">
-                  Choose a persona, then ask about your tasks, notes, campaigns, the weather, or
-                  anything else.
-                </p>
-                <div className="mt-6">
-                  <PersonaPicker
-                    value={activePersona}
-                    onSelect={(persona) =>
-                      activeId !== null && personaMutation.mutate({ id: activeId, persona })
-                    }
-                  />
-                </div>
-              </div>
-            ) : (
-              <div className="space-y-6 pt-2">
-                {visibleMessages.map((message) => (
-                  <Message
-                    key={message.id}
-                    role={message.role}
-                    content={message.content ?? ''}
-                    reasoningContent={message.reasoning_content}
-                    attachmentName={message.attachment_name}
-                  />
-                ))}
-                {pendingUserContent !== null && (
-                  <Message role="user" content={pendingUserContent} attachmentName={pendingAttachmentName} />
-                )}
-                {isStreaming && (
-                  <div className="flex gap-3">
-                    <div
-                      aria-hidden
-                      className="mt-0.5 flex h-7 w-7 shrink-0 select-none items-center justify-center rounded-full bg-foreground text-[13px] font-semibold text-background"
+              <div className="mt-8">{composer}</div>
+              {errorBanner}
+            </div>
+          </div>
+        ) : (
+          <>
+            <div ref={scrollRef} onScroll={handleScroll} className="min-h-0 flex-1 overflow-y-auto">
+              <div className="mx-auto w-full max-w-3xl px-1 pb-6">
+                {conversationLoading ? (
+                  <div className="space-y-6 pt-2">
+                    {[...Array(3)].map((_, i) => (
+                      <Skeleton key={i} className="h-16 w-2/3" />
+                    ))}
+                  </div>
+                ) : conversationFailed ? (
+                  <div className="flex min-h-[50vh] flex-col items-center justify-center text-center">
+                    <h2 className="text-lg font-semibold tracking-tight">Couldn’t load this conversation</h2>
+                    <p className="mt-2 max-w-md text-sm text-muted-foreground">
+                      Its messages and persona are unavailable right now.
+                    </p>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      className="mt-4"
+                      onClick={() => void refetchConversation()}
                     >
-                      A
-                    </div>
-                    <div
-                      className="min-w-0 flex-1 pt-0.5"
-                      // Announce the assistant's reply to screen readers as it
-                      // streams in, rather than leaving them silent until the
-                      // query refetch swaps in the final message.
-                      aria-live="polite"
-                      aria-atomic="false"
-                      aria-busy={isStreaming}
-                    >
-                      {streamingToolCalls.map((name, i) => (
-                        <p key={i} className="mb-2 flex items-center gap-2 text-sm text-muted-foreground">
-                          <span className="inline-block h-1.5 w-1.5 animate-pulse rounded-full bg-muted-foreground" />
-                          Using <span className="font-medium text-foreground">{name}</span>
-                        </p>
-                      ))}
-                      {streamingReasoning && <ThinkingBlock content={streamingReasoning} />}
-                      {streamingContent ? (
-                        <MessageContent content={streamingContent} />
-                      ) : (
-                        !streamingReasoning && (
-                          <p className="flex items-center gap-1 py-1 text-sm text-muted-foreground">
-                            <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-muted-foreground [animation-delay:-0.3s]" />
-                            <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-muted-foreground [animation-delay:-0.15s]" />
-                            <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-muted-foreground" />
-                          </p>
-                        )
-                      )}
-                    </div>
+                      Try again
+                    </Button>
+                  </div>
+                ) : (
+                  <div className="space-y-6 pt-2">
+                    {visibleMessages.map((message) => (
+                      <Message
+                        key={message.id}
+                        role={message.role}
+                        content={message.content ?? ''}
+                        reasoningContent={message.reasoning_content}
+                        attachmentName={message.attachment_name}
+                      />
+                    ))}
+                    {isStreamingHere && pendingUserContent !== null && (
+                      <Message
+                        role="user"
+                        content={pendingUserContent}
+                        attachmentName={pendingAttachmentName}
+                      />
+                    )}
+                    {isStreamingHere && (
+                      <div className="flex gap-3">
+                        <div
+                          aria-hidden
+                          className="mt-0.5 flex h-7 w-7 shrink-0 select-none items-center justify-center rounded-full bg-foreground text-[13px] font-semibold text-background"
+                        >
+                          A
+                        </div>
+                        <div
+                          className="min-w-0 flex-1 pt-0.5"
+                          // Announce the assistant's reply to screen readers as it
+                          // streams in, rather than leaving them silent until the
+                          // query refetch swaps in the final message.
+                          aria-live="polite"
+                          aria-atomic="false"
+                          aria-busy={isStreaming}
+                        >
+                          {streamingToolCalls.map((name, i) => (
+                            <p key={i} className="mb-2 flex items-center gap-2 text-sm text-muted-foreground">
+                              <span className="inline-block h-1.5 w-1.5 animate-pulse rounded-full bg-muted-foreground" />
+                              Using <span className="font-medium text-foreground">{name}</span>
+                            </p>
+                          ))}
+                          {streamingReasoning && <ThinkingBlock content={streamingReasoning} />}
+                          {streamingContent ? (
+                            <MessageContent content={streamingContent} />
+                          ) : (
+                            !streamingReasoning && (
+                              <p className="flex items-center gap-1 py-1 text-sm text-muted-foreground">
+                                <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-muted-foreground [animation-delay:-0.3s]" />
+                                <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-muted-foreground [animation-delay:-0.15s]" />
+                                <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-muted-foreground" />
+                              </p>
+                            )
+                          )}
+                        </div>
+                      </div>
+                    )}
                   </div>
                 )}
+                {errorBanner}
               </div>
-            )}
-            {errorMessage && (
-              <p className="mt-4 rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700 dark:border-red-900/50 dark:bg-red-950/40 dark:text-red-300">
-                {errorMessage}
-              </p>
-            )}
-          </div>
-        </div>
+            </div>
 
-        <div className="mx-auto w-full max-w-3xl px-1 pt-2">
-          <input
-            ref={fileInputRef}
-            type="file"
-            accept={ATTACHMENT_ACCEPT}
-            className="hidden"
-            aria-hidden
-            onChange={handleFileSelect}
-          />
-          <div className="relative rounded-2xl border border-border bg-surface shadow-sm transition-colors focus-within:border-foreground/25">
-            {attachedFile && (
-              <div className="flex px-3 pt-3">
-                <span className="inline-flex max-w-full items-center gap-1.5 rounded-md border border-border bg-surface-muted px-2 py-1 text-xs text-muted-foreground">
-                  <Paperclip className="h-3 w-3 shrink-0" />
-                  <span className="truncate">{attachedFile.name}</span>
-                  <button
-                    type="button"
-                    aria-label="Remove attachment"
-                    className="focus-ring shrink-0 hover:text-foreground"
-                    onClick={() => setAttachedFile(null)}
-                  >
-                    <X className="h-3 w-3" />
-                  </button>
-                </span>
-              </div>
-            )}
-            <textarea
-              value={draft}
-              onChange={(e) => setDraft(e.target.value)}
-              onKeyDown={handleKeyDown}
-              placeholder={activeId === null ? 'Start a new conversation first' : 'Message Aether…'}
-              aria-label="Message"
-              disabled={activeId === null || isStreaming}
-              rows={1}
-              className="block max-h-40 min-h-[52px] w-full resize-none rounded-2xl bg-transparent py-3.5 pl-12 pr-14 text-[15px] leading-6 placeholder:text-muted-foreground focus:outline-none disabled:cursor-not-allowed disabled:opacity-60"
-            />
-            <Button
-              variant="ghost"
-              size="icon"
-              className="absolute bottom-2.5 left-2.5 h-9 w-9 rounded-lg text-muted-foreground"
-              aria-label="Attach CSV file"
-              onClick={() => fileInputRef.current?.click()}
-              disabled={activeId === null || isStreaming}
-            >
-              <Paperclip className="h-4 w-4" />
-            </Button>
-            <Button
-              size="icon"
-              className="absolute bottom-2.5 right-2.5 h-9 w-9 rounded-lg"
-              aria-label="Send message"
-              onClick={() => void handleSend()}
-              disabled={activeId === null || !draft.trim() || isStreaming}
-            >
-              <Send className="h-4 w-4" />
-            </Button>
-          </div>
-          {attachError && <p className="px-1 pt-1 text-xs text-red-600 dark:text-red-400">{attachError}</p>}
-          <p className="py-2 text-center text-xs text-muted-foreground">
-            Aether can make mistakes. Attach a .csv to analyze campaign data.
-          </p>
-        </div>
+            <div className="mx-auto w-full max-w-3xl px-1 pt-2">{composer}</div>
+          </>
+        )}
       </div>
     </div>
   )

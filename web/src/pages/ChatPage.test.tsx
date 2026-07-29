@@ -1,8 +1,9 @@
 import { act, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
-import { describe, expect, it, vi } from 'vitest'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 import * as chatApi from '@/api/chat'
+import { ChatHistoryNav } from '@/components/layout/ChatHistoryNav'
 import { renderWithProviders } from '@/test/utils'
 import type { Conversation, ConversationDetail, Page } from '@/types'
 
@@ -58,6 +59,12 @@ const mockDetail: ConversationDetail = {
 }
 
 describe('ChatPage', () => {
+  // Call counts accumulate across tests in a file otherwise, which makes any
+  // "was this endpoint called?" assertion depend on test order.
+  beforeEach(() => {
+    vi.clearAllMocks()
+  })
+
   it('shows an empty state when there are no conversations', async () => {
     vi.mocked(chatApi.listConversations).mockResolvedValue(mockConversationsPage([]))
 
@@ -180,4 +187,104 @@ describe('ChatPage', () => {
     resolveStream()
   })
 
+  it('does not pile up empty conversations when New chat is clicked repeatedly', async () => {
+    const emptyConversation: Conversation = {
+      id: 3,
+      title: 'New conversation',
+      persona: 'productivity_coach',
+      created_at: '2026-01-01T00:00:00Z',
+      updated_at: '2026-01-01T00:00:00Z',
+    }
+    vi.mocked(chatApi.listConversations).mockResolvedValue(mockConversationsPage([emptyConversation]))
+    vi.mocked(chatApi.getConversation).mockResolvedValue({ ...emptyConversation, messages: [] })
+
+    renderWithProviders(<ChatPage />)
+    await screen.findByText(/choose a persona, then ask about/i)
+
+    const newChat = screen.getByRole('button', { name: /new chat/i })
+    await userEvent.click(newChat)
+    await userEvent.click(newChat)
+    await userEvent.click(newChat)
+
+    // The chat you're already in is empty — there is nothing to make room for.
+    expect(chatApi.createConversation).not.toHaveBeenCalled()
+    expect(await screen.findByLabelText('Message')).toHaveFocus()
+  })
+
+  it('creates a conversation from New chat once the current one has messages', async () => {
+    vi.mocked(chatApi.listConversations).mockResolvedValue(mockConversationsPage(mockConversations))
+    vi.mocked(chatApi.getConversation).mockResolvedValue(mockDetail)
+    vi.mocked(chatApi.createConversation).mockResolvedValue(mockConversations[0])
+
+    renderWithProviders(<ChatPage />)
+    await screen.findByText('Hi there')
+
+    await userEvent.click(screen.getByRole('button', { name: /new chat/i }))
+
+    await waitFor(() => expect(chatApi.createConversation).toHaveBeenCalledTimes(1))
+  })
+
+  it('hands the message back to the composer when the send fails', async () => {
+    vi.mocked(chatApi.listConversations).mockResolvedValue(mockConversationsPage(mockConversations))
+    vi.mocked(chatApi.getConversation).mockResolvedValue({ ...mockDetail, messages: [] })
+    vi.mocked(chatApi.streamChatMessage).mockRejectedValue(new Error('Monthly limit reached'))
+
+    renderWithProviders(<ChatPage />)
+    await screen.findByRole('heading', { name: 'Trip planning' })
+
+    const textbox = await screen.findByLabelText('Message')
+    await userEvent.type(textbox, 'Hello Aether')
+    await userEvent.click(screen.getByRole('button', { name: /send message/i }))
+
+    expect(await screen.findByText('Monthly limit reached')).toBeInTheDocument()
+    // Losing what they typed is the worst outcome of a failed turn.
+    await waitFor(() => expect(textbox).toHaveValue('Hello Aether'))
+  })
+
+  it('keeps a streaming reply out of a conversation the user switches to', async () => {
+    vi.mocked(chatApi.listConversations).mockResolvedValue(mockConversationsPage(mockConversations))
+    vi.mocked(chatApi.getConversation).mockResolvedValue({ ...mockDetail, messages: [] })
+
+    let capturedHandlers: chatApi.ChatStreamHandlers | undefined
+    let resolveStream: () => void = () => {}
+    vi.mocked(chatApi.streamChatMessage).mockImplementation(
+      (_id, _content, handlers) =>
+        new Promise((resolve) => {
+          capturedHandlers = handlers
+          resolveStream = () => resolve()
+        }),
+    )
+
+    // Conversation 2 has a transcript of its own, so switching to it renders the
+    // message list — the branch an in-flight turn could leak into.
+    vi.mocked(chatApi.getConversation).mockImplementation(async (id) => ({
+      ...(mockConversations.find((c) => c.id === id) ?? mockConversations[0]),
+      messages: id === 2 ? mockDetail.messages : [],
+    }))
+
+    // The sidebar is what drives selection, so render it alongside the page the
+    // way AppShell does rather than poking the URL directly.
+    renderWithProviders(
+      <>
+        <ChatHistoryNav />
+        <ChatPage />
+      </>,
+    )
+    await screen.findByRole('heading', { name: 'Trip planning' })
+
+    const textbox = await screen.findByLabelText('Message')
+    await userEvent.type(textbox, 'Hello Aether')
+    await userEvent.click(screen.getByRole('button', { name: /send message/i }))
+    act(() => capturedHandlers?.onToken?.('Streaming answer'))
+    expect(await screen.findByText('Streaming answer')).toBeInTheDocument()
+
+    await userEvent.click(screen.getByRole('button', { name: 'Daily standup' }))
+    await screen.findByRole('heading', { name: 'Daily standup' })
+
+    // The in-flight turn belongs to conversation 1 and must not be drawn here.
+    await waitFor(() => expect(screen.queryByText('Streaming answer')).not.toBeInTheDocument())
+    expect(screen.queryByText('Hello Aether')).not.toBeInTheDocument()
+
+    resolveStream()
+  })
 })

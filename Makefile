@@ -68,7 +68,11 @@ web:
 	   echo "         Set api_domain_name/hosted_zone_name in layer2 for a working demo."; ;; \
 	 esac; \
 	 echo "Building SPA with VITE_API_URL=$$api"; \
-	 (cd web && VITE_API_URL="$$api" npm ci && npm run build)
+	 (cd web && npm ci && VITE_API_URL="$$api" npm run build); \
+	 grep -rq "$$api" web/dist/assets/ || { \
+	   echo "ERROR: the built SPA does not contain $$api — VITE_API_URL never reached"; \
+	   echo "       'vite build', so the bundle fell back to its localhost default."; \
+	   exit 1; }
 	aws s3 sync web/dist s3://$(WEB_BUCKET) --delete
 	aws cloudfront create-invalidation --distribution-id $(CF_ID) --paths '/*'
 	@echo "Frontend: $(FRONTEND_URL)"

@@ -7,6 +7,7 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.pool import NullPool, StaticPool
 
+from app.core.inflight import reset_inflight
 from app.core.rate_limit import reset_rate_limits
 from app.db.base import Base
 from app.db.session import enable_sqlite_foreign_keys, get_db, get_session_factory
@@ -55,6 +56,8 @@ async def setup_database() -> AsyncGenerator[None, None]:
             await conn.execute(text("CREATE EXTENSION IF NOT EXISTS vector"))
         await conn.run_sync(Base.metadata.create_all)
     reset_rate_limits()
+    # A turn slot leaked by one test would 429 the next one.
+    reset_inflight()
     yield
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.drop_all)

@@ -9,8 +9,10 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
+from app.core.inflight import acquire_turn_slot, release_turn_slot
 from app.models.conversation import Conversation
 from app.models.message import Message, MessageRole
+from app.models.user import User
 from app.schemas.conversation import MAX_MESSAGE_CHARS
 from tests.conftest import TestingSessionLocal
 
@@ -586,3 +588,49 @@ async def test_chat_message_with_tool_call(
     detail = await client.get(f"/api/v1/conversations/{conversation_id}", headers=auth_headers)
     roles = [m["role"] for m in detail.json()["messages"]]
     assert roles == ["user", "assistant", "tool", "assistant"]
+
+
+async def test_concurrent_turn_is_rejected_and_the_slot_is_reusable(
+    client: AsyncClient, auth_headers: dict[str, str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A second in-flight turn is refused, which is what keeps the monthly cost
+    cap honest: usage lands in UsageLog only when a turn ends, so parallel turns
+    would all read the same spend and all pass the check."""
+    monkeypatch.setattr(settings, "CHAT_MAX_CONCURRENT_TURNS", 1)
+    fake_client = _patch_deepseek(
+        monkeypatch,
+        responses=[
+            [_content_chunk("First reply."), _usage_chunk(10, 5)],
+            [_content_chunk("Second reply."), _usage_chunk(10, 5)],
+        ],
+    )
+    assert fake_client is not None
+
+    create_resp = await client.post("/api/v1/conversations", json={}, headers=auth_headers)
+    conversation_id = create_resp.json()["id"]
+
+    async with TestingSessionLocal() as db:
+        user_id = (await db.execute(select(User))).scalars().first().id
+
+    # Stand in for a turn that is still streaming.
+    assert await acquire_turn_slot(user_id) is True
+
+    resp = await client.post(
+        f"/api/v1/conversations/{conversation_id}/messages",
+        data={"content": "Hi"},
+        headers=auth_headers,
+    )
+    assert resp.status_code == 429
+    assert "still in progress" in resp.json()["detail"]
+
+    # Once that turn ends the user is not locked out.
+    await release_turn_slot(user_id)
+    resp = await client.post(
+        f"/api/v1/conversations/{conversation_id}/messages",
+        data={"content": "Hi"},
+        headers=auth_headers,
+    )
+    assert resp.status_code == 200
+    # Streaming the body to completion is what releases the slot again.
+    assert "First reply." in resp.text
+    assert await acquire_turn_slot(user_id) is True

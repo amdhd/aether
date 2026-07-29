@@ -13,6 +13,7 @@ from app.agent.personas import get_system_prompt
 from app.agent.tools import TOOL_SCHEMAS, call_tool
 from app.core import metrics
 from app.core.config import settings
+from app.core.inflight import release_turn_slot
 from app.core.logging import get_logger
 from app.models.conversation import Conversation
 from app.models.message import Message, MessageRole
@@ -105,12 +106,19 @@ async def stream_agent_response(
     duration of the stream. The `async with` closes it when the stream finishes
     normally or when the client disconnects (Starlette calls `aclose()`), which
     releases the connection and prevents it lingering idle-in-transaction and
-    holding locks — a leak that is invisible on SQLite but deadlocks Postgres."""
-    async with session_factory() as db:
-        async for event in _run_agent(
-            db, user, conversation_id, user_message, attachment_name, attachment_content
-        ):
-            yield event
+    holding locks — a leak that is invisible on SQLite but deadlocks Postgres.
+
+    The route claimed this user's in-flight turn slot before handing the
+    generator to Starlette, so releasing it here covers every way the turn can
+    end: normal completion, an error, or the client disconnecting mid-stream."""
+    try:
+        async with session_factory() as db:
+            async for event in _run_agent(
+                db, user, conversation_id, user_message, attachment_name, attachment_content
+            ):
+                yield event
+    finally:
+        await release_turn_slot(user.id)
 
 
 async def _run_agent(

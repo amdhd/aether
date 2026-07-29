@@ -20,6 +20,7 @@ from app.models.message import Message, MessageRole
 from app.agent.redaction import VendorRedactor
 from app.models.usage_log import UsageLog
 from app.models.user import User
+from app.services.attachments import format_attachment_block
 
 logger = get_logger(__name__)
 
@@ -39,8 +40,8 @@ def _usage_log(user: User, conversation: Conversation, usage: dict[str, int]) ->
 def _message_to_api(message: Message) -> dict[str, Any]:
     content = message.content
     if message.role == MessageRole.user and message.attachment_content:
-        name = message.attachment_name or "attachment"
-        content = f"{content or ''}\n\n[Attached file: {name}]\n{message.attachment_content}".strip()
+        block = format_attachment_block(message.attachment_name or "", message.attachment_content)
+        content = f"{content or ''}\n\n{block}".strip()
     out: dict[str, Any] = {"role": message.role.value, "content": content}
     if message.tool_calls:
         out["tool_calls"] = message.tool_calls

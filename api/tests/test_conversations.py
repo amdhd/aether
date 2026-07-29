@@ -470,7 +470,8 @@ async def test_chat_message_with_csv_attachment(
     # message content stays clean (just the user's typed prompt).
     sent_messages = fake_client.chat.completions.stream_calls[0]["messages"]
     user_msg = next(m for m in sent_messages if m["role"] == "user")
-    assert "[Attached file: campaigns.csv]" in user_msg["content"]
+    assert '<attached_file name="campaigns.csv">' in user_msg["content"]
+    assert user_msg["content"].rstrip().endswith("</attached_file>")
     assert "Prospecting,200,300" in user_msg["content"]
 
     detail = await client.get(f"/api/v1/conversations/{conversation_id}", headers=auth_headers)

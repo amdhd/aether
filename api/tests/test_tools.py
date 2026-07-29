@@ -167,6 +167,29 @@ async def test_calendar_list_events_success(monkeypatch: pytest.MonkeyPatch) -> 
     assert result["events"][0]["summary"] == "Team sync"
 
 
+async def test_calendar_list_events_surfaces_googles_error_reason(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A bare httpx.HTTPStatusError str is just '403 Forbidden' — useless for
+    telling 'API not enabled' apart from 'token revoked'. Google's real reason
+    lives in the JSON body, so that's what should reach the user."""
+
+    async def fake_get_token(db, user):
+        return "access-token"
+
+    monkeypatch.setattr("app.agent.tools.google_oauth.get_valid_access_token", fake_get_token)
+    monkeypatch.setattr(
+        "app.agent.tools.httpx.AsyncClient",
+        lambda **kwargs: _FakeAsyncClient(
+            _FakeResponse(
+                {"error": {"code": 403, "message": "Google Calendar API has not been used in project 123."}},
+                status_code=403,
+            )
+        ),
+    )
+
+    result = json.loads(await call_tool("calendar_list_events", {}, None, SimpleNamespace(id=1)))
+    assert "has not been used in project 123" in result["error"]
+
+
 async def test_calendar_create_event_success(monkeypatch: pytest.MonkeyPatch) -> None:
     async def fake_get_token(db, user):
         return "access-token"

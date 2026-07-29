@@ -20,6 +20,7 @@ export function ChatHistoryNav() {
   const queryClient = useQueryClient()
   const [searchParams, setSearchParams] = useSearchParams()
   const [open, setOpen] = useState(true)
+  const [showAll, setShowAll] = useState(false)
   const [deletingId, setDeletingId] = useState<number | null>(null)
 
   const selectedParam = searchParams.get(CONVERSATION_PARAM)
@@ -30,7 +31,9 @@ export function ChatHistoryNav() {
     queryKey: ['conversations', CONVERSATIONS_PAGE_SIZE],
     queryFn: () => listConversations(CONVERSATIONS_PAGE_SIZE),
   })
-  const conversations = (page?.items ?? []).slice(0, HISTORY_LIMIT)
+  const allConversations = page?.items ?? []
+  const hasMore = allConversations.length > HISTORY_LIMIT
+  const conversations = showAll ? allConversations : allConversations.slice(0, HISTORY_LIMIT)
 
   const select = (id: number | null) => {
     setSearchParams(
@@ -100,6 +103,15 @@ export function ChatHistoryNav() {
                 </button>
               </div>
             ))
+          )}
+          {!isLoading && hasMore && (
+            <button
+              type="button"
+              className="w-full rounded-md px-3 py-1.5 text-left text-xs font-medium text-muted-foreground transition-colors hover:text-foreground focus-ring"
+              onClick={() => setShowAll((prev) => !prev)}
+            >
+              {showAll ? 'Show less' : `Show all (${allConversations.length})`}
+            </button>
           )}
         </div>
       )}

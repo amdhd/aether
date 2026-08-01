@@ -2,6 +2,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Trash2 } from 'lucide-react'
 import { useState } from 'react'
 import { useSearchParams } from 'react-router-dom'
+import { toast } from 'sonner'
 
 import {
   CONVERSATION_PARAM,
@@ -64,6 +65,15 @@ export function ConversationList({ limit, onSelect }: ConversationListProps) {
       // Falling back to the newest chat is the page's default when no id is set.
       if (activeId === id) select(null)
       setDeletingId(null)
+    },
+    // Without this the dialog stayed open with its button reset to "Delete",
+    // which is exactly what it looks like before you press anything — so a
+    // failed delete was indistinguishable from a click that didn't register,
+    // and pressing again just repeated it. Same toast copy as useCrudMutations,
+    // which is where the rest of the app's delete failures surface.
+    onError: () => {
+      setDeletingId(null)
+      toast.error("Couldn't delete conversation. Please try again.")
     },
   })
 

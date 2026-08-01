@@ -193,6 +193,14 @@ function Message({
   )
 }
 
+// Transient feedback about one conversation's last turn. `error` reads as a
+// failure; `stopped` is the user's own doing and stays neutral.
+interface Notice {
+  id: number
+  kind: 'error' | 'stopped'
+  message: string
+}
+
 export function ChatPage() {
   const queryClient = useQueryClient()
   // Selection lives in the URL (?c=<id>) so the sidebar history can drive it.
@@ -213,7 +221,13 @@ export function ChatPage() {
     },
     [setSearchParams],
   )
-  const [draft, setDraft] = useState('')
+  // What sits in the composer belongs to one conversation, so it's keyed by id
+  // rather than held as a single value: switching chats must not carry a draft
+  // — or, worse, an attachment — into the wrong one, and coming back should
+  // find what you were part-way through writing.
+  const [drafts, setDrafts] = useState<Record<number, string>>({})
+  const [attachments, setAttachments] = useState<Record<number, File>>({})
+  const [attachError, setAttachError] = useState<{ id: number; message: string } | null>(null)
   // Persona highlighted on the landing screen (no active conversation yet);
   // picking one starts a new chat with that persona.
   const [landingPersona, setLandingPersona] = useState<Persona>('productivity_coach')
@@ -221,8 +235,6 @@ export function ChatPage() {
   // the picker highlights on click instead of after the refetch round-trip.
   // Scoped to a conversation id so it can't leak onto the next chat.
   const [pendingPersona, setPendingPersona] = useState<{ id: number; persona: Persona } | null>(null)
-  const [attachedFile, setAttachedFile] = useState<File | null>(null)
-  const [attachError, setAttachError] = useState<string | null>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
   // Which conversation the in-flight turn belongs to, so its optimistic bubble
@@ -234,10 +246,10 @@ export function ChatPage() {
   const [streamingContent, setStreamingContent] = useState('')
   const [streamingReasoning, setStreamingReasoning] = useState('')
   const [streamingToolCalls, setStreamingToolCalls] = useState<string[]>([])
-  const [errorMessage, setErrorMessage] = useState<string | null>(null)
-  // Conversation whose last turn the user stopped, so the "we threw the partial
-  // reply away" note shows there and not in whatever chat they open next.
-  const [stoppedIn, setStoppedIn] = useState<number | null>(null)
+  // Feedback about the last turn — a failure, or the note that a stopped reply
+  // was discarded. Carries the conversation it belongs to, so it stays put
+  // instead of surfacing over whichever chat the user opens next.
+  const [notice, setNotice] = useState<Notice | null>(null)
   // Lets the Stop button tear down the in-flight request. Null when idle.
   const abortRef = useRef<AbortController | null>(null)
   const scrollRef = useRef<HTMLDivElement>(null)
@@ -258,11 +270,32 @@ export function ChatPage() {
   const isStreamingHere = streamingFor !== null && streamingFor === activeId
   // A turn is running, but for a different conversation than the one on screen.
   const isStreamingElsewhere = isStreaming && !isStreamingHere
-  // Read inside the async send, which outlives the render that started it.
-  const activeIdRef = useRef(activeId)
-  useEffect(() => {
-    activeIdRef.current = activeId
-  }, [activeId])
+
+  // What the composer shows: this conversation's contents, never another's.
+  const draft = activeId === null ? '' : (drafts[activeId] ?? '')
+  const attachedFile = activeId === null ? null : (attachments[activeId] ?? null)
+
+  // Writes take an explicit id because they outlive the render that started
+  // them — an in-flight turn must return its draft to the chat it was written
+  // for, wherever the user has navigated to since.
+  const setDraftFor = useCallback((id: number, value: string | ((prev: string) => string)) => {
+    setDrafts((prev) => ({
+      ...prev,
+      [id]: typeof value === 'function' ? value(prev[id] ?? '') : value,
+    }))
+  }, [])
+  const setAttachmentFor = useCallback(
+    (id: number, file: File | null | ((prev: File | null) => File | null)) => {
+      setAttachments((prev) => {
+        const resolved = typeof file === 'function' ? file(prev[id] ?? null) : file
+        const next = { ...prev }
+        if (resolved) next[id] = resolved
+        else delete next[id]
+        return next
+      })
+    },
+    [],
+  )
 
   const {
     data: conversation,
@@ -294,7 +327,7 @@ export function ChatPage() {
   const personaMutation = useMutation({
     mutationFn: ({ id, persona }: { id: number; persona: Persona }) => updateConversation(id, { persona }),
     onMutate: ({ id, persona }) => {
-      setErrorMessage(null)
+      setNotice(null)
       setPendingPersona({ id, persona })
     },
     // Hold the optimistic highlight until the refetch lands, otherwise it
@@ -308,7 +341,7 @@ export function ChatPage() {
     },
     onError: (_error, { id }) => {
       setPendingPersona((pending) => (pending?.id === id ? null : pending))
-      setErrorMessage('Could not switch persona. Please try again.')
+      setNotice({ id, kind: 'error', message: 'Could not switch persona. Please try again.' })
     },
   })
 
@@ -344,16 +377,18 @@ export function ChatPage() {
 
   const handleFileSelect = (event: ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0] ?? null
+    // The picker is only reachable from a conversation's composer.
+    if (activeId === null) return
     setAttachError(null)
     if (file) {
       const name = file.name.toLowerCase()
       if (!name.endsWith('.csv') && !name.endsWith('.tsv')) {
-        setAttachError('Only .csv or .tsv files are supported.')
+        setAttachError({ id: activeId, message: 'Only .csv or .tsv files are supported.' })
         event.target.value = ''
         return
       }
     }
-    setAttachedFile(file)
+    setAttachmentFor(activeId, file)
     // Allow re-selecting the same file after removing it.
     event.target.value = ''
   }
@@ -366,14 +401,13 @@ export function ChatPage() {
     const file = attachedFile
     const controller = new AbortController()
     abortRef.current = controller
-    setDraft('')
-    setAttachedFile(null)
+    setDraftFor(sendingTo, '')
+    setAttachmentFor(sendingTo, null)
     setAttachError(null)
     setPendingUserContent(content)
     setPendingAttachmentName(file?.name ?? null)
     resetStreamingState()
-    setErrorMessage(null)
-    setStoppedIn(null)
+    setNotice(null)
     setStreamingFor(sendingTo)
 
     try {
@@ -384,7 +418,7 @@ export function ChatPage() {
           onToken: (chunk) => setStreamingContent((prev) => prev + chunk),
           onReasoning: (chunk) => setStreamingReasoning((prev) => prev + chunk),
           onToolCall: (name) => setStreamingToolCalls((prev) => [...prev, name]),
-          onError: (message) => setErrorMessage(message),
+          onError: (message) => setNotice({ id: sendingTo, kind: 'error', message }),
         },
         file,
         controller.signal,
@@ -396,16 +430,22 @@ export function ChatPage() {
       // screen is about to disappear on the refetch below; say so rather than
       // letting it vanish unexplained.
       if (controller.signal.aborted) {
-        setStoppedIn(sendingTo)
+        setNotice({
+          id: sendingTo,
+          kind: 'stopped',
+          message: 'You stopped this reply before it finished, so it wasn’t saved.',
+        })
       } else {
-        setErrorMessage(err instanceof Error ? err.message : 'Something went wrong. Please try again.')
-        // The turn never landed, so the composer was cleared for nothing. Hand the
-        // message back rather than making them retype it — but only into the chat
-        // it was written for, and never over something typed since.
-        if (activeIdRef.current === sendingTo) {
-          setDraft((current) => current || content)
-          setAttachedFile((current) => current ?? file)
-        }
+        setNotice({
+          id: sendingTo,
+          kind: 'error',
+          message: err instanceof Error ? err.message : 'Something went wrong. Please try again.',
+        })
+        // The turn never landed, so the composer was cleared for nothing. Hand
+        // the message back rather than making them retype it — into the chat it
+        // was written for, and never over something typed there since.
+        setDraftFor(sendingTo, (current) => current || content)
+        setAttachmentFor(sendingTo, (current) => current ?? file)
       }
     } finally {
       if (abortRef.current === controller) abortRef.current = null
@@ -479,7 +519,7 @@ export function ChatPage() {
                 type="button"
                 aria-label="Remove attachment"
                 className="focus-ring shrink-0 hover:text-foreground"
-                onClick={() => setAttachedFile(null)}
+                onClick={() => activeId !== null && setAttachmentFor(activeId, null)}
               >
                 <X className="h-3 w-3" />
               </button>
@@ -489,7 +529,7 @@ export function ChatPage() {
         <textarea
           ref={textareaRef}
           value={draft}
-          onChange={(e) => setDraft(e.target.value)}
+          onChange={(e) => activeId !== null && setDraftFor(activeId, e.target.value)}
           onKeyDown={handleKeyDown}
           placeholder={activeId === null ? 'Start a new conversation first' : 'Message Aether…'}
           aria-label="Message"
@@ -532,7 +572,9 @@ export function ChatPage() {
           </Button>
         )}
       </div>
-      {attachError && <p className="px-1 pt-1 text-xs text-red-600 dark:text-red-400">{attachError}</p>}
+      {attachError?.id === activeId && (
+        <p className="px-1 pt-1 text-xs text-red-600 dark:text-red-400">{attachError.message}</p>
+      )}
       <p className="py-2 text-center text-xs text-muted-foreground">
         {isStreamingElsewhere
           ? // The server allows one turn per user at a time, so sending here
@@ -543,23 +585,21 @@ export function ChatPage() {
     </div>
   )
 
-  const errorBanner = errorMessage && (
+  // Shown only in the conversation it happened in — a failed turn in one chat
+  // has nothing to say about the one the user moved on to.
+  const noticeBanner = notice?.id === activeId && (
     <p
-      role="alert"
-      className="mt-4 rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700 dark:border-red-900/50 dark:bg-red-950/40 dark:text-red-300"
+      // Stopping is the user's own doing, so it stays neutral and merely polite
+      // rather than interrupting as an alert.
+      role={notice.kind === 'error' ? 'alert' : 'status'}
+      className={cn(
+        'mt-4 rounded-md border px-3 py-2 text-sm',
+        notice.kind === 'error'
+          ? 'border-red-200 bg-red-50 text-red-700 dark:border-red-900/50 dark:bg-red-950/40 dark:text-red-300'
+          : 'border-border bg-surface-muted text-muted-foreground',
+      )}
     >
-      {errorMessage}
-    </p>
-  )
-
-  // Stopping isn't an error, so this stays neutral rather than joining the red
-  // banner above it.
-  const stoppedNotice = stoppedIn === activeId && activeId !== null && (
-    <p
-      role="status"
-      className="mt-4 rounded-md border border-border bg-surface-muted px-3 py-2 text-sm text-muted-foreground"
-    >
-      You stopped this reply before it finished, so it wasn’t saved.
+      {notice.message}
     </p>
   )
 
@@ -617,8 +657,7 @@ export function ChatPage() {
                 </div>
               </div>
               <div className="mt-8">{composer}</div>
-              {errorBanner}
-              {stoppedNotice}
+              {noticeBanner}
             </div>
           </div>
         ) : (
@@ -704,8 +743,7 @@ export function ChatPage() {
                     )}
                   </div>
                 )}
-                {errorBanner}
-                {stoppedNotice}
+                {noticeBanner}
               </div>
             </div>
 

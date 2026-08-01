@@ -328,6 +328,71 @@ describe('ChatPage', () => {
     await waitFor(() => expect(textbox).toHaveValue('Hello Aether'))
   })
 
+  it('leaves a failed turn’s error in the conversation it happened in', async () => {
+    vi.mocked(chatApi.listConversations).mockResolvedValue(mockConversationsPage(mockConversations))
+    vi.mocked(chatApi.getConversation).mockImplementation(async (id) => ({
+      ...(mockConversations.find((c) => c.id === id) ?? mockConversations[0]),
+      messages: id === 2 ? mockDetail.messages : [],
+    }))
+    vi.mocked(chatApi.streamChatMessage).mockRejectedValue(new Error('Monthly limit reached'))
+
+    renderWithProviders(
+      <>
+        <ChatHistoryNav />
+        <ChatPage />
+      </>,
+    )
+    await screen.findByRole('heading', { name: 'Trip planning' })
+
+    await userEvent.type(screen.getByLabelText('Message'), 'Hello Aether')
+    await userEvent.click(screen.getByRole('button', { name: /send message/i }))
+    expect(await screen.findByText('Monthly limit reached')).toBeInTheDocument()
+
+    // Nothing failed in this chat, so nothing should be complaining in it.
+    await userEvent.click(screen.getByRole('button', { name: 'Daily standup' }))
+    await screen.findByRole('heading', { name: 'Daily standup' })
+    await waitFor(() => expect(screen.queryByText('Monthly limit reached')).not.toBeInTheDocument())
+
+    // It's still waiting where it belongs when they come back to deal with it.
+    await userEvent.click(screen.getByRole('button', { name: 'Trip planning' }))
+    expect(await screen.findByText('Monthly limit reached')).toBeInTheDocument()
+  })
+
+  it('keeps each conversation’s draft and attachment with that conversation', async () => {
+    vi.mocked(chatApi.listConversations).mockResolvedValue(mockConversationsPage(mockConversations))
+    vi.mocked(chatApi.getConversation).mockImplementation(async (id) => ({
+      ...(mockConversations.find((c) => c.id === id) ?? mockConversations[0]),
+      messages: id === 2 ? mockDetail.messages : [],
+    }))
+
+    const { container } = renderWithProviders(
+      <>
+        <ChatHistoryNav />
+        <ChatPage />
+      </>,
+    )
+    await screen.findByRole('heading', { name: 'Trip planning' })
+
+    const fileInput = container.querySelector('input[type="file"]') as HTMLInputElement
+    await userEvent.type(screen.getByLabelText('Message'), 'Draft for the trip')
+    await userEvent.upload(fileInput, new File(['a,b\n1,2'], 'campaign.csv', { type: 'text/csv' }))
+    expect(await screen.findByText('campaign.csv')).toBeInTheDocument()
+
+    await userEvent.click(screen.getByRole('button', { name: 'Daily standup' }))
+    await screen.findByRole('heading', { name: 'Daily standup' })
+
+    // A different chat starts clean. The attachment especially: a stray chip
+    // here would upload the other conversation's file on the next send.
+    expect(screen.getByLabelText('Message')).toHaveValue('')
+    expect(screen.queryByText('campaign.csv')).not.toBeInTheDocument()
+
+    await userEvent.click(screen.getByRole('button', { name: 'Trip planning' }))
+    await screen.findByRole('heading', { name: 'Trip planning' })
+
+    expect(screen.getByLabelText('Message')).toHaveValue('Draft for the trip')
+    expect(screen.getByText('campaign.csv')).toBeInTheDocument()
+  })
+
   it('keeps a streaming reply out of a conversation the user switches to', async () => {
     vi.mocked(chatApi.listConversations).mockResolvedValue(mockConversationsPage(mockConversations))
     vi.mocked(chatApi.getConversation).mockResolvedValue({ ...mockDetail, messages: [] })

@@ -3,6 +3,7 @@ import {
   ArrowDown,
   BookOpen,
   ChevronRight,
+  History,
   Megaphone,
   Paperclip,
   Plus,
@@ -39,7 +40,9 @@ import {
   streamChatMessage,
   updateConversation,
 } from '@/api/chat'
+import { ConversationList } from '@/components/layout/ConversationList'
 import { Button } from '@/components/ui/button'
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { Skeleton } from '@/components/ui/skeleton'
 import { useCrudMutations } from '@/hooks/useCrudMutations'
 import { cn } from '@/lib/utils'
@@ -248,6 +251,8 @@ export function ChatPage() {
   // Persona highlighted on the landing screen (no active conversation yet);
   // picking one starts a new chat with that persona.
   const [landingPersona, setLandingPersona] = useState<Persona>('productivity_coach')
+  // The small-screen stand-in for the sidebar's chat history.
+  const [historyOpen, setHistoryOpen] = useState(false)
   // Persona picked for a conversation but not yet confirmed by the server, so
   // the picker highlights on click instead of after the refetch round-trip.
   // Scoped to a conversation id so it can't leak onto the next chat.
@@ -680,17 +685,39 @@ export function ChatPage() {
           <h1 className="min-w-0 truncate text-base font-semibold tracking-tight">
             {conversation?.title ?? 'Chat'}
           </h1>
-          <Button
-            variant="outline"
-            size="sm"
-            className="shrink-0"
-            onClick={handleNewChat}
-            disabled={createMutation.isPending}
-          >
-            <Plus className="h-4 w-4" />
-            <span className="hidden sm:inline">New chat</span>
-          </Button>
+          <div className="flex shrink-0 items-center gap-2">
+            {/* Below `sm` the sidebar — and with it the only way to reach an
+                older conversation — is hidden, so the history needs a door on
+                the page itself. */}
+            <Button
+              variant="outline"
+              size="sm"
+              className="sm:hidden"
+              aria-label="Recent chats"
+              onClick={() => setHistoryOpen(true)}
+            >
+              <History className="h-4 w-4" />
+            </Button>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={handleNewChat}
+              disabled={createMutation.isPending}
+            >
+              <Plus className="h-4 w-4" />
+              <span className="hidden sm:inline">New chat</span>
+            </Button>
+          </div>
         </div>
+
+        <Dialog open={historyOpen} onOpenChange={setHistoryOpen}>
+          <DialogContent className="max-h-[70vh] overflow-y-auto">
+            <DialogHeader>
+              <DialogTitle>Recent chats</DialogTitle>
+            </DialogHeader>
+            <ConversationList onSelect={() => setHistoryOpen(false)} />
+          </DialogContent>
+        </Dialog>
 
         {showWelcome ? (
           // True vertical centering reads as low — the eye weighs the page

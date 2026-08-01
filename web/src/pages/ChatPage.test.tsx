@@ -328,6 +328,26 @@ describe('ChatPage', () => {
     await waitFor(() => expect(textbox).toHaveValue('Hello Aether'))
   })
 
+  it('reaches an older conversation without the sidebar', async () => {
+    vi.mocked(chatApi.listConversations).mockResolvedValue(mockConversationsPage(mockConversations))
+    vi.mocked(chatApi.getConversation).mockImplementation(async (id) => ({
+      ...(mockConversations.find((c) => c.id === id) ?? mockConversations[0]),
+      messages: id === 2 ? mockDetail.messages : [],
+    }))
+
+    // Deliberately without ChatHistoryNav: below `sm` the sidebar that holds it
+    // is hidden, which used to strand the user in whichever chat is newest.
+    renderWithProviders(<ChatPage />)
+    await screen.findByRole('heading', { name: 'Trip planning' })
+
+    await userEvent.click(screen.getByRole('button', { name: /recent chats/i }))
+    await userEvent.click(await screen.findByRole('button', { name: 'Daily standup' }))
+
+    expect(await screen.findByRole('heading', { name: 'Daily standup' })).toBeInTheDocument()
+    // Picking one is the end of the errand, so the sheet gets out of the way.
+    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument())
+  })
+
   it('grows the composer with the draft and shrinks it back again', async () => {
     vi.mocked(chatApi.listConversations).mockResolvedValue(mockConversationsPage(mockConversations))
     vi.mocked(chatApi.getConversation).mockResolvedValue({ ...mockDetail, messages: [] })

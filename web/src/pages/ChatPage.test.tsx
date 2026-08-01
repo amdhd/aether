@@ -328,6 +328,36 @@ describe('ChatPage', () => {
     await waitFor(() => expect(textbox).toHaveValue('Hello Aether'))
   })
 
+  it('grows the composer with the draft and shrinks it back again', async () => {
+    vi.mocked(chatApi.listConversations).mockResolvedValue(mockConversationsPage(mockConversations))
+    vi.mocked(chatApi.getConversation).mockResolvedValue({ ...mockDetail, messages: [] })
+
+    renderWithProviders(<ChatPage />)
+    await screen.findByRole('heading', { name: 'Trip planning' })
+    const textbox = (await screen.findByLabelText('Message')) as HTMLTextAreaElement
+
+    // jsdom does no layout, so scrollHeight is always 0. Stand in for a real
+    // one: 24px per line of content, but never less than the height already
+    // set on the box — that floor is what makes a naive measurement ratchet
+    // upwards, and the reason the effect resets to `auto` before reading.
+    Object.defineProperty(textbox, 'scrollHeight', {
+      configurable: true,
+      get() {
+        const content = 24 * (this.value.split('\n').length || 1)
+        return Math.max(content, parseInt(this.style.height, 10) || 0)
+      },
+    })
+
+    await userEvent.type(textbox, 'one{Shift>}{Enter}{/Shift}two{Shift>}{Enter}{/Shift}three')
+    expect(textbox.style.height).toBe('72px')
+
+    // Deleting a line has to give the space back. Measuring without resetting
+    // to `auto` first would leave it stuck at its tallest.
+    await userEvent.clear(textbox)
+    await userEvent.type(textbox, 'one')
+    expect(textbox.style.height).toBe('24px')
+  })
+
   it('refuses an over-long message in the composer rather than at the server', async () => {
     vi.mocked(chatApi.listConversations).mockResolvedValue(mockConversationsPage(mockConversations))
     vi.mocked(chatApi.getConversation).mockResolvedValue({ ...mockDetail, messages: [] })

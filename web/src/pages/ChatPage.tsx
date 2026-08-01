@@ -14,7 +14,15 @@ import {
   Zap,
   type LucideIcon,
 } from 'lucide-react'
-import { useCallback, useEffect, useRef, useState, type ChangeEvent, type KeyboardEvent } from 'react'
+import {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useRef,
+  useState,
+  type ChangeEvent,
+  type KeyboardEvent,
+} from 'react'
 import ReactMarkdown from 'react-markdown'
 import { useSearchParams } from 'react-router-dom'
 import remarkGfm from 'remark-gfm'
@@ -389,6 +397,20 @@ export function ChatPage() {
     scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: 'smooth' })
   }, [pinnedToBottom, conversation?.messages.length, streamingContent, pendingUserContent])
 
+  // Grow the composer with what's being written, up to the CSS max height,
+  // instead of scrolling a fixed one-line box and hiding what came before.
+  // Layout effect, not a plain one, so the box is the right size before the
+  // browser paints — otherwise every keystroke past a line break flickers.
+  // `draft` covers switching conversations too, since it's derived per id.
+  useLayoutEffect(() => {
+    const el = textareaRef.current
+    if (!el) return
+    // Measuring against the current height would only ever ratchet upwards;
+    // resetting first is what lets the box shrink back as text is deleted.
+    el.style.height = 'auto'
+    el.style.height = `${el.scrollHeight}px`
+  }, [draft])
+
   const resetStreamingState = () => {
     setStreamingContent('')
     setStreamingReasoning('')
@@ -573,7 +595,7 @@ export function ChatPage() {
           // next one; it's sending that has to wait.
           disabled={activeId === null}
           rows={1}
-          className="block max-h-40 min-h-[52px] w-full resize-none rounded-2xl bg-transparent py-3.5 pl-12 pr-14 text-[15px] leading-6 placeholder:text-muted-foreground focus:outline-none disabled:cursor-not-allowed disabled:opacity-60"
+          className="block max-h-40 min-h-[52px] w-full resize-none overflow-y-auto rounded-2xl bg-transparent py-3.5 pl-12 pr-14 text-[15px] leading-6 placeholder:text-muted-foreground focus:outline-none disabled:cursor-not-allowed disabled:opacity-60"
         />
         <Button
           variant="ghost"

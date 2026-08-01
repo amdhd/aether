@@ -49,6 +49,33 @@ describe('AnalyticsPage', () => {
     expect(screen.getByText('10')).toBeInTheDocument()
   })
 
+  it('says which period each block covers', async () => {
+    vi.mocked(analyticsApi.getAnalyticsSummary).mockResolvedValue({
+      messages_per_day: [{ date: '2026-06-01', count: 5 }],
+      tokens_per_day: [{ date: '2026-06-01', prompt_tokens: 100, completion_tokens: 50 }],
+      tool_usage: [{ tool_name: 'create_task', count: 3 }],
+      totals: { conversations: 2, messages: 10, prompt_tokens: 1000, completion_tokens: 500 },
+    })
+
+    renderWithProviders(<AnalyticsPage />)
+
+    // The totals are lifetime figures sitting above windowed charts; unlabelled
+    // they read as part of the same 14 days.
+    expect(await screen.findByRole('heading', { name: 'All time' })).toBeInTheDocument()
+    // Every windowed block names the window, tool usage included — it used to be
+    // an all-time tally presented alongside "Last 14 days".
+    expect(screen.getAllByText(/last 14 days/i)).toHaveLength(3)
+  })
+
+  it('requests tool usage over the same window it labels', async () => {
+    vi.mocked(analyticsApi.getAnalyticsSummary).mockResolvedValue(emptySummary)
+
+    renderWithProviders(<AnalyticsPage />)
+
+    await screen.findByText(/no activity yet/i)
+    expect(analyticsApi.getAnalyticsSummary).toHaveBeenCalledWith(14)
+  })
+
   it('labels tool usage in plain language rather than raw tool names', async () => {
     vi.mocked(analyticsApi.getAnalyticsSummary).mockResolvedValue({
       messages_per_day: [{ date: '2026-06-01', count: 5 }],

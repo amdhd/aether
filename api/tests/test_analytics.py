@@ -119,6 +119,49 @@ async def test_analytics_summary_aggregates_data(client: AsyncClient, auth_heade
     }
 
 
+async def test_analytics_tool_usage_respects_the_requested_window(
+    client: AsyncClient, auth_headers: dict[str, str]
+) -> None:
+    """Tool usage is windowed like the per-day series, not a lifetime tally —
+    the UI shows all three under one 'last N days' framing."""
+    create_resp = await client.post("/api/v1/conversations", json={}, headers=auth_headers)
+    conversation_id = create_resp.json()["id"]
+
+    async with TestingSessionLocal() as session:
+        now = datetime.now(timezone.utc).replace(hour=12, minute=0, second=0, microsecond=0)
+        session.add_all(
+            [
+                Message(
+                    conversation_id=conversation_id,
+                    role=MessageRole.tool,
+                    content="{}",
+                    tool_name="web_search",
+                    created_at=now,
+                ),
+                Message(
+                    conversation_id=conversation_id,
+                    role=MessageRole.tool,
+                    content="{}",
+                    tool_name="create_task",
+                    created_at=now - timedelta(days=30),
+                ),
+            ]
+        )
+        await session.commit()
+
+    resp = await client.get("/api/v1/analytics/summary?days=14", headers=auth_headers)
+    assert resp.status_code == 200
+    assert {t["tool_name"]: t["count"] for t in resp.json()["tool_usage"]} == {"web_search": 1}
+
+    # Widen the window and the older action comes back into view.
+    resp = await client.get("/api/v1/analytics/summary?days=60", headers=auth_headers)
+    assert resp.status_code == 200
+    assert {t["tool_name"]: t["count"] for t in resp.json()["tool_usage"]} == {
+        "web_search": 1,
+        "create_task": 1,
+    }
+
+
 async def test_analytics_idor_protection(client: AsyncClient) -> None:
     await client.post(
         "/api/v1/auth/register", json={"email": "a@example.com", "name": "A", "password": "supersecret123"}

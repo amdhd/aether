@@ -23,6 +23,11 @@ import { useThemeStore } from '@/store/theme'
 
 const TOOL_COLORS = ['#4f46e5', '#0ea5e9', '#22c55e', '#f59e0b', '#ef4444', '#a855f7']
 
+// One window for everything the API aggregates per-period, so the page can say
+// so once and mean it everywhere.
+const RANGE_DAYS = 14
+const RANGE_LABEL = `Last ${RANGE_DAYS} days`
+
 function formatShortDate(value: unknown): string {
   const date = new Date(`${String(value)}T00:00:00Z`)
   return date.toLocaleDateString(undefined, { month: 'short', day: 'numeric', timeZone: 'UTC' })
@@ -47,8 +52,8 @@ export function AnalyticsPage() {
     : undefined
 
   const { data, isLoading, isError } = useQuery({
-    queryKey: ['analytics', 'summary'],
-    queryFn: () => getAnalyticsSummary(14),
+    queryKey: ['analytics', 'summary', RANGE_DAYS],
+    queryFn: () => getAnalyticsSummary(RANGE_DAYS),
   })
 
   const hasData = (data?.totals.messages ?? 0) > 0 || (data?.totals.conversations ?? 0) > 0
@@ -84,34 +89,41 @@ export function AnalyticsPage() {
         </p>
       ) : (
         <div className="space-y-6">
-          <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-            <StatCard
-              icon={<Sparkles className="h-4 w-4" />}
-              label="Conversations"
-              value={data.totals.conversations.toLocaleString()}
-            />
-            <StatCard
-              icon={<MessageSquare className="h-4 w-4" />}
-              label="Messages sent"
-              value={data.totals.messages.toLocaleString()}
-            />
-            <StatCard
-              icon={<Zap className="h-4 w-4" />}
-              label="Prompt tokens"
-              value={data.totals.prompt_tokens.toLocaleString()}
-            />
-            <StatCard
-              icon={<Zap className="h-4 w-4" />}
-              label="Completion tokens"
-              value={data.totals.completion_tokens.toLocaleString()}
-            />
-          </div>
+          {/* Totals are lifetime figures, while everything below them covers the
+              window. Unlabelled, they read as part of it. */}
+          <section aria-labelledby="totals-heading">
+            <h2 id="totals-heading" className="mb-3 text-sm font-medium text-muted-foreground">
+              All time
+            </h2>
+            <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+              <StatCard
+                icon={<Sparkles className="h-4 w-4" />}
+                label="Conversations"
+                value={data.totals.conversations.toLocaleString()}
+              />
+              <StatCard
+                icon={<MessageSquare className="h-4 w-4" />}
+                label="Messages sent"
+                value={data.totals.messages.toLocaleString()}
+              />
+              <StatCard
+                icon={<Zap className="h-4 w-4" />}
+                label="Prompt tokens"
+                value={data.totals.prompt_tokens.toLocaleString()}
+              />
+              <StatCard
+                icon={<Zap className="h-4 w-4" />}
+                label="Completion tokens"
+                value={data.totals.completion_tokens.toLocaleString()}
+              />
+            </div>
+          </section>
 
           <div className="grid gap-4 lg:grid-cols-2">
             <Card>
               <CardHeader>
                 <CardTitle>Messages per day</CardTitle>
-                <CardDescription>Last 14 days</CardDescription>
+                <CardDescription>{RANGE_LABEL}</CardDescription>
               </CardHeader>
               <CardContent className="h-72">
                 <ResponsiveContainer width="100%" height="100%">
@@ -129,7 +141,7 @@ export function AnalyticsPage() {
             <Card>
               <CardHeader>
                 <CardTitle>Token usage per day</CardTitle>
-                <CardDescription>Prompt vs. completion tokens</CardDescription>
+                <CardDescription>Prompt vs. completion tokens · {RANGE_LABEL}</CardDescription>
               </CardHeader>
               <CardContent className="h-72">
                 <ResponsiveContainer width="100%" height="100%">
@@ -162,13 +174,15 @@ export function AnalyticsPage() {
           <Card>
             <CardHeader>
               <CardTitle>What Aether did for you</CardTitle>
-              <CardDescription>Actions the assistant took on your behalf</CardDescription>
+              <CardDescription>
+                Actions the assistant took on your behalf · {RANGE_LABEL}
+              </CardDescription>
             </CardHeader>
             <CardContent className="h-72">
               {toolSlices.length === 0 ? (
                 <div className="flex h-full items-center justify-center text-sm text-muted-foreground">
                   <Wrench className="mr-2 h-4 w-4" />
-                  No actions yet.
+                  No actions in the last {RANGE_DAYS} days.
                 </div>
               ) : (
                 <ResponsiveContainer width="100%" height="100%">
@@ -203,7 +217,10 @@ function StatCard({ icon, label, value }: { icon: React.ReactNode; label: string
   return (
     <Card>
       <CardContent className="flex items-center gap-3 p-4">
-        <div className="flex h-9 w-9 items-center justify-center rounded-full bg-brand-50 text-brand-600">
+        {/* brand-50/600 are fixed light-mode values, so the dark variants are
+            not optional here — without them this is a white disc on a dark
+            card. Matches the identical chip on the dashboard. */}
+        <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-brand-50 text-brand-600 dark:bg-brand-500/15 dark:text-brand-300">
           {icon}
         </div>
         <div>

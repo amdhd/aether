@@ -83,6 +83,9 @@ async def get_analytics_summary(
                 "completion_tokens": int(completion_tokens),
             }
 
+    # Windowed on the same `days` as the per-day series above. Left unbounded it
+    # read as a lifetime tally sitting alongside charts labelled "last N days",
+    # which is the kind of mismatch nobody notices until they act on it.
     tool_usage_stmt = (
         select(Message.tool_name, func.count())
         .join(Conversation, Message.conversation_id == Conversation.id)
@@ -90,6 +93,7 @@ async def get_analytics_summary(
             Conversation.user_id == current_user.id,
             Message.role == MessageRole.tool,
             Message.tool_name.is_not(None),
+            Message.created_at >= earliest_dt,
         )
         .group_by(Message.tool_name)
         .order_by(func.count().desc())

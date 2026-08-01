@@ -652,8 +652,10 @@ export function ChatPage() {
           ? // Send is disabled; the counter just above says by how much.
             'This message is too long to send. Shorten it, or split it across two messages.'
           : isStreamingElsewhere
-            ? // The server allows one turn per user at a time, so sending here
-              // would be rejected. Name the reason instead of leaving a dead button.
+            ? // Only one turn is tracked at a time here (a single `streamingFor`),
+              // so a second one has nowhere to render even though the server
+              // would allow it — CHAT_MAX_CONCURRENT_TURNS is 2. Name the reason
+              // rather than leaving a dead button.
               'Aether is replying in another chat. Wait for it to finish, or stop it there.'
             : `Aether can make mistakes. Attach a .csv (under ${ATTACHMENT_LIMIT_LABEL}) to analyze campaign data.`}
       </p>

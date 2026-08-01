@@ -166,12 +166,21 @@ rather than built. For a permanent production environment, the next steps are:
 ## Features
 
 - **Chat** with a DeepSeek-powered assistant, streamed over SSE with markdown
-  rendering and visible "thinking"/tool-call traces.
+  rendering and visible "thinking"/tool-call traces. A reply can be **stopped
+  mid-stream**, and the composer's contents — draft *and* attachment — are held
+  per conversation, so switching chats never carries one into another.
 - **Personas** — switch the assistant's tone per conversation (productivity
-  coach, research assistant, casual friend).
-- **Tools** the assistant can call on your behalf: create/update/list tasks
-  and notes, get the weather (data.gov.my), web search (Tavily), and manage
-  your Google Calendar.
+  coach, marketing coach, research assistant, casual friend).
+- **Campaign analysis from a spreadsheet** — attach a `.csv`/`.tsv` export (ad
+  platform, Sheets, Excel) and the **marketing coach** persona works CTR, CPC,
+  CPM, CPA, ROAS and conversion rate out of it, flags wasted spend, and argues
+  for a budget reallocation. Parsing is stdlib-only and bounded (200 KB, 300
+  rows); the filename and the contents are both sanitised and fenced as
+  untrusted data, and the parsed table is stored on the message so follow-up
+  questions keep it in context.
+- **Tools** the assistant can call on your behalf: create/update/delete/list
+  tasks, create/list/search notes, get the weather (data.gov.my), web search
+  (Tavily), and read/create/delete Google Calendar events.
 - **Memory** — long conversations are automatically summarized so context
   doesn't grow unbounded, folding older turns at a safe boundary that never
   splits a tool call from its result.
@@ -187,8 +196,11 @@ rather than built. For a permanent production environment, the next steps are:
   a curated golden dataset, with a documented **failure-mode log**. Runs against
   the real retriever; keyless offline mode for CI. See
   [`api/app/eval/`](api/app/eval/README.md) and run it with `make eval`.
-- **Analytics dashboard** — messages and token usage per day, tool-usage
-  breakdown, and lifetime totals.
+- **Analytics dashboard** — messages and token usage per day, plus a breakdown
+  of what the assistant actually did, named in plain language ("Added a task")
+  rather than by raw tool name. Every block states the period it covers: the
+  per-day charts and the action breakdown share one window, and the lifetime
+  totals are labelled as such.
 - **Auth** — short-lived JWT access tokens kept in memory, plus refresh tokens
   delivered as **HttpOnly cookies** (not readable by JS). Refresh tokens
   **rotate on every use** with **reuse detection**: replaying a rotated token
@@ -199,6 +211,13 @@ rather than built. For a permanent production environment, the next steps are:
   they hold across every API task once autoscaling runs more than one; otherwise
   it's an in-memory window that evicts idle keys to stay bounded. A Redis outage
   degrades to per-instance limiting rather than failing requests.
+- **Spend guards** — a per-user **monthly cost cap** (`MONTHLY_COST_CAP_USD`),
+  estimated from logged token usage, refuses a turn once month-to-date spend
+  crosses it. Because a turn's tokens are only recorded when it *finishes*,
+  simultaneous requests would all read the same total and all pass — so a
+  per-user **in-flight turn ceiling** (`CHAT_MAX_CONCURRENT_TURNS`) bounds how
+  far that burst can overshoot. Both share the rate limiter's backend: Redis
+  when `REDIS_URL` is set, per-process otherwise.
 - **Prompt-injection guardrail** — the base system prompt marks tool, web, and
   note content as untrusted data: embedded directives are ignored, and
   unrequested destructive actions require explicit confirmation.
@@ -243,9 +262,11 @@ web/ (React + Vite)                       api/ (FastAPI, async)
   └─ store/        Zustand auth + theme       ├─ agent/        loop, tools, personas,
                                               │                memory, client
         │  SSE stream (EventSource)           ├─ services/     embeddings, note search,
-        │  Bearer access token                │                refresh tokens, google
+        │  Bearer access token                │                refresh tokens, google,
+        │                                     │                attachments
         ▼                                      ├─ core/         security, crypto, config,
-  POST /conversations/{id}/messages           │                rate_limit, logging
+  POST /conversations/{id}/messages           │                rate_limit, cost_cap,
+        │                                     │                inflight, metrics, tracing
         │                                      └─ models/       SQLAlchemy 2.0 (async)
         ▼                                            │
   agent/loop.py  ──►  DeepSeek (tool-calling, thinking mode)

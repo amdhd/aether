@@ -1,5 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import {
+  ArrowDown,
   BookOpen,
   ChevronRight,
   Megaphone,
@@ -21,6 +22,8 @@ import remarkGfm from 'remark-gfm'
 import {
   CONVERSATIONS_PAGE_SIZE,
   CONVERSATION_PARAM,
+  MAX_ATTACHMENT_BYTES,
+  MAX_MESSAGE_CHARS,
   createConversation,
   deleteConversation,
   getConversation,
@@ -87,6 +90,12 @@ const ATTACHMENT_ACCEPT = '.csv,.tsv'
 // Distance from the bottom that still counts as "following along". Roughly one
 // line of prose, so a stray trackpad nudge doesn't detach the view.
 const SCROLL_PIN_THRESHOLD_PX = 100
+
+// Counting every keystroke down from zero is noise; the number only matters
+// once the limit is close enough to be worth planning around.
+const COUNTER_VISIBLE_FROM = Math.floor(MAX_MESSAGE_CHARS * 0.9)
+
+const ATTACHMENT_LIMIT_LABEL = `${Math.round(MAX_ATTACHMENT_BYTES / 1000)} KB`
 
 const PROSE =
   'text-[15px] leading-7 [&_a]:font-medium [&_a]:text-foreground [&_a]:underline [&_a]:underline-offset-2 [&_code]:rounded [&_code]:bg-surface-muted [&_code]:px-1.5 [&_code]:py-0.5 [&_code]:text-[13px] [&_h1]:mb-2 [&_h1]:mt-4 [&_h1]:text-lg [&_h1]:font-semibold [&_h2]:mb-2 [&_h2]:mt-4 [&_h2]:text-base [&_h2]:font-semibold [&_h3]:mb-1.5 [&_h3]:mt-3 [&_h3]:font-semibold [&_li]:mb-1 [&_ol]:mb-3 [&_ol]:list-decimal [&_ol]:pl-5 [&_p:last-child]:mb-0 [&_p]:mb-3 [&_pre]:mb-3 [&_pre]:overflow-x-auto [&_pre]:rounded-lg [&_pre]:border [&_pre]:border-border [&_pre]:bg-surface-muted [&_pre]:p-3 [&_pre]:text-[13px] [&_pre_code]:bg-transparent [&_pre_code]:p-0 [&_ul]:mb-3 [&_ul]:list-disc [&_ul]:pl-5'
@@ -254,8 +263,11 @@ export function ChatPage() {
   const abortRef = useRef<AbortController | null>(null)
   const scrollRef = useRef<HTMLDivElement>(null)
   // Only follow the tail while the reader is already at it — otherwise scrolling
-  // up to re-read something yanks you back down on the next token.
-  const pinnedToBottomRef = useRef(true)
+  // up to re-read something yanks you back down on the next token. State rather
+  // than a ref because scrolling away also has to reveal the way back, and
+  // scoped by id so a different chat starts at its own tail however this one
+  // was left.
+  const [pinned, setPinned] = useState<{ id: number; atBottom: boolean } | null>(null)
 
   // Same key as the sidebar history, so the two share one request.
   const { data: conversationsPage } = useQuery({
@@ -270,6 +282,9 @@ export function ChatPage() {
   const isStreamingHere = streamingFor !== null && streamingFor === activeId
   // A turn is running, but for a different conversation than the one on screen.
   const isStreamingElsewhere = isStreaming && !isStreamingHere
+
+  // A chat nobody has scrolled in yet is, by definition, at its tail.
+  const pinnedToBottom = pinned?.id === activeId ? pinned.atBottom : true
 
   // What the composer shows: this conversation's contents, never another's.
   const draft = activeId === null ? '' : (drafts[activeId] ?? '')
@@ -355,19 +370,24 @@ export function ChatPage() {
 
   const handleScroll = () => {
     const el = scrollRef.current
-    if (!el) return
-    pinnedToBottomRef.current = el.scrollHeight - el.scrollTop - el.clientHeight <= SCROLL_PIN_THRESHOLD_PX
+    if (activeId === null || !el) return
+    const atBottom = el.scrollHeight - el.scrollTop - el.clientHeight <= SCROLL_PIN_THRESHOLD_PX
+    setPinned((prev) =>
+      prev?.id === activeId && prev.atBottom === atBottom ? prev : { id: activeId, atBottom },
+    )
+  }
+
+  const scrollToBottom = () => {
+    const el = scrollRef.current
+    if (activeId === null || !el) return
+    setPinned({ id: activeId, atBottom: true })
+    el.scrollTo({ top: el.scrollHeight, behavior: 'smooth' })
   }
 
   useEffect(() => {
-    if (!pinnedToBottomRef.current) return
+    if (!pinnedToBottom) return
     scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: 'smooth' })
-  }, [conversation?.messages.length, streamingContent, pendingUserContent])
-
-  // A different chat starts at its own tail, however the last one was left.
-  useEffect(() => {
-    pinnedToBottomRef.current = true
-  }, [activeId])
+  }, [pinnedToBottom, conversation?.messages.length, streamingContent, pendingUserContent])
 
   const resetStreamingState = () => {
     setStreamingContent('')
@@ -387,6 +407,16 @@ export function ChatPage() {
         event.target.value = ''
         return
       }
+      // Catching this here rather than letting the server reject it saves
+      // uploading the whole file only to be told it was too big.
+      if (file.size > MAX_ATTACHMENT_BYTES) {
+        setAttachError({
+          id: activeId,
+          message: `That file is too large. Attachments must be under ${ATTACHMENT_LIMIT_LABEL}.`,
+        })
+        event.target.value = ''
+        return
+      }
     }
     setAttachmentFor(activeId, file)
     // Allow re-selecting the same file after removing it.
@@ -395,7 +425,7 @@ export function ChatPage() {
 
   const handleSend = async () => {
     const content = draft.trim()
-    if (activeId === null || !content || isStreaming) return
+    if (activeId === null || !content || isStreaming || content.length > MAX_MESSAGE_CHARS) return
 
     const sendingTo = activeId
     const file = attachedFile
@@ -499,6 +529,11 @@ export function ChatPage() {
   // an empty page. Once there's a transcript it returns to the bottom.
   const showWelcome = activeId === null || isEmptyConversation
 
+  // The server rejects an over-long message with a 422 whose body is a
+  // validation array, not a sentence — so catch it here, where we can say
+  // something useful and the message is still in the box.
+  const overLimit = draft.trim().length > MAX_MESSAGE_CHARS
+
   const composer = (
     <div className="w-full">
       <input
@@ -566,7 +601,7 @@ export function ChatPage() {
             className="absolute bottom-2.5 right-2.5 h-9 w-9 rounded-lg"
             aria-label="Send message"
             onClick={() => void handleSend()}
-            disabled={activeId === null || !draft.trim() || isStreaming}
+            disabled={activeId === null || !draft.trim() || isStreaming || overLimit}
           >
             <Send className="h-4 w-4" />
           </Button>
@@ -575,12 +610,25 @@ export function ChatPage() {
       {attachError?.id === activeId && (
         <p className="px-1 pt-1 text-xs text-red-600 dark:text-red-400">{attachError.message}</p>
       )}
+      {draft.length >= COUNTER_VISIBLE_FROM && (
+        <p
+          className={cn(
+            'px-1 pt-1 text-right text-xs tabular-nums',
+            overLimit ? 'text-red-600 dark:text-red-400' : 'text-muted-foreground',
+          )}
+        >
+          {draft.trim().length.toLocaleString()} / {MAX_MESSAGE_CHARS.toLocaleString()}
+        </p>
+      )}
       <p className="py-2 text-center text-xs text-muted-foreground">
-        {isStreamingElsewhere
-          ? // The server allows one turn per user at a time, so sending here
-            // would be rejected. Name the reason instead of leaving a dead button.
-            'Aether is replying in another chat. Wait for it to finish, or stop it there.'
-          : 'Aether can make mistakes. Attach a .csv to analyze campaign data.'}
+        {overLimit
+          ? // Send is disabled; the counter just above says by how much.
+            'This message is too long to send. Shorten it, or split it across two messages.'
+          : isStreamingElsewhere
+            ? // The server allows one turn per user at a time, so sending here
+              // would be rejected. Name the reason instead of leaving a dead button.
+              'Aether is replying in another chat. Wait for it to finish, or stop it there.'
+            : `Aether can make mistakes. Attach a .csv (under ${ATTACHMENT_LIMIT_LABEL}) to analyze campaign data.`}
       </p>
     </div>
   )
@@ -662,89 +710,108 @@ export function ChatPage() {
           </div>
         ) : (
           <>
-            <div ref={scrollRef} onScroll={handleScroll} className="min-h-0 flex-1 overflow-y-auto">
-              <div className="mx-auto w-full max-w-3xl px-1 pb-6">
-                {conversationLoading ? (
-                  <div className="space-y-6 pt-2">
-                    {[...Array(3)].map((_, i) => (
-                      <Skeleton key={i} className="h-16 w-2/3" />
-                    ))}
-                  </div>
-                ) : conversationFailed ? (
-                  <div className="flex min-h-[50vh] flex-col items-center justify-center text-center">
-                    <h2 className="text-lg font-semibold tracking-tight">Couldn’t load this conversation</h2>
-                    <p className="mt-2 max-w-md text-sm text-muted-foreground">
-                      Its messages and persona are unavailable right now.
-                    </p>
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      className="mt-4"
-                      onClick={() => void refetchConversation()}
-                    >
-                      Try again
-                    </Button>
-                  </div>
-                ) : (
-                  <div className="space-y-6 pt-2">
-                    {visibleMessages.map((message) => (
-                      <Message
-                        key={message.id}
-                        role={message.role}
-                        content={message.content ?? ''}
-                        reasoningContent={message.reasoning_content}
-                        attachmentName={message.attachment_name}
-                      />
-                    ))}
-                    {isStreamingHere && pendingUserContent !== null && (
-                      <Message
-                        role="user"
-                        content={pendingUserContent}
-                        attachmentName={pendingAttachmentName}
-                      />
-                    )}
-                    {isStreamingHere && (
-                      <div className="flex gap-3">
-                        <div
-                          aria-hidden
-                          className="mt-0.5 flex h-7 w-7 shrink-0 select-none items-center justify-center rounded-full bg-foreground text-[13px] font-semibold text-background"
-                        >
-                          A
-                        </div>
-                        <div
-                          className="min-w-0 flex-1 pt-0.5"
-                          // Announce the assistant's reply to screen readers as it
-                          // streams in, rather than leaving them silent until the
-                          // query refetch swaps in the final message.
-                          aria-live="polite"
-                          aria-atomic="false"
-                          aria-busy={isStreaming}
-                        >
-                          {streamingToolCalls.map((name, i) => (
-                            <p key={i} className="mb-2 flex items-center gap-2 text-sm text-muted-foreground">
-                              <span className="inline-block h-1.5 w-1.5 animate-pulse rounded-full bg-muted-foreground" />
-                              Using <span className="font-medium text-foreground">{name}</span>
-                            </p>
-                          ))}
-                          {streamingReasoning && <ThinkingBlock content={streamingReasoning} />}
-                          {streamingContent ? (
-                            <MessageContent content={streamingContent} />
-                          ) : (
-                            !streamingReasoning && (
-                              <p className="flex items-center gap-1 py-1 text-sm text-muted-foreground">
-                                <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-muted-foreground [animation-delay:-0.3s]" />
-                                <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-muted-foreground [animation-delay:-0.15s]" />
-                                <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-muted-foreground" />
+            {/* Anchors the jump-to-latest button over the tail of the
+                transcript so it doesn't scroll away with the content. */}
+            <div className="relative flex min-h-0 flex-1 flex-col">
+              <div ref={scrollRef} onScroll={handleScroll} className="min-h-0 flex-1 overflow-y-auto">
+                <div className="mx-auto w-full max-w-3xl px-1 pb-6">
+                  {conversationLoading ? (
+                    <div className="space-y-6 pt-2">
+                      {[...Array(3)].map((_, i) => (
+                        <Skeleton key={i} className="h-16 w-2/3" />
+                      ))}
+                    </div>
+                  ) : conversationFailed ? (
+                    <div className="flex min-h-[50vh] flex-col items-center justify-center text-center">
+                      <h2 className="text-lg font-semibold tracking-tight">Couldn’t load this conversation</h2>
+                      <p className="mt-2 max-w-md text-sm text-muted-foreground">
+                        Its messages and persona are unavailable right now.
+                      </p>
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        className="mt-4"
+                        onClick={() => void refetchConversation()}
+                      >
+                        Try again
+                      </Button>
+                    </div>
+                  ) : (
+                    <div className="space-y-6 pt-2">
+                      {visibleMessages.map((message) => (
+                        <Message
+                          key={message.id}
+                          role={message.role}
+                          content={message.content ?? ''}
+                          reasoningContent={message.reasoning_content}
+                          attachmentName={message.attachment_name}
+                        />
+                      ))}
+                      {isStreamingHere && pendingUserContent !== null && (
+                        <Message
+                          role="user"
+                          content={pendingUserContent}
+                          attachmentName={pendingAttachmentName}
+                        />
+                      )}
+                      {isStreamingHere && (
+                        <div className="flex gap-3">
+                          <div
+                            aria-hidden
+                            className="mt-0.5 flex h-7 w-7 shrink-0 select-none items-center justify-center rounded-full bg-foreground text-[13px] font-semibold text-background"
+                          >
+                            A
+                          </div>
+                          <div
+                            className="min-w-0 flex-1 pt-0.5"
+                            // Announce the assistant's reply to screen readers as it
+                            // streams in, rather than leaving them silent until the
+                            // query refetch swaps in the final message.
+                            aria-live="polite"
+                            aria-atomic="false"
+                            aria-busy={isStreaming}
+                          >
+                            {streamingToolCalls.map((name, i) => (
+                              <p key={i} className="mb-2 flex items-center gap-2 text-sm text-muted-foreground">
+                                <span className="inline-block h-1.5 w-1.5 animate-pulse rounded-full bg-muted-foreground" />
+                                Using <span className="font-medium text-foreground">{name}</span>
                               </p>
-                            )
-                          )}
+                            ))}
+                            {streamingReasoning && <ThinkingBlock content={streamingReasoning} />}
+                            {streamingContent ? (
+                              <MessageContent content={streamingContent} />
+                            ) : (
+                              !streamingReasoning && (
+                                <p className="flex items-center gap-1 py-1 text-sm text-muted-foreground">
+                                  <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-muted-foreground [animation-delay:-0.3s]" />
+                                  <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-muted-foreground [animation-delay:-0.15s]" />
+                                  <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-muted-foreground" />
+                                </p>
+                              )
+                            )}
+                          </div>
                         </div>
-                      </div>
-                    )}
-                  </div>
-                )}
-                {noticeBanner}
+                      )}
+                    </div>
+                  )}
+                  {noticeBanner}
+                </div>
               </div>
+
+              {/* Scrolling up to re-read something detaches the view from the
+                  tail, which used to leave no way back but scrolling the whole
+                  reply by hand. */}
+              {!pinnedToBottom && (
+                <Button
+                  variant="outline"
+                  size="icon"
+                  className="absolute inset-x-0 bottom-3 mx-auto h-8 w-8 rounded-full bg-surface shadow-md"
+                  aria-label="Jump to latest"
+                  onClick={scrollToBottom}
+                >
+                  <ArrowDown className="h-4 w-4" />
+                </Button>
+              )}
             </div>
 
             <div className="mx-auto w-full max-w-3xl px-1 pt-2">{composer}</div>

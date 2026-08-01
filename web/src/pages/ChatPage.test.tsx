@@ -1,4 +1,4 @@
-import { act, screen, waitFor } from '@testing-library/react'
+import { act, fireEvent, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
@@ -326,6 +326,73 @@ describe('ChatPage', () => {
     expect(await screen.findByText('Monthly limit reached')).toBeInTheDocument()
     // Losing what they typed is the worst outcome of a failed turn.
     await waitFor(() => expect(textbox).toHaveValue('Hello Aether'))
+  })
+
+  it('refuses an over-long message in the composer rather than at the server', async () => {
+    vi.mocked(chatApi.listConversations).mockResolvedValue(mockConversationsPage(mockConversations))
+    vi.mocked(chatApi.getConversation).mockResolvedValue({ ...mockDetail, messages: [] })
+
+    renderWithProviders(<ChatPage />)
+    await screen.findByRole('heading', { name: 'Trip planning' })
+
+    // Typing 16k characters one keystroke at a time is far too slow; paste is
+    // also the realistic way to exceed this.
+    await userEvent.click(screen.getByLabelText('Message'))
+    await userEvent.paste('x'.repeat(chatApi.MAX_MESSAGE_CHARS + 1))
+
+    expect(screen.getByRole('button', { name: /send message/i })).toBeDisabled()
+    expect(screen.getByText(/this message is too long to send/i)).toBeInTheDocument()
+    expect(screen.getByText('16,001 / 16,000')).toBeInTheDocument()
+
+    // Enter is the other way to send, and it has to refuse too.
+    await userEvent.keyboard('{Enter}')
+    expect(chatApi.streamChatMessage).not.toHaveBeenCalled()
+  })
+
+  it('rejects an oversized attachment before uploading it', async () => {
+    vi.mocked(chatApi.listConversations).mockResolvedValue(mockConversationsPage(mockConversations))
+    vi.mocked(chatApi.getConversation).mockResolvedValue({ ...mockDetail, messages: [] })
+
+    const { container } = renderWithProviders(<ChatPage />)
+    await screen.findByRole('heading', { name: 'Trip planning' })
+
+    const tooBig = new File(['x'.repeat(chatApi.MAX_ATTACHMENT_BYTES + 1)], 'huge.csv', {
+      type: 'text/csv',
+    })
+    await userEvent.upload(container.querySelector('input[type="file"]') as HTMLInputElement, tooBig)
+
+    expect(await screen.findByText(/that file is too large/i)).toBeInTheDocument()
+    // No chip: the file was refused, not merely complained about.
+    expect(screen.queryByText('huge.csv')).not.toBeInTheDocument()
+  })
+
+  it('offers a way back to the tail once the reader scrolls away from it', async () => {
+    vi.mocked(chatApi.listConversations).mockResolvedValue(mockConversationsPage(mockConversations))
+    vi.mocked(chatApi.getConversation).mockResolvedValue(mockDetail)
+
+    renderWithProviders(<ChatPage />)
+    await screen.findByText('Hi there')
+
+    // jsdom reports a zero-height layout, which reads as "already at the
+    // bottom" — so stand in for a transcript taller than its viewport.
+    const scroller = document.querySelector('.overflow-y-auto') as HTMLDivElement
+    Object.defineProperty(scroller, 'scrollHeight', { value: 2000, configurable: true })
+    Object.defineProperty(scroller, 'clientHeight', { value: 500, configurable: true })
+    scroller.scrollTo = vi.fn()
+
+    // Nothing to offer while they're reading the newest message.
+    expect(screen.queryByRole('button', { name: /jump to latest/i })).not.toBeInTheDocument()
+
+    scroller.scrollTop = 200
+    fireEvent.scroll(scroller)
+
+    const jump = await screen.findByRole('button', { name: /jump to latest/i })
+    await userEvent.click(jump)
+
+    expect(scroller.scrollTo).toHaveBeenCalledWith({ top: 2000, behavior: 'smooth' })
+    await waitFor(() =>
+      expect(screen.queryByRole('button', { name: /jump to latest/i })).not.toBeInTheDocument(),
+    )
   })
 
   it('leaves a failed turn’s error in the conversation it happened in', async () => {

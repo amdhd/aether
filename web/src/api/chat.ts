@@ -14,6 +14,13 @@ export const CONVERSATIONS_PAGE_SIZE = 50
 // Active conversation id, carried in the URL so the sidebar can drive the page.
 export const CONVERSATION_PARAM = 'c'
 
+// Mirror the server's limits so the composer can refuse a message before the
+// upload rather than after it. Kept in sync with MAX_MESSAGE_CHARS in
+// api/app/schemas/conversation.py and MAX_ATTACHMENT_BYTES in
+// api/app/services/attachments.py — the server still enforces both.
+export const MAX_MESSAGE_CHARS = 16000
+export const MAX_ATTACHMENT_BYTES = 200_000
+
 export function listConversations(limit?: number, offset?: number) {
   const params = new URLSearchParams()
   if (limit !== undefined) params.set('limit', String(limit))
@@ -96,6 +103,24 @@ function dispatchEvent(event: string, data: string, handlers: ChatStreamHandlers
 }
 
 /**
+ * A message fit to show the user, from a failed turn's response body.
+ *
+ * FastAPI sends `detail` as a plain string for a raised HTTPException (the rate
+ * limit, the cost cap, a missing API key) but as an *array of error objects*
+ * for request-validation failures. That array used to be passed straight to
+ * `new ApiError(…)`, where Error's own coercion turned it into the literal
+ * "[object Object]" the chat banner then displayed.
+ */
+function errorMessageFor(status: number, body: unknown): string {
+  const detail = (body as { detail?: unknown } | null)?.detail
+  if (typeof detail === 'string' && detail) return detail
+  if (status === 422) {
+    return 'That message couldn’t be sent — it may be too long, or the file too large or unreadable.'
+  }
+  return `Something went wrong (error ${status}). Please try again.`
+}
+
+/**
  * POST a turn and consume the SSE stream, invoking `handlers` per event.
  *
  * Aborting `signal` tears down the request, which drops the connection and lets
@@ -126,14 +151,13 @@ export async function streamChatMessage(
   }
 
   if (!res.ok || !res.body) {
-    let message = `Request failed with status ${res.status}`
+    let body: unknown = null
     try {
-      const errorBody = await res.json()
-      message = errorBody.detail ?? message
+      body = await res.json()
     } catch {
       // no JSON body
     }
-    throw new ApiError(res.status, null, message)
+    throw new ApiError(res.status, body, errorMessageFor(res.status, body))
   }
 
   const reader = res.body.getReader()

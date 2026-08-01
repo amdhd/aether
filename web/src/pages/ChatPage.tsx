@@ -8,6 +8,7 @@ import {
   Send,
   Smile,
   Sparkles,
+  Square,
   X,
   Zap,
   type LucideIcon,
@@ -234,6 +235,11 @@ export function ChatPage() {
   const [streamingReasoning, setStreamingReasoning] = useState('')
   const [streamingToolCalls, setStreamingToolCalls] = useState<string[]>([])
   const [errorMessage, setErrorMessage] = useState<string | null>(null)
+  // Conversation whose last turn the user stopped, so the "we threw the partial
+  // reply away" note shows there and not in whatever chat they open next.
+  const [stoppedIn, setStoppedIn] = useState<number | null>(null)
+  // Lets the Stop button tear down the in-flight request. Null when idle.
+  const abortRef = useRef<AbortController | null>(null)
   const scrollRef = useRef<HTMLDivElement>(null)
   // Only follow the tail while the reader is already at it — otherwise scrolling
   // up to re-read something yanks you back down on the next token.
@@ -250,6 +256,8 @@ export function ChatPage() {
   const isStreaming = streamingFor !== null
   // The turn belongs to the chat on screen, so its bubbles should be drawn.
   const isStreamingHere = streamingFor !== null && streamingFor === activeId
+  // A turn is running, but for a different conversation than the one on screen.
+  const isStreamingElsewhere = isStreaming && !isStreamingHere
   // Read inside the async send, which outlives the render that started it.
   const activeIdRef = useRef(activeId)
   useEffect(() => {
@@ -356,6 +364,8 @@ export function ChatPage() {
 
     const sendingTo = activeId
     const file = attachedFile
+    const controller = new AbortController()
+    abortRef.current = controller
     setDraft('')
     setAttachedFile(null)
     setAttachError(null)
@@ -363,6 +373,7 @@ export function ChatPage() {
     setPendingAttachmentName(file?.name ?? null)
     resetStreamingState()
     setErrorMessage(null)
+    setStoppedIn(null)
     setStreamingFor(sendingTo)
 
     try {
@@ -376,17 +387,28 @@ export function ChatPage() {
           onError: (message) => setErrorMessage(message),
         },
         file,
+        controller.signal,
       )
     } catch (err) {
-      setErrorMessage(err instanceof Error ? err.message : 'Something went wrong. Please try again.')
-      // The turn never landed, so the composer was cleared for nothing. Hand the
-      // message back rather than making them retype it — but only into the chat
-      // it was written for, and never over something typed since.
-      if (activeIdRef.current === sendingTo) {
-        setDraft((current) => current || content)
-        setAttachedFile((current) => current ?? file)
+      // Stopping is a choice, not a failure: no error banner, and no handing the
+      // message back — the server persisted it before the first token. But it
+      // only persists a reply once the turn completes, so the partial text on
+      // screen is about to disappear on the refetch below; say so rather than
+      // letting it vanish unexplained.
+      if (controller.signal.aborted) {
+        setStoppedIn(sendingTo)
+      } else {
+        setErrorMessage(err instanceof Error ? err.message : 'Something went wrong. Please try again.')
+        // The turn never landed, so the composer was cleared for nothing. Hand the
+        // message back rather than making them retype it — but only into the chat
+        // it was written for, and never over something typed since.
+        if (activeIdRef.current === sendingTo) {
+          setDraft((current) => current || content)
+          setAttachedFile((current) => current ?? file)
+        }
       }
     } finally {
+      if (abortRef.current === controller) abortRef.current = null
       await queryClient.invalidateQueries({ queryKey: ['conversation', sendingTo] })
       await queryClient.invalidateQueries({ queryKey: ['conversations'] })
       setStreamingFor(null)
@@ -395,6 +417,8 @@ export function ChatPage() {
       resetStreamingState()
     }
   }
+
+  const handleStop = () => abortRef.current?.abort()
 
   const handleKeyDown = (event: KeyboardEvent<HTMLTextAreaElement>) => {
     // An IME uses Enter to accept a candidate word; sending on that would fire
@@ -469,7 +493,10 @@ export function ChatPage() {
           onKeyDown={handleKeyDown}
           placeholder={activeId === null ? 'Start a new conversation first' : 'Message Aether…'}
           aria-label="Message"
-          disabled={activeId === null || isStreaming}
+          // Only the absence of a conversation makes the composer unusable. A
+          // turn in flight — here or in another chat — still lets you write the
+          // next one; it's sending that has to wait.
+          disabled={activeId === null}
           rows={1}
           className="block max-h-40 min-h-[52px] w-full resize-none rounded-2xl bg-transparent py-3.5 pl-12 pr-14 text-[15px] leading-6 placeholder:text-muted-foreground focus:outline-none disabled:cursor-not-allowed disabled:opacity-60"
         />
@@ -479,23 +506,39 @@ export function ChatPage() {
           className="absolute bottom-2.5 left-2.5 h-9 w-9 rounded-lg text-muted-foreground"
           aria-label="Attach CSV file"
           onClick={() => fileInputRef.current?.click()}
-          disabled={activeId === null || isStreaming}
+          disabled={activeId === null}
         >
           <Paperclip className="h-4 w-4" />
         </Button>
-        <Button
-          size="icon"
-          className="absolute bottom-2.5 right-2.5 h-9 w-9 rounded-lg"
-          aria-label="Send message"
-          onClick={() => void handleSend()}
-          disabled={activeId === null || !draft.trim() || isStreaming}
-        >
-          <Send className="h-4 w-4" />
-        </Button>
+        {isStreamingHere ? (
+          <Button
+            variant="outline"
+            size="icon"
+            className="absolute bottom-2.5 right-2.5 h-9 w-9 rounded-lg"
+            aria-label="Stop generating"
+            onClick={handleStop}
+          >
+            <Square className="h-3.5 w-3.5 fill-current" />
+          </Button>
+        ) : (
+          <Button
+            size="icon"
+            className="absolute bottom-2.5 right-2.5 h-9 w-9 rounded-lg"
+            aria-label="Send message"
+            onClick={() => void handleSend()}
+            disabled={activeId === null || !draft.trim() || isStreaming}
+          >
+            <Send className="h-4 w-4" />
+          </Button>
+        )}
       </div>
       {attachError && <p className="px-1 pt-1 text-xs text-red-600 dark:text-red-400">{attachError}</p>}
       <p className="py-2 text-center text-xs text-muted-foreground">
-        Aether can make mistakes. Attach a .csv to analyze campaign data.
+        {isStreamingElsewhere
+          ? // The server allows one turn per user at a time, so sending here
+            // would be rejected. Name the reason instead of leaving a dead button.
+            'Aether is replying in another chat. Wait for it to finish, or stop it there.'
+          : 'Aether can make mistakes. Attach a .csv to analyze campaign data.'}
       </p>
     </div>
   )
@@ -506,6 +549,17 @@ export function ChatPage() {
       className="mt-4 rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700 dark:border-red-900/50 dark:bg-red-950/40 dark:text-red-300"
     >
       {errorMessage}
+    </p>
+  )
+
+  // Stopping isn't an error, so this stays neutral rather than joining the red
+  // banner above it.
+  const stoppedNotice = stoppedIn === activeId && activeId !== null && (
+    <p
+      role="status"
+      className="mt-4 rounded-md border border-border bg-surface-muted px-3 py-2 text-sm text-muted-foreground"
+    >
+      You stopped this reply before it finished, so it wasn’t saved.
     </p>
   )
 
@@ -564,6 +618,7 @@ export function ChatPage() {
               </div>
               <div className="mt-8">{composer}</div>
               {errorBanner}
+              {stoppedNotice}
             </div>
           </div>
         ) : (
@@ -650,6 +705,7 @@ export function ChatPage() {
                   </div>
                 )}
                 {errorBanner}
+                {stoppedNotice}
               </div>
             </div>
 

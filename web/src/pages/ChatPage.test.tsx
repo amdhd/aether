@@ -152,7 +152,94 @@ describe('ChatPage', () => {
     await userEvent.click(screen.getByRole('button', { name: /send message/i }))
 
     expect(await screen.findByText('Hello Aether')).toBeInTheDocument()
-    expect(chatApi.streamChatMessage).toHaveBeenCalledWith(1, 'Hello Aether', expect.any(Object), null)
+    expect(chatApi.streamChatMessage).toHaveBeenCalledWith(
+      1,
+      'Hello Aether',
+      expect.any(Object),
+      null,
+      expect.any(AbortSignal),
+    )
+
+    resolveStream()
+  })
+
+  it('stops an in-flight reply and says the partial answer was discarded', async () => {
+    vi.mocked(chatApi.listConversations).mockResolvedValue(mockConversationsPage(mockConversations))
+    vi.mocked(chatApi.getConversation).mockResolvedValue({ ...mockDetail, messages: [] })
+
+    let capturedHandlers: chatApi.ChatStreamHandlers | undefined
+    // Stand in for fetch: reject as soon as the caller's signal aborts.
+    vi.mocked(chatApi.streamChatMessage).mockImplementation(
+      (_id, _content, handlers, _file, signal) =>
+        new Promise((_resolve, reject) => {
+          capturedHandlers = handlers
+          signal?.addEventListener('abort', () => reject(new DOMException('Aborted', 'AbortError')))
+        }),
+    )
+
+    renderWithProviders(<ChatPage />)
+    await screen.findByRole('heading', { name: 'Trip planning' })
+
+    const textbox = await screen.findByLabelText('Message')
+    await userEvent.type(textbox, 'Hello Aether')
+    await userEvent.click(screen.getByRole('button', { name: /send message/i }))
+    act(() => capturedHandlers?.onToken?.('Half an answ'))
+    await screen.findByText('Half an answ')
+
+    // Send is replaced by Stop for the duration of the turn.
+    expect(screen.queryByRole('button', { name: /send message/i })).not.toBeInTheDocument()
+    await userEvent.click(screen.getByRole('button', { name: /stop generating/i }))
+
+    expect(await screen.findByText(/you stopped this reply/i)).toBeInTheDocument()
+    // Stopping is deliberate, so it must not read as a failure or shove the
+    // message back into a composer the user has moved on from.
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument()
+    expect(await screen.findByRole('button', { name: /send message/i })).toBeInTheDocument()
+    // Re-query: the composer remounts when the view swaps between the welcome
+    // and transcript branches, so the handle from before the send is detached.
+    expect(screen.getByLabelText('Message')).toHaveValue('')
+  })
+
+  it('leaves the composer usable in other chats while a reply streams', async () => {
+    vi.mocked(chatApi.listConversations).mockResolvedValue(mockConversationsPage(mockConversations))
+    vi.mocked(chatApi.getConversation).mockImplementation(async (id) => ({
+      ...(mockConversations.find((c) => c.id === id) ?? mockConversations[0]),
+      messages: id === 2 ? mockDetail.messages : [],
+    }))
+
+    let resolveStream: () => void = () => {}
+    vi.mocked(chatApi.streamChatMessage).mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          resolveStream = () => resolve()
+        }),
+    )
+
+    renderWithProviders(
+      <>
+        <ChatHistoryNav />
+        <ChatPage />
+      </>,
+    )
+    await screen.findByRole('heading', { name: 'Trip planning' })
+
+    const textbox = await screen.findByLabelText('Message')
+    await userEvent.type(textbox, 'Hello Aether')
+    await userEvent.click(screen.getByRole('button', { name: /send message/i }))
+
+    await userEvent.click(screen.getByRole('button', { name: 'Daily standup' }))
+    await screen.findByRole('heading', { name: 'Daily standup' })
+
+    // The other chat's turn must not lock this one's composer...
+    const otherTextbox = screen.getByLabelText('Message')
+    expect(otherTextbox).toBeEnabled()
+    await userEvent.type(otherTextbox, 'Draft while busy')
+    expect(otherTextbox).toHaveValue('Draft while busy')
+
+    // ...but the server only runs one turn per user, so sending has to wait —
+    // with a reason on screen rather than a dead button.
+    expect(screen.getByRole('button', { name: /send message/i })).toBeDisabled()
+    expect(screen.getByText(/replying in another chat/i)).toBeInTheDocument()
 
     resolveStream()
   })

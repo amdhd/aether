@@ -59,6 +59,7 @@ async function postChatMessage(
   content: string,
   file: File | null,
   token: string | null,
+  signal?: AbortSignal,
 ): Promise<Response> {
   const form = new FormData()
   form.append('content', content)
@@ -68,6 +69,7 @@ async function postChatMessage(
     method: 'POST',
     headers: token ? { Authorization: `Bearer ${token}` } : {},
     body: form,
+    signal,
   })
 }
 
@@ -93,14 +95,23 @@ function dispatchEvent(event: string, data: string, handlers: ChatStreamHandlers
   }
 }
 
+/**
+ * POST a turn and consume the SSE stream, invoking `handlers` per event.
+ *
+ * Aborting `signal` tears down the request, which drops the connection and lets
+ * the server release the user's in-flight turn slot. The abort surfaces here as
+ * a rejection, so callers that stop deliberately should check
+ * `signal.aborted` before treating it as a failure.
+ */
 export async function streamChatMessage(
   conversationId: number,
   content: string,
   handlers: ChatStreamHandlers,
   file: File | null = null,
+  signal?: AbortSignal,
 ): Promise<void> {
   let token = useAuthStore.getState().accessToken
-  let res = await postChatMessage(conversationId, content, file, token)
+  let res = await postChatMessage(conversationId, content, file, token, signal)
 
   if (res.status === 401) {
     token = await refreshAccessToken()
@@ -110,7 +121,7 @@ export async function streamChatMessage(
     // otherwise fall through with the original 401 instead of firing a second
     // doomed request that surfaces a confusing raw error.
     if (token) {
-      res = await postChatMessage(conversationId, content, file, token)
+      res = await postChatMessage(conversationId, content, file, token, signal)
     }
   }
 

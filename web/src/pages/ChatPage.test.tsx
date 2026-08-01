@@ -1,4 +1,4 @@
-import { act, screen, waitFor } from '@testing-library/react'
+import { act, fireEvent, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
@@ -152,7 +152,94 @@ describe('ChatPage', () => {
     await userEvent.click(screen.getByRole('button', { name: /send message/i }))
 
     expect(await screen.findByText('Hello Aether')).toBeInTheDocument()
-    expect(chatApi.streamChatMessage).toHaveBeenCalledWith(1, 'Hello Aether', expect.any(Object), null)
+    expect(chatApi.streamChatMessage).toHaveBeenCalledWith(
+      1,
+      'Hello Aether',
+      expect.any(Object),
+      null,
+      expect.any(AbortSignal),
+    )
+
+    resolveStream()
+  })
+
+  it('stops an in-flight reply and says the partial answer was discarded', async () => {
+    vi.mocked(chatApi.listConversations).mockResolvedValue(mockConversationsPage(mockConversations))
+    vi.mocked(chatApi.getConversation).mockResolvedValue({ ...mockDetail, messages: [] })
+
+    let capturedHandlers: chatApi.ChatStreamHandlers | undefined
+    // Stand in for fetch: reject as soon as the caller's signal aborts.
+    vi.mocked(chatApi.streamChatMessage).mockImplementation(
+      (_id, _content, handlers, _file, signal) =>
+        new Promise((_resolve, reject) => {
+          capturedHandlers = handlers
+          signal?.addEventListener('abort', () => reject(new DOMException('Aborted', 'AbortError')))
+        }),
+    )
+
+    renderWithProviders(<ChatPage />)
+    await screen.findByRole('heading', { name: 'Trip planning' })
+
+    const textbox = await screen.findByLabelText('Message')
+    await userEvent.type(textbox, 'Hello Aether')
+    await userEvent.click(screen.getByRole('button', { name: /send message/i }))
+    act(() => capturedHandlers?.onToken?.('Half an answ'))
+    await screen.findByText('Half an answ')
+
+    // Send is replaced by Stop for the duration of the turn.
+    expect(screen.queryByRole('button', { name: /send message/i })).not.toBeInTheDocument()
+    await userEvent.click(screen.getByRole('button', { name: /stop generating/i }))
+
+    expect(await screen.findByText(/you stopped this reply/i)).toBeInTheDocument()
+    // Stopping is deliberate, so it must not read as a failure or shove the
+    // message back into a composer the user has moved on from.
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument()
+    expect(await screen.findByRole('button', { name: /send message/i })).toBeInTheDocument()
+    // Re-query: the composer remounts when the view swaps between the welcome
+    // and transcript branches, so the handle from before the send is detached.
+    expect(screen.getByLabelText('Message')).toHaveValue('')
+  })
+
+  it('leaves the composer usable in other chats while a reply streams', async () => {
+    vi.mocked(chatApi.listConversations).mockResolvedValue(mockConversationsPage(mockConversations))
+    vi.mocked(chatApi.getConversation).mockImplementation(async (id) => ({
+      ...(mockConversations.find((c) => c.id === id) ?? mockConversations[0]),
+      messages: id === 2 ? mockDetail.messages : [],
+    }))
+
+    let resolveStream: () => void = () => {}
+    vi.mocked(chatApi.streamChatMessage).mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          resolveStream = () => resolve()
+        }),
+    )
+
+    renderWithProviders(
+      <>
+        <ChatHistoryNav />
+        <ChatPage />
+      </>,
+    )
+    await screen.findByRole('heading', { name: 'Trip planning' })
+
+    const textbox = await screen.findByLabelText('Message')
+    await userEvent.type(textbox, 'Hello Aether')
+    await userEvent.click(screen.getByRole('button', { name: /send message/i }))
+
+    await userEvent.click(screen.getByRole('button', { name: 'Daily standup' }))
+    await screen.findByRole('heading', { name: 'Daily standup' })
+
+    // The other chat's turn must not lock this one's composer...
+    const otherTextbox = screen.getByLabelText('Message')
+    expect(otherTextbox).toBeEnabled()
+    await userEvent.type(otherTextbox, 'Draft while busy')
+    expect(otherTextbox).toHaveValue('Draft while busy')
+
+    // ...but the server only runs one turn per user, so sending has to wait —
+    // with a reason on screen rather than a dead button.
+    expect(screen.getByRole('button', { name: /send message/i })).toBeDisabled()
+    expect(screen.getByText(/replying in another chat/i)).toBeInTheDocument()
 
     resolveStream()
   })
@@ -239,6 +326,188 @@ describe('ChatPage', () => {
     expect(await screen.findByText('Monthly limit reached')).toBeInTheDocument()
     // Losing what they typed is the worst outcome of a failed turn.
     await waitFor(() => expect(textbox).toHaveValue('Hello Aether'))
+  })
+
+  it('reaches an older conversation without the sidebar', async () => {
+    vi.mocked(chatApi.listConversations).mockResolvedValue(mockConversationsPage(mockConversations))
+    vi.mocked(chatApi.getConversation).mockImplementation(async (id) => ({
+      ...(mockConversations.find((c) => c.id === id) ?? mockConversations[0]),
+      messages: id === 2 ? mockDetail.messages : [],
+    }))
+
+    // Deliberately without ChatHistoryNav: below `sm` the sidebar that holds it
+    // is hidden, which used to strand the user in whichever chat is newest.
+    renderWithProviders(<ChatPage />)
+    await screen.findByRole('heading', { name: 'Trip planning' })
+
+    await userEvent.click(screen.getByRole('button', { name: /recent chats/i }))
+    await userEvent.click(await screen.findByRole('button', { name: 'Daily standup' }))
+
+    expect(await screen.findByRole('heading', { name: 'Daily standup' })).toBeInTheDocument()
+    // Picking one is the end of the errand, so the sheet gets out of the way.
+    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument())
+  })
+
+  it('grows the composer with the draft and shrinks it back again', async () => {
+    vi.mocked(chatApi.listConversations).mockResolvedValue(mockConversationsPage(mockConversations))
+    vi.mocked(chatApi.getConversation).mockResolvedValue({ ...mockDetail, messages: [] })
+
+    renderWithProviders(<ChatPage />)
+    await screen.findByRole('heading', { name: 'Trip planning' })
+    const textbox = (await screen.findByLabelText('Message')) as HTMLTextAreaElement
+
+    // jsdom does no layout, so scrollHeight is always 0. Stand in for a real
+    // one: 24px per line of content, but never less than the height already
+    // set on the box — that floor is what makes a naive measurement ratchet
+    // upwards, and the reason the effect resets to `auto` before reading.
+    Object.defineProperty(textbox, 'scrollHeight', {
+      configurable: true,
+      get() {
+        const content = 24 * (this.value.split('\n').length || 1)
+        return Math.max(content, parseInt(this.style.height, 10) || 0)
+      },
+    })
+
+    await userEvent.type(textbox, 'one{Shift>}{Enter}{/Shift}two{Shift>}{Enter}{/Shift}three')
+    expect(textbox.style.height).toBe('72px')
+
+    // Deleting a line has to give the space back. Measuring without resetting
+    // to `auto` first would leave it stuck at its tallest.
+    await userEvent.clear(textbox)
+    await userEvent.type(textbox, 'one')
+    expect(textbox.style.height).toBe('24px')
+  })
+
+  it('refuses an over-long message in the composer rather than at the server', async () => {
+    vi.mocked(chatApi.listConversations).mockResolvedValue(mockConversationsPage(mockConversations))
+    vi.mocked(chatApi.getConversation).mockResolvedValue({ ...mockDetail, messages: [] })
+
+    renderWithProviders(<ChatPage />)
+    await screen.findByRole('heading', { name: 'Trip planning' })
+
+    // Typing 16k characters one keystroke at a time is far too slow; paste is
+    // also the realistic way to exceed this.
+    await userEvent.click(screen.getByLabelText('Message'))
+    await userEvent.paste('x'.repeat(chatApi.MAX_MESSAGE_CHARS + 1))
+
+    expect(screen.getByRole('button', { name: /send message/i })).toBeDisabled()
+    expect(screen.getByText(/this message is too long to send/i)).toBeInTheDocument()
+    expect(screen.getByText('16,001 / 16,000')).toBeInTheDocument()
+
+    // Enter is the other way to send, and it has to refuse too.
+    await userEvent.keyboard('{Enter}')
+    expect(chatApi.streamChatMessage).not.toHaveBeenCalled()
+  })
+
+  it('rejects an oversized attachment before uploading it', async () => {
+    vi.mocked(chatApi.listConversations).mockResolvedValue(mockConversationsPage(mockConversations))
+    vi.mocked(chatApi.getConversation).mockResolvedValue({ ...mockDetail, messages: [] })
+
+    const { container } = renderWithProviders(<ChatPage />)
+    await screen.findByRole('heading', { name: 'Trip planning' })
+
+    const tooBig = new File(['x'.repeat(chatApi.MAX_ATTACHMENT_BYTES + 1)], 'huge.csv', {
+      type: 'text/csv',
+    })
+    await userEvent.upload(container.querySelector('input[type="file"]') as HTMLInputElement, tooBig)
+
+    expect(await screen.findByText(/that file is too large/i)).toBeInTheDocument()
+    // No chip: the file was refused, not merely complained about.
+    expect(screen.queryByText('huge.csv')).not.toBeInTheDocument()
+  })
+
+  it('offers a way back to the tail once the reader scrolls away from it', async () => {
+    vi.mocked(chatApi.listConversations).mockResolvedValue(mockConversationsPage(mockConversations))
+    vi.mocked(chatApi.getConversation).mockResolvedValue(mockDetail)
+
+    renderWithProviders(<ChatPage />)
+    await screen.findByText('Hi there')
+
+    // jsdom reports a zero-height layout, which reads as "already at the
+    // bottom" — so stand in for a transcript taller than its viewport.
+    const scroller = document.querySelector('.overflow-y-auto') as HTMLDivElement
+    Object.defineProperty(scroller, 'scrollHeight', { value: 2000, configurable: true })
+    Object.defineProperty(scroller, 'clientHeight', { value: 500, configurable: true })
+    scroller.scrollTo = vi.fn()
+
+    // Nothing to offer while they're reading the newest message.
+    expect(screen.queryByRole('button', { name: /jump to latest/i })).not.toBeInTheDocument()
+
+    scroller.scrollTop = 200
+    fireEvent.scroll(scroller)
+
+    const jump = await screen.findByRole('button', { name: /jump to latest/i })
+    await userEvent.click(jump)
+
+    expect(scroller.scrollTo).toHaveBeenCalledWith({ top: 2000, behavior: 'smooth' })
+    await waitFor(() =>
+      expect(screen.queryByRole('button', { name: /jump to latest/i })).not.toBeInTheDocument(),
+    )
+  })
+
+  it('leaves a failed turn’s error in the conversation it happened in', async () => {
+    vi.mocked(chatApi.listConversations).mockResolvedValue(mockConversationsPage(mockConversations))
+    vi.mocked(chatApi.getConversation).mockImplementation(async (id) => ({
+      ...(mockConversations.find((c) => c.id === id) ?? mockConversations[0]),
+      messages: id === 2 ? mockDetail.messages : [],
+    }))
+    vi.mocked(chatApi.streamChatMessage).mockRejectedValue(new Error('Monthly limit reached'))
+
+    renderWithProviders(
+      <>
+        <ChatHistoryNav />
+        <ChatPage />
+      </>,
+    )
+    await screen.findByRole('heading', { name: 'Trip planning' })
+
+    await userEvent.type(screen.getByLabelText('Message'), 'Hello Aether')
+    await userEvent.click(screen.getByRole('button', { name: /send message/i }))
+    expect(await screen.findByText('Monthly limit reached')).toBeInTheDocument()
+
+    // Nothing failed in this chat, so nothing should be complaining in it.
+    await userEvent.click(screen.getByRole('button', { name: 'Daily standup' }))
+    await screen.findByRole('heading', { name: 'Daily standup' })
+    await waitFor(() => expect(screen.queryByText('Monthly limit reached')).not.toBeInTheDocument())
+
+    // It's still waiting where it belongs when they come back to deal with it.
+    await userEvent.click(screen.getByRole('button', { name: 'Trip planning' }))
+    expect(await screen.findByText('Monthly limit reached')).toBeInTheDocument()
+  })
+
+  it('keeps each conversation’s draft and attachment with that conversation', async () => {
+    vi.mocked(chatApi.listConversations).mockResolvedValue(mockConversationsPage(mockConversations))
+    vi.mocked(chatApi.getConversation).mockImplementation(async (id) => ({
+      ...(mockConversations.find((c) => c.id === id) ?? mockConversations[0]),
+      messages: id === 2 ? mockDetail.messages : [],
+    }))
+
+    const { container } = renderWithProviders(
+      <>
+        <ChatHistoryNav />
+        <ChatPage />
+      </>,
+    )
+    await screen.findByRole('heading', { name: 'Trip planning' })
+
+    const fileInput = container.querySelector('input[type="file"]') as HTMLInputElement
+    await userEvent.type(screen.getByLabelText('Message'), 'Draft for the trip')
+    await userEvent.upload(fileInput, new File(['a,b\n1,2'], 'campaign.csv', { type: 'text/csv' }))
+    expect(await screen.findByText('campaign.csv')).toBeInTheDocument()
+
+    await userEvent.click(screen.getByRole('button', { name: 'Daily standup' }))
+    await screen.findByRole('heading', { name: 'Daily standup' })
+
+    // A different chat starts clean. The attachment especially: a stray chip
+    // here would upload the other conversation's file on the next send.
+    expect(screen.getByLabelText('Message')).toHaveValue('')
+    expect(screen.queryByText('campaign.csv')).not.toBeInTheDocument()
+
+    await userEvent.click(screen.getByRole('button', { name: 'Trip planning' }))
+    await screen.findByRole('heading', { name: 'Trip planning' })
+
+    expect(screen.getByLabelText('Message')).toHaveValue('Draft for the trip')
+    expect(screen.getByText('campaign.csv')).toBeInTheDocument()
   })
 
   it('keeps a streaming reply out of a conversation the user switches to', async () => {

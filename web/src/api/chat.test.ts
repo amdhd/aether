@@ -61,3 +61,31 @@ describe('streamChatMessage auth handling', () => {
     expect(doneTitle).toBe('Trip')
   })
 })
+
+describe('streamChatMessage error messages', () => {
+  it('passes a string detail through as-is', async () => {
+    fetchMock.mockResolvedValue(
+      new Response(JSON.stringify({ detail: 'Another reply is still in progress.' }), { status: 429 }),
+    )
+
+    await expect(streamChatMessage(1, 'hi', {})).rejects.toThrow('Another reply is still in progress.')
+  })
+
+  it('never surfaces FastAPI’s validation array as "[object Object]"', async () => {
+    // What the server actually sends when the message exceeds MAX_MESSAGE_CHARS.
+    const body = {
+      detail: [{ type: 'string_too_long', loc: ['body', 'content'], msg: 'String should have at most 16000 characters' }],
+    }
+    fetchMock.mockResolvedValue(new Response(JSON.stringify(body), { status: 422 }))
+
+    await expect(streamChatMessage(1, 'hi', {})).rejects.toThrow(/couldn’t be sent/)
+    // Error's own coercion of that array is what used to reach the chat banner.
+    await expect(streamChatMessage(1, 'hi', {})).rejects.not.toThrow(/object Object/)
+  })
+
+  it('falls back to a readable message when there is no JSON body', async () => {
+    fetchMock.mockResolvedValue(new Response('<html>502</html>', { status: 502 }))
+
+    await expect(streamChatMessage(1, 'hi', {})).rejects.toThrow('Something went wrong (error 502). Please try again.')
+  })
+})

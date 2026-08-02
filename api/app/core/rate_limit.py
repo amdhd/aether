@@ -193,14 +193,27 @@ async def enforce_chat_rate_limit(current_user: User = Depends(get_current_user)
 
 
 def _client_ip(request: Request) -> str:
-    """Best-effort originating client IP. Behind a trusted proxy the socket peer
-    is the proxy, so the real client is the first entry of X-Forwarded-For.
-    Only honored when TRUST_PROXY_HEADERS is set, since the header is otherwise
-    attacker-controlled and would let anyone forge a fresh IP per request."""
+    """Best-effort originating client IP, read from the *right* of the chain.
+
+    Behind a trusted proxy the socket peer is the proxy, so the real client has
+    to come from X-Forwarded-For — but a proxy *appends* to that header rather
+    than replacing it. A caller who sends their own X-Forwarded-For therefore
+    controls everything to the left of what our own edge added, which makes the
+    leftmost entry worthless: rotating it per request would mint a fresh
+    rate-limit bucket every time and hand an attacker unlimited login attempts.
+
+    Only the last TRUSTED_PROXY_HOPS entries were written by infrastructure we
+    control, and the first of those is the address our edge actually saw. A
+    chain shorter than that means the request didn't arrive through the expected
+    path, so fall back to the socket peer rather than trusting the header.
+    """
     if settings.TRUST_PROXY_HEADERS:
         forwarded = request.headers.get("x-forwarded-for")
         if forwarded:
-            return forwarded.split(",")[0].strip()
+            hops = [hop.strip() for hop in forwarded.split(",") if hop.strip()]
+            trusted = settings.TRUSTED_PROXY_HOPS
+            if trusted >= 1 and len(hops) >= trusted:
+                return hops[-trusted]
     return request.client.host if request.client else "unknown"
 
 

@@ -109,11 +109,17 @@ class Settings(BaseSettings):
     WEB_SEARCH_RATE_LIMIT_PER_MINUTE: int = 10
     CALENDAR_RATE_LIMIT_PER_MINUTE: int = 20
     AUTH_RATE_LIMIT_PER_MINUTE: int = 10
-    # Behind a trusted reverse proxy (Render, Vercel, nginx) the socket peer is
-    # the proxy, so per-IP auth rate limiting must read the client IP from the
+    # Behind a trusted reverse proxy (ALB, Render, Vercel, nginx) the socket peer
+    # is the proxy, so per-IP auth rate limiting must read the client IP from the
     # X-Forwarded-For header instead. Only enable this when a proxy you control
     # sets that header — otherwise clients can spoof it. Left off in local dev.
     TRUST_PROXY_HEADERS: bool = False
+    # How many proxies of our own sit in front of the app. Because each one
+    # appends to X-Forwarded-For, this is what says how far from the right of
+    # that header the real client is; everything further left came from the
+    # caller and can say anything. One ALB = 1. Put CloudFront in front of the
+    # API as well and it becomes 2.
+    TRUSTED_PROXY_HOPS: int = 1
 
     # Tools
     TAVILY_API_KEY: str = ""

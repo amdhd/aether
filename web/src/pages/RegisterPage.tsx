@@ -35,7 +35,10 @@ export function RegisterPage() {
       if (err instanceof ApiError && err.status === 400) {
         setError('That email is already registered.')
       } else if (err instanceof ApiError && err.status === 422) {
-        setError('Please check your details and try again (password must be at least 8 characters).')
+        // The upper bound is bcrypt's 72 *bytes*, so a long passphrase is a
+        // real way to land here — saying only "at least 8" sent those users
+        // round in circles.
+        setError('Please check your details and try again — the password must be 8 to 72 characters.')
       } else {
         setError('Something went wrong. Please try again.')
       }

@@ -7,11 +7,33 @@ from jose import jwt
 from app.core.config import settings
 
 
+# bcrypt hashes at most 72 bytes of input and, since 4.x, *raises* on anything
+# longer instead of truncating. That makes the ceiling part of the credential
+# contract rather than an implementation detail: registration rejects a longer
+# password up front (see app.schemas.user) and the helpers below refuse to hand
+# bcrypt something it will throw on.
+MAX_PASSWORD_BYTES = 72
+
+
+def password_exceeds_max_bytes(password: str) -> bool:
+    """True when bcrypt would refuse this password. Counted in UTF-8 bytes, so
+    accented or emoji characters use up the budget faster than one each."""
+    return len(password.encode("utf-8")) > MAX_PASSWORD_BYTES
+
+
 def hash_password(password: str) -> str:
     return bcrypt.hashpw(password.encode("utf-8"), bcrypt.gensalt()).decode("utf-8")
 
 
 def verify_password(plain_password: str, hashed_password: str) -> bool:
+    # A candidate too long to have been hashed cannot be the stored credential,
+    # so the answer is False. Passing it through would raise instead — turning a
+    # wrong password into a 500 on an endpoint anyone can reach unauthenticated.
+    # The dummy comparison keeps the timing in line with a real check, the same
+    # reason fake_verify_password() exists.
+    if password_exceeds_max_bytes(plain_password):
+        bcrypt.checkpw(b"timing-equalization-placeholder", _DUMMY_PASSWORD_HASH.encode("utf-8"))
+        return False
     return bcrypt.checkpw(plain_password.encode("utf-8"), hashed_password.encode("utf-8"))
 
 

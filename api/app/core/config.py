@@ -121,6 +121,12 @@ class Settings(BaseSettings):
     # API as well and it becomes 2.
     TRUSTED_PROXY_HOPS: int = 1
 
+    # Hard ceiling on any request body, enforced before the body is read (see
+    # app.core.body_limit). Comfortably above the largest legitimate request —
+    # a MAX_ATTACHMENT_BYTES upload (200 KB) plus a MAX_MESSAGE_CHARS message
+    # and multipart overhead — while keeping an unbounded upload off the disk.
+    MAX_REQUEST_BYTES: int = 1_048_576
+
     # Tools
     TAVILY_API_KEY: str = ""
 

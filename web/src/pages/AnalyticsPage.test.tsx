@@ -1,4 +1,5 @@
-import { screen } from '@testing-library/react'
+import { screen, waitFor } from '@testing-library/react'
+import userEvent from '@testing-library/user-event'
 import { describe, expect, it, vi } from 'vitest'
 
 import * as analyticsApi from '@/api/analytics'
@@ -23,6 +24,27 @@ describe('AnalyticsPage', () => {
     renderWithProviders(<AnalyticsPage />)
 
     expect(await screen.findByText(/failed to load analytics/i)).toBeInTheDocument()
+  })
+
+  it('offers a retry when analytics fail, rather than a dead sentence', async () => {
+    const summary: AnalyticsSummary = {
+      messages_per_day: [{ date: '2026-06-01', count: 5 }],
+      tokens_per_day: [{ date: '2026-06-01', prompt_tokens: 100, completion_tokens: 50 }],
+      tool_usage: [{ tool_name: 'create_task', count: 3 }],
+      totals: { conversations: 2, messages: 10, prompt_tokens: 1000, completion_tokens: 500 },
+    }
+    vi.mocked(analyticsApi.getAnalyticsSummary)
+      .mockRejectedValueOnce(new Error('network error'))
+      .mockResolvedValueOnce(summary)
+
+    renderWithProviders(<AnalyticsPage />)
+
+    await screen.findByText(/failed to load analytics/i)
+    await userEvent.click(screen.getByRole('button', { name: /try again/i }))
+
+    // The recovery is the point: the retry has to actually re-fetch and render.
+    expect(await screen.findByText('Messages sent')).toBeInTheDocument()
+    await waitFor(() => expect(screen.queryByText(/failed to load analytics/i)).not.toBeInTheDocument())
   })
 
   it('shows an empty state when there is no activity yet', async () => {

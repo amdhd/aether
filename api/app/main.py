@@ -4,6 +4,7 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.router import api_router
+from app.core.body_limit import MaxBodySizeMiddleware
 from app.core.config import settings
 from app.core.logging import configure_logging
 from app.core.tracing import configure_tracing
@@ -21,6 +22,10 @@ app = FastAPI(
     redoc_url="/redoc" if _docs_enabled else None,
     openapi_url="/openapi.json" if _docs_enabled else None,
 )
+
+# Added before CORS so that CORS ends up the outer layer and decorates the 413
+# too — otherwise a browser sees an opaque CORS failure instead of the status.
+app.add_middleware(MaxBodySizeMiddleware, max_bytes=settings.MAX_REQUEST_BYTES)
 
 app.add_middleware(
     CORSMiddleware,

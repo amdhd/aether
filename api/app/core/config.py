@@ -115,6 +115,12 @@ class Settings(BaseSettings):
     # sets that header — otherwise clients can spoof it. Left off in local dev.
     TRUST_PROXY_HEADERS: bool = False
 
+    # Hard ceiling on any request body, enforced before the body is read (see
+    # app.core.body_limit). Comfortably above the largest legitimate request —
+    # a MAX_ATTACHMENT_BYTES upload (200 KB) plus a MAX_MESSAGE_CHARS message
+    # and multipart overhead — while keeping an unbounded upload off the disk.
+    MAX_REQUEST_BYTES: int = 1_048_576
+
     # Tools
     TAVILY_API_KEY: str = ""
 

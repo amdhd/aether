@@ -152,6 +152,35 @@ async def test_login_unknown_user_runs_dummy_verify(
     assert calls["n"] == 1
 
 
+async def test_auth_rate_limit_ignores_a_spoofed_forwarded_prefix(
+    client: AsyncClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A proxy appends to X-Forwarded-For rather than replacing it, so a caller
+    can put anything to the left of the entry our edge adds. Reading from the
+    left let an attacker mint a fresh bucket per request and brute-force logins
+    without limit; only the rightmost hop is ours to trust."""
+    monkeypatch.setattr(settings, "TRUST_PROXY_HEADERS", True)
+    payload = {"username": "nobody@example.com", "password": "wrong"}
+    # What the app receives once the ALB has appended the real peer: the client's
+    # own (forged) value first, ours last.
+    spoofed = lambda n: {"X-Forwarded-For": f"10.0.0.{n}, 203.0.113.7"}  # noqa: E731
+
+    for n in range(settings.AUTH_RATE_LIMIT_PER_MINUTE):
+        resp = await client.post("/api/v1/auth/login", data=payload, headers=spoofed(n))
+        assert resp.status_code == 401
+
+    # A brand-new forged prefix must not buy another window — the bucket belongs
+    # to 203.0.113.7 either way.
+    limited = await client.post("/api/v1/auth/login", data=payload, headers=spoofed(99))
+    assert limited.status_code == 429
+
+    # ...while a genuinely different client, as seen by the proxy, still gets one.
+    other = await client.post(
+        "/api/v1/auth/login", data=payload, headers={"X-Forwarded-For": "10.0.0.1, 198.51.100.4"}
+    )
+    assert other.status_code == 401
+
+
 async def test_auth_rate_limit_uses_forwarded_ip_when_trusted(
     client: AsyncClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -189,3 +218,44 @@ async def test_auth_rate_limit_ignores_forwarded_ip_when_untrusted(client: Async
         "/api/v1/auth/login", data=payload, headers={"X-Forwarded-For": "9.9.9.9"}
     )
     assert resp.status_code == 429
+
+
+async def test_register_rejects_a_password_bcrypt_cannot_hash(client: AsyncClient) -> None:
+    """bcrypt raises above 72 bytes rather than truncating, so a passphrase from
+    a password manager used to take registration out with a 500."""
+    resp = await client.post(
+        "/api/v1/auth/register",
+        json={"email": "longpw@example.com", "name": "Long", "password": "A" * 100},
+    )
+    assert resp.status_code == 422
+
+
+async def test_register_accepts_a_password_at_the_limit(client: AsyncClient) -> None:
+    resp = await client.post(
+        "/api/v1/auth/register",
+        json={"email": "atlimit@example.com", "name": "Limit", "password": "A" * 72},
+    )
+    assert resp.status_code == 201
+
+
+async def test_register_counts_password_length_in_bytes(client: AsyncClient) -> None:
+    # 40 emoji = 40 characters but 160 bytes: a character-only limit would let
+    # this reach bcrypt, which is where it would blow up.
+    resp = await client.post(
+        "/api/v1/auth/register",
+        json={"email": "emoji@example.com", "name": "Emoji", "password": "😀" * 40},
+    )
+    assert resp.status_code == 422
+
+
+async def test_login_with_an_over_long_password_is_rejected_not_a_crash(client: AsyncClient) -> None:
+    """Login takes an unbounded form field, so anyone could reach bcrypt's limit
+    on an unauthenticated endpoint and turn a wrong password into a 500."""
+    await client.post(
+        "/api/v1/auth/register",
+        json={"email": "victim@example.com", "name": "V", "password": "correct-horse"},
+    )
+    resp = await client.post(
+        "/api/v1/auth/login", data={"username": "victim@example.com", "password": "A" * 100}
+    )
+    assert resp.status_code == 401

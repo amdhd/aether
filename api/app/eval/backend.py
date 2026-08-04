@@ -19,17 +19,25 @@ There are two implementations:
   harness produces *something* in a keyless demo.
 
 Pick one with :func:`get_backend`, which chooses ``LLMBackend`` when a DeepSeek
-key is configured and falls back to ``OfflineBackend`` otherwise.
+key is configured and falls back to ``OfflineBackend`` otherwise. Wrap either in
+:class:`ThrottledBackend` to bound how many calls are in flight at once.
+
+Every backend names the models it used (``generation_model``, ``judge_model``,
+``embedding_model``) so the report can record them. They live here rather than
+in ``EvalConfig`` because the offline backend has no models and shouldn't be made
+to claim it does — it reports its own heuristics by name instead.
 """
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import json
 import math
 import re
 from typing import Protocol
 
+from app.core import usage
 from app.core.config import settings
 from app.core.logging import get_logger
 from app.services import embeddings
@@ -53,6 +61,10 @@ def _tokens(text: str) -> list[str]:
 
 class EvalBackend(Protocol):
     name: str
+    generation_model: str
+    judge_model: str
+    embedding_model: str
+    embedding_dimensions: int
 
     async def generate_answer(self, question: str, contexts: list[str]) -> str: ...
 
@@ -62,9 +74,10 @@ class EvalBackend(Protocol):
 
     async def is_relevant(self, question: str, ground_truth: str, context: str) -> bool: ...
 
-    async def generate_questions(self, answer: str, n: int) -> list[str]: ...
-
-    async def is_noncommittal(self, answer: str) -> bool: ...
+    # Returns (reverse-generated questions, noncommittal). One method rather
+    # than two because the judge decides both from the same prompt, and asking
+    # twice would bill twice for one verdict.
+    async def reverse_questions(self, answer: str, n: int) -> tuple[list[str], bool]: ...
 
     async def embed(self, text: str) -> list[float] | None: ...
 
@@ -92,6 +105,10 @@ class OfflineBackend:
     """Deterministic heuristics — no network, no keys. Used for CI and tests."""
 
     name = "offline"
+    generation_model = "offline-extractive"
+    judge_model = "offline-token-overlap"
+    embedding_model = "offline-hashed-bow"
+    embedding_dimensions = 256  # the `dim` in embed(); not settings.EMBEDDING_DIMENSIONS
 
     async def generate_answer(self, question: str, contexts: list[str]) -> str:
         # Extractive stand-in for a generator: return the sentences from the
@@ -129,22 +146,20 @@ class OfflineBackend:
         context_words = set(_tokens(context))
         return len(gt_words & context_words) / len(gt_words) >= 0.3
 
-    async def generate_questions(self, answer: str, n: int) -> list[str]:
+    async def reverse_questions(self, answer: str, n: int) -> tuple[list[str], bool]:
         # Reverse-generation stand-in: reuse the answer's own sentences. Combined
         # with the bag-of-words embedding below, answer relevancy then reflects
         # how much the answer's content overlaps the original question.
         sentences = _split_sentences(answer) or [answer]
-        return (sentences * n)[:n]
-
-    async def is_noncommittal(self, answer: str) -> bool:
         low = answer.lower()
-        return any(marker in low for marker in _NONCOMMITTAL_MARKERS)
+        noncommittal = any(marker in low for marker in _NONCOMMITTAL_MARKERS)
+        return (sentences * n)[:n], noncommittal
 
     async def embed(self, text: str) -> list[float] | None:
         # Deterministic hashing bag-of-words vector, L2-normalised. Cosine
         # similarity between two of these is a real overlap signal — enough to
         # make the answer-relevancy math meaningful and testable offline.
-        dim = 256
+        dim = self.embedding_dimensions
         vec = [0.0] * dim
         for token in _tokens(text):
             h = int(hashlib.md5(token.encode()).hexdigest(), 16)
@@ -200,39 +215,51 @@ class LLMBackend:
 
     name = "llm"
 
-    def __init__(self) -> None:
+    def __init__(
+        self, *, generation_model: str | None = None, judge_model: str | None = None
+    ) -> None:
         # Imported lazily so the harness module is importable without the client
         # (and so OfflineBackend has no hard dependency on DeepSeek config).
         from app.agent.client import get_deepseek_client
 
         self._client = get_deepseek_client()
+        # Separately overridable: judging with a stronger model than you generate
+        # with is a standard eval setup, and "did the score move because the
+        # generator changed or because the judge did?" is unanswerable if the two
+        # are welded together.
+        self.generation_model = generation_model or settings.DEEPSEEK_MODEL
+        self.judge_model = judge_model or settings.DEEPSEEK_MODEL
+        self.embedding_model = settings.EMBEDDING_MODEL
+        self.embedding_dimensions = settings.EMBEDDING_DIMENSIONS
+
+    async def _chat(self, model: str, messages: list[dict]) -> str:
+        resp = await self._client.chat.completions.create(
+            model=model,
+            messages=messages,
+            stream=False,
+            extra_body={"thinking": {"type": "disabled"}},
+        )
+        if resp.usage is not None:
+            usage.record_llm(resp.usage.prompt_tokens, resp.usage.completion_tokens)
+        return resp.choices[0].message.content or ""
 
     async def _chat_json(self, prompt: str, *, system: str | None = None) -> object:
         messages = []
         if system:
             messages.append({"role": "system", "content": system})
         messages.append({"role": "user", "content": prompt})
-        resp = await self._client.chat.completions.create(
-            model=settings.DEEPSEEK_MODEL,
-            messages=messages,
-            stream=False,
-            extra_body={"thinking": {"type": "disabled"}},
-        )
-        content = resp.choices[0].message.content or ""
-        return _parse_json(content)
+        return _parse_json(await self._chat(self.judge_model, messages))
 
     async def generate_answer(self, question: str, contexts: list[str]) -> str:
         context = "\n\n---\n\n".join(contexts) if contexts else "(no notes found)"
-        resp = await self._client.chat.completions.create(
-            model=settings.DEEPSEEK_MODEL,
-            messages=[
+        content = await self._chat(
+            self.generation_model,
+            [
                 {"role": "system", "content": _GENERATE_PROMPT_SYSTEM.format(context=context)},
                 {"role": "user", "content": question},
             ],
-            stream=False,
-            extra_body={"thinking": {"type": "disabled"}},
         )
-        return (resp.choices[0].message.content or "").strip()
+        return content.strip()
 
     async def extract_claims(self, answer: str) -> list[str]:
         result = await self._chat_json(_CLAIM_PROMPT.format(answer=answer))
@@ -250,19 +277,72 @@ class LLMBackend:
         )
         return bool(isinstance(result, dict) and result.get("useful"))
 
-    async def generate_questions(self, answer: str, n: int) -> list[str]:
+    async def reverse_questions(self, answer: str, n: int) -> tuple[list[str], bool]:
+        # RAGAS folds the noncommittal verdict into question generation, and so
+        # does _QUESTION_GEN_PROMPT: one reply carries both. Reading them from
+        # one response also removes a way for the two to disagree.
         result = await self._chat_json(_QUESTION_GEN_PROMPT.format(n=n, answer=answer))
-        if isinstance(result, dict) and isinstance(result.get("questions"), list):
-            return [str(q) for q in result["questions"] if str(q).strip()]
-        return []
-
-    async def is_noncommittal(self, answer: str) -> bool:
-        # RAGAS folds this into question generation; ask the same call.
-        result = await self._chat_json(_QUESTION_GEN_PROMPT.format(n=1, answer=answer))
-        return bool(isinstance(result, dict) and result.get("noncommittal"))
+        if not isinstance(result, dict):
+            # Unparseable reply: no questions (relevancy becomes undefined) and
+            # no claim that the answer declined.
+            return [], False
+        raw = result.get("questions")
+        questions = [str(q) for q in raw if str(q).strip()] if isinstance(raw, list) else []
+        return questions, bool(result.get("noncommittal"))
 
     async def embed(self, text: str) -> list[float] | None:
         return await embeddings.embed_text(text)
+
+
+# --- Concurrency bound ------------------------------------------------------
+
+
+class ThrottledBackend:
+    """Wraps a backend so at most ``limit`` of its calls are in flight at once.
+
+    The bound is per *call*, not per sample. Bounding per sample would be a lie:
+    scoring one sample fans out again internally (one ``is_supported`` call per
+    claim, one ``is_relevant`` per context), so "8 samples at a time" can mean
+    fifty concurrent requests. Holding the semaphore around each individual call
+    is what actually caps in-flight requests at the number configured — which is
+    the number that has to stay under the provider's rate limit.
+
+    Nothing throttled here calls anything else that is throttled, so the
+    semaphore is never acquired re-entrantly and cannot deadlock.
+    """
+
+    def __init__(self, inner: EvalBackend, limit: int) -> None:
+        self._inner = inner
+        self._sem = asyncio.Semaphore(limit)
+        self.name = inner.name
+        self.generation_model = inner.generation_model
+        self.judge_model = inner.judge_model
+        self.embedding_model = inner.embedding_model
+        self.embedding_dimensions = inner.embedding_dimensions
+
+    async def generate_answer(self, question: str, contexts: list[str]) -> str:
+        async with self._sem:
+            return await self._inner.generate_answer(question, contexts)
+
+    async def extract_claims(self, answer: str) -> list[str]:
+        async with self._sem:
+            return await self._inner.extract_claims(answer)
+
+    async def is_supported(self, context: str, claim: str) -> bool:
+        async with self._sem:
+            return await self._inner.is_supported(context, claim)
+
+    async def is_relevant(self, question: str, ground_truth: str, context: str) -> bool:
+        async with self._sem:
+            return await self._inner.is_relevant(question, ground_truth, context)
+
+    async def reverse_questions(self, answer: str, n: int) -> tuple[list[str], bool]:
+        async with self._sem:
+            return await self._inner.reverse_questions(answer, n)
+
+    async def embed(self, text: str) -> list[float] | None:
+        async with self._sem:
+            return await self._inner.embed(text)
 
 
 def _parse_json(content: str) -> object:
@@ -288,9 +368,11 @@ def _parse_json(content: str) -> object:
     return None
 
 
-def get_backend() -> EvalBackend:
+def get_backend(
+    *, generation_model: str | None = None, judge_model: str | None = None
+) -> EvalBackend:
     """Return the LLM backend when DeepSeek is configured, else the offline one."""
     if settings.DEEPSEEK_API_KEY:
-        return LLMBackend()
+        return LLMBackend(generation_model=generation_model, judge_model=judge_model)
     logger.warning("eval.backend.offline reason=no_deepseek_key")
     return OfflineBackend()

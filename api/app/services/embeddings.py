@@ -10,6 +10,7 @@ from functools import lru_cache
 
 from openai import AsyncOpenAI
 
+from app.core import usage
 from app.core.config import settings
 from app.core.logging import get_logger
 
@@ -49,6 +50,10 @@ async def embed_text(text: str) -> list[float] | None:
         # semantic search indefinitely with no signal that anything is wrong.
         logger.warning("embedding.failed error=%r", exc)
         return None
+    # No-op unless a caller opened a usage meter. This is the only place query
+    # and note embeddings are billed, so metering here is what lets the eval
+    # harness attribute retrieval's embedding cost to the sample that caused it.
+    usage.record_embedding(getattr(resp.usage, "total_tokens", 0) or 0)
     return resp.data[0].embedding
 
 

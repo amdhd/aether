@@ -76,11 +76,15 @@ async def context_precision(
 async def answer_relevancy(
     backend: EvalBackend, question: str, answer: str, n_questions: int = 3
 ) -> float | None:
-    if await backend.is_noncommittal(answer):
+    # One judge call, not two: the questions and the noncommittal verdict come
+    # out of the same prompt (RAGAS defines it that way), so asking separately
+    # paid twice per sample for one answer and let the two replies disagree.
+    generated, noncommittal = await backend.reverse_questions(answer, n_questions)
+    if noncommittal:
         # An answer that declines ("the notes don't say") is maximally faithful
-        # but not *relevant* to the question — RAGAS scores these 0.
+        # but not *relevant* to the question — RAGAS scores these 0. Checked
+        # before the empty-questions case: declining is a verdict, not a gap.
         return 0.0
-    generated = await backend.generate_questions(answer, n_questions)
     if not generated:
         return None
     q_vec = await backend.embed(question)

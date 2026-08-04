@@ -53,14 +53,19 @@ def _emf_logger() -> logging.Logger:
     return logger
 
 
-def estimate_cost_usd(prompt_tokens: int, completion_tokens: int) -> float:
+def estimate_cost_usd(
+    prompt_tokens: int, completion_tokens: int, embedding_tokens: int = 0
+) -> float:
     """Approximate the USD cost of a turn from configured per-1M-token rates.
 
     An estimate for observability only — real billing comes from the provider.
+    ``embedding_tokens`` defaults to 0 because chat turns don't embed; the RAG
+    eval harness passes it so retrieval's share of the bill is priced too.
     """
     input_cost = (prompt_tokens / 1_000_000) * settings.LLM_INPUT_COST_PER_1M_TOKENS
     output_cost = (completion_tokens / 1_000_000) * settings.LLM_OUTPUT_COST_PER_1M_TOKENS
-    return round(input_cost + output_cost, 8)
+    embed_cost = (embedding_tokens / 1_000_000) * settings.EMBEDDING_COST_PER_1M_TOKENS
+    return round(input_cost + output_cost + embed_cost, 8)
 
 
 def build_llm_turn_document(

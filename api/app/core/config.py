@@ -83,6 +83,10 @@ class Settings(BaseSettings):
     # placeholders for the configured DeepSeek model.
     LLM_INPUT_COST_PER_1M_TOKENS: float = 0.27
     LLM_OUTPUT_COST_PER_1M_TOKENS: float = 1.10
+    # Same caveat, for the embeddings model. Only the RAG eval harness prices
+    # embeddings today (chat turns don't embed), but a retrieval config that
+    # doubles the corpus embedded is a real cost change and should show up.
+    EMBEDDING_COST_PER_1M_TOKENS: float = 0.02
 
     # Per-user spend ceiling for a UTC calendar month, priced with the rates
     # above. Rate limits cap requests per minute but not spend per month, so this

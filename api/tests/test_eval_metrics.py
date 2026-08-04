@@ -35,6 +35,7 @@ class FakeBackend:
         self._noncommittal = noncommittal
         self._vectors = vectors or {}
         self._relevant_calls = 0
+        self.reverse_question_calls = 0
 
     async def generate_answer(self, question, contexts):  # pragma: no cover - unused here
         return ""
@@ -51,11 +52,9 @@ class FakeBackend:
         self._relevant_calls += 1
         return verdict
 
-    async def generate_questions(self, answer, n):
-        return self._questions
-
-    async def is_noncommittal(self, answer):
-        return self._noncommittal
+    async def reverse_questions(self, answer, n):
+        self.reverse_question_calls += 1
+        return self._questions, self._noncommittal
 
     async def embed(self, text):
         return self._vectors.get(text)
@@ -113,6 +112,25 @@ async def test_answer_relevancy_is_mean_cosine() -> None:
 async def test_answer_relevancy_zero_when_noncommittal() -> None:
     backend = FakeBackend(noncommittal=True)
     assert await metrics.answer_relevancy(backend, "q", "I don't know") == 0.0
+
+
+async def test_answer_relevancy_asks_the_judge_once() -> None:
+    # The questions and the noncommittal verdict come from one prompt. Splitting
+    # them across two calls doubled the judge cost of every sample for a verdict
+    # already present in the first reply.
+    backend = FakeBackend(
+        questions=["g1"], vectors={"q": [1.0, 0.0], "g1": [1.0, 0.0]}
+    )
+    await metrics.answer_relevancy(backend, "q", "answer")
+    assert backend.reverse_question_calls == 1
+
+
+async def test_answer_relevancy_short_circuits_before_embedding() -> None:
+    # A noncommittal answer scores 0 without paying for any embeddings, even
+    # when the judge also returned questions alongside the verdict.
+    backend = FakeBackend(noncommittal=True, questions=["g1"], vectors={"q": [1.0, 0.0]})
+    assert await metrics.answer_relevancy(backend, "q", "I don't know") == 0.0
+    assert backend.reverse_question_calls == 1
 
 
 async def test_answer_relevancy_undefined_without_embeddings() -> None:

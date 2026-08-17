@@ -51,8 +51,38 @@ class Settings(BaseSettings):
     # Encryption (Fernet key for OAuth tokens at rest)
     ENCRYPTION_KEY: str = ""
 
-    # CORS
+    # CORS. Also the base for links mailed to users (first entry — see
+    # app.services.email._link), so the canonical site URL goes first.
     FRONTEND_ORIGIN: str = "http://localhost:5173"
+
+    # Outbound email (password reset, address verification). Provider-agnostic
+    # SMTP so any of SES SMTP / Postmark / Mailgun works and the ECS task role
+    # needs no AWS permissions. Leave SMTP_HOST empty — the default — and mail is
+    # written to the application log instead, which keeps both flows exercisable
+    # in local dev and CI without a mail server.
+    SMTP_HOST: str = ""
+    SMTP_PORT: int = 587
+    SMTP_USERNAME: str = ""
+    SMTP_PASSWORD: str = ""
+    SMTP_FROM: str = ""
+    # STARTTLS on 587 (the usual submission setup) vs implicit TLS on 465. Set
+    # exactly one; both false sends credentials in the clear.
+    SMTP_STARTTLS: bool = True
+    SMTP_USE_TLS: bool = False
+
+    @model_validator(mode="after")
+    def _smtp_transport_is_encrypted(self) -> "Settings":
+        # SMTP_USERNAME/PASSWORD are sent during the session, so an unencrypted
+        # transport leaks the mail credentials to the network. Catch the
+        # misconfiguration at startup rather than on the first reset request.
+        if self.SMTP_HOST and not (self.SMTP_STARTTLS or self.SMTP_USE_TLS):
+            raise ValueError(
+                "Set SMTP_STARTTLS (port 587) or SMTP_USE_TLS (port 465); "
+                "sending SMTP credentials over an unencrypted connection is not allowed."
+            )
+        if self.SMTP_STARTTLS and self.SMTP_USE_TLS:
+            raise ValueError("SMTP_STARTTLS and SMTP_USE_TLS are mutually exclusive.")
+        return self
 
     # LLM (DeepSeek)
     DEEPSEEK_API_KEY: str = ""

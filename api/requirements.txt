@@ -9,6 +9,10 @@ bcrypt==5.0.0
 python-jose[cryptography]==3.5.0
 python-multipart==0.0.32
 httpx==0.28.1
+# Transactional email (password reset, address verification) over plain SMTP, so
+# any provider works and the ECS task role needs no AWS permissions. Unused
+# unless SMTP_HOST is set — see app.services.email.
+aiosmtplib==5.1.2
 cryptography==50.0.0
 email-validator==2.2.0
 greenlet==3.5.1

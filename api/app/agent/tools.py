@@ -15,6 +15,12 @@ from app.core.rate_limit import check_tool_rate_limit
 from app.models.note import Note
 from app.models.task import Task, TaskPriority, TaskStatus
 from app.models.user import User
+from app.schemas.note import (
+    MAX_NOTE_CONTENT_CHARS,
+    MAX_NOTE_TAG_CHARS,
+    MAX_NOTE_TAGS,
+    MAX_NOTE_TITLE_CHARS,
+)
 from app.services import google_oauth
 from app.services.note_search import refresh_note_embedding, search_notes
 
@@ -349,11 +355,17 @@ async def _delete_task(db: AsyncSession, user: User, args: dict[str, Any]) -> di
 
 
 async def _create_note(db: AsyncSession, user: User, args: dict[str, Any]) -> dict[str, Any]:
+    # This path builds a Note directly from model-supplied JSON, so it never
+    # passes through the NoteCreate schema that bounds these fields on the HTTP
+    # route. Apply the same ceilings here, or the tool is a way around them.
+    if not await check_tool_rate_limit(user.id, "create_note", settings.NOTES_WRITE_RATE_LIMIT_PER_MINUTE):
+        return {"error": "Note-writing rate limit reached for this minute. Try again shortly."}
+
     note = Note(
         user_id=user.id,
-        title=args["title"],
-        content=args.get("content", ""),
-        tags=args.get("tags") or [],
+        title=str(args["title"])[:MAX_NOTE_TITLE_CHARS],
+        content=str(args.get("content") or "")[:MAX_NOTE_CONTENT_CHARS],
+        tags=[str(tag)[:MAX_NOTE_TAG_CHARS] for tag in (args.get("tags") or [])][:MAX_NOTE_TAGS],
     )
     db.add(note)
     await refresh_note_embedding(db, note)

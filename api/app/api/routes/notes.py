@@ -3,6 +3,7 @@ from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import get_current_user, get_owned_or_404
+from app.core.rate_limit import enforce_notes_write_rate_limit
 from app.db.session import get_db
 from app.models.note import Note
 from app.models.user import User
@@ -38,7 +39,8 @@ async def list_notes(
 @router.post("", response_model=NoteRead, status_code=status.HTTP_201_CREATED)
 async def create_note(
     note_in: NoteCreate,
-    current_user: User = Depends(get_current_user),
+    # Rate-limited because every write embeds the note, which is a paid API call.
+    current_user: User = Depends(enforce_notes_write_rate_limit),
     db: AsyncSession = Depends(get_db),
 ) -> Note:
     note = Note(**note_in.model_dump(), user_id=current_user.id)
@@ -62,7 +64,7 @@ async def get_note(
 async def update_note(
     note_id: int,
     note_in: NoteUpdate,
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(enforce_notes_write_rate_limit),
     db: AsyncSession = Depends(get_db),
 ) -> Note:
     note = await _get_owned_note(note_id, current_user, db)

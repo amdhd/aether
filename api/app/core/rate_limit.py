@@ -34,6 +34,8 @@ WINDOW_SECONDS = 60.0
 
 # Per-user sliding window of request timestamps (chat endpoint).
 _request_log: dict[int, deque[float]] = defaultdict(deque)
+# Per-user window for note writes, which call the embeddings API on every save.
+_notes_request_log: dict[int, deque[float]] = defaultdict(deque)
 # Per-(user, tool) window for agent tool calls hitting paid/external APIs.
 _tool_request_log: dict[tuple[int, str], deque[float]] = defaultdict(deque)
 # Per-(client IP, endpoint) window for unauthenticated auth endpoints.
@@ -49,6 +51,7 @@ _last_sweep = 0.0
 def reset_rate_limits() -> None:
     global _last_sweep
     _request_log.clear()
+    _notes_request_log.clear()
     _tool_request_log.clear()
     _auth_request_log.clear()
     _last_sweep = 0.0
@@ -61,7 +64,7 @@ def _sweep_expired(now: float) -> None:
     if now - _last_sweep < _SWEEP_INTERVAL_SECONDS:
         return
     _last_sweep = now
-    for log in (_request_log, _tool_request_log, _auth_request_log):
+    for log in (_request_log, _notes_request_log, _tool_request_log, _auth_request_log):
         stale = [key for key, ts in log.items() if not ts or now - ts[-1] >= WINDOW_SECONDS]
         for key in stale:
             del log[key]
@@ -187,6 +190,28 @@ async def enforce_chat_rate_limit(current_user: User = Depends(get_current_user)
         raise HTTPException(
             status_code=status.HTTP_429_TOO_MANY_REQUESTS,
             detail="Rate limit exceeded. Please slow down and try again shortly.",
+            headers={"Retry-After": str(retry_after)},
+        )
+    return current_user
+
+
+async def enforce_notes_write_rate_limit(current_user: User = Depends(get_current_user)) -> User:
+    """Bound how fast one user can write notes.
+
+    Not about storage — every write embeds the note, so this is the per-minute
+    ceiling on a paid API call, the same role enforce_chat_rate_limit plays for
+    chat turns.
+    """
+    allowed, retry_after = await _hit(
+        _notes_request_log,
+        current_user.id,
+        f"rl:notes:{current_user.id}",
+        settings.NOTES_WRITE_RATE_LIMIT_PER_MINUTE,
+    )
+    if not allowed:
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail="You're saving notes too quickly. Try again in a moment.",
             headers={"Retry-After": str(retry_after)},
         )
     return current_user

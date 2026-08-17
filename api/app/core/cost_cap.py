@@ -41,19 +41,25 @@ def _month_start(now: datetime | None = None) -> datetime:
 
 
 async def month_to_date_cost_usd(db: AsyncSession, user_id: int, now: datetime | None = None) -> float:
-    """Estimated USD spent by this user since the start of the current UTC month."""
-    prompt_tokens, completion_tokens = (
+    """Estimated USD spent by this user since the start of the current UTC month.
+
+    Covers chat *and* embeddings. Embedding tokens are summed separately because
+    they are priced at their own rate — folding them into prompt_tokens would
+    overcharge them by more than an order of magnitude.
+    """
+    prompt_tokens, completion_tokens, embedding_tokens = (
         await db.execute(
             select(
                 func.coalesce(func.sum(UsageLog.prompt_tokens), 0),
                 func.coalesce(func.sum(UsageLog.completion_tokens), 0),
+                func.coalesce(func.sum(UsageLog.embedding_tokens), 0),
             ).where(
                 UsageLog.user_id == user_id,
                 UsageLog.created_at >= _month_start(now),
             )
         )
     ).one()
-    return metrics.estimate_cost_usd(prompt_tokens, completion_tokens)
+    return metrics.estimate_cost_usd(prompt_tokens, completion_tokens, embedding_tokens)
 
 
 async def enforce_monthly_cost_cap(

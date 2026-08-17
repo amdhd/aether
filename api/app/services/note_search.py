@@ -11,10 +11,15 @@ import re
 from sqlalchemy import or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core import cost_cap
 from app.core.config import settings
+from app.core.logging import get_logger
 from app.models.note import Note
+from app.models.usage_log import UsageLog
 from app.models.user import User
 from app.services import embeddings
+
+logger = get_logger(__name__)
 
 # Words too common to be worth matching on in the keyword fallback. Kept tiny —
 # just the filler words that would otherwise make every note match a
@@ -42,10 +47,51 @@ def _keyword_terms(query: str, limit: int = 12) -> list[str]:
     return list(seen)[:limit]
 
 
+async def _record_embedding_spend(db: AsyncSession, user_id: int, tokens: int) -> None:
+    """Charge embedding tokens to a user so the monthly cost cap can see them.
+
+    Without this the cap only ever summed chat tokens, and embedding spend —
+    which any note write incurs — was invisible to the one control that bounds
+    what a single account can cost over a month. Added to the session, not
+    committed: it rides along with the write that caused it.
+    """
+    if tokens <= 0:
+        return
+    db.add(
+        UsageLog(
+            user_id=user_id,
+            conversation_id=None,
+            model=settings.EMBEDDING_MODEL,
+            embedding_tokens=tokens,
+        )
+    )
+
+
+async def _within_budget(db: AsyncSession, user_id: int) -> bool:
+    """Whether this user has monthly budget left to spend on an embedding.
+
+    Note writes are *not* rejected when the answer is no — the note still saves,
+    it just doesn't get embedded, and search falls back to the keyword scan that
+    already covers every deployment without an OpenAI key. Losing semantic
+    search for the rest of the month is a fair degradation; losing the ability
+    to save a note would not be.
+    """
+    cap = settings.MONTHLY_COST_CAP_USD
+    if cap <= 0:
+        return True
+    return await cost_cap.month_to_date_cost_usd(db, user_id) < cap
+
+
 async def refresh_note_embedding(db: AsyncSession, note: Note) -> None:
     """(Re)compute and store a note's embedding. No-op when embeddings are
-    disabled. Caller is responsible for committing."""
-    vector = await embeddings.embed_note(note.title, note.content)
+    disabled or the user is over their monthly budget. Caller commits."""
+    if not embeddings.embeddings_enabled():
+        return
+    if not await _within_budget(db, note.user_id):
+        logger.info("embedding.skipped_over_budget user_id=%s", note.user_id)
+        return
+    vector, tokens = await embeddings.embed_note(note.title, note.content)
+    await _record_embedding_spend(db, note.user_id, tokens)
     if vector is not None:
         note.embedding = vector
 
@@ -73,7 +119,10 @@ async def _keyword_search(db: AsyncSession, user: User, query: str, limit: int) 
 
 async def search_notes(db: AsyncSession, user: User, query: str, limit: int = 5) -> list[Note]:
     if _is_postgres(db) and embeddings.embeddings_enabled():
-        query_vector = await embeddings.embed_text(query)
+        query_vector, tokens = await embeddings.embed_text_with_usage(query)
+        # Embedding the query is billed too. Small next to a note body, but the
+        # cap is only honest if everything it pays for is counted.
+        await _record_embedding_spend(db, user.id, tokens)
         if query_vector is not None:
             # Drop notes past the relevance floor so the agent isn't handed
             # near-random matches when nothing in the user's notes is actually

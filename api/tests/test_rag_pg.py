@@ -55,7 +55,13 @@ async def test_semantic_search_orders_by_distance_and_applies_floor(
         await db.commit()
 
         monkeypatch.setattr(note_search.embeddings, "embeddings_enabled", lambda: True)
-        monkeypatch.setattr(note_search.embeddings, "embed_text", lambda _t: _async(query))
+        # search_notes reads the token count alongside the vector so it can
+        # charge the embedding to the user, so this patches the tuple-returning
+        # entry point. Patching embed_text instead leaves the real call in place,
+        # which fails to reach the API and silently degrades to keyword search.
+        monkeypatch.setattr(
+            note_search.embeddings, "embed_text_with_usage", lambda _t: _async((query, 4))
+        )
 
         results = await note_search.search_notes(db, user, "unused", limit=5)
 
@@ -76,7 +82,13 @@ async def test_semantic_all_beyond_floor_falls_back_to_keyword(
         await db.commit()
 
         monkeypatch.setattr(note_search.embeddings, "embeddings_enabled", lambda: True)
-        monkeypatch.setattr(note_search.embeddings, "embed_text", lambda _t: _async(query))
+        # search_notes reads the token count alongside the vector so it can
+        # charge the embedding to the user, so this patches the tuple-returning
+        # entry point. Patching embed_text instead leaves the real call in place,
+        # which fails to reach the API and silently degrades to keyword search.
+        monkeypatch.setattr(
+            note_search.embeddings, "embed_text_with_usage", lambda _t: _async((query, 4))
+        )
 
         # Nothing passes the vector floor, so the keyword scan takes over and
         # still finds the note by its text.

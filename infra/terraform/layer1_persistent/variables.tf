@@ -43,3 +43,27 @@ variable "hosted_zone_name" {
   type        = string
   default     = ""
 }
+
+# --- Content-Security-Policy ---
+variable "api_origin" {
+  description = <<-EOT
+    Origin the SPA calls the API on, e.g. https://api.ahmadhadi.info. Used only
+    to build the CSP's connect-src: the API lives on a different origin to the
+    SPA, so 'self' does not cover it and the browser would block every request.
+
+    This duplicates layer2's api_domain_name because CloudFront lives here and
+    layer2 is applied afterwards, so layer1 cannot read it. Set both to the same
+    host.
+
+    Left empty, connect-src falls back to 'self' https:, which keeps the policy
+    working for any API location at the cost of the one directive that would
+    otherwise stop an injected script exfiltrating to an attacker's host. Set it.
+  EOT
+  type        = string
+  default     = ""
+
+  validation {
+    condition     = var.api_origin == "" || can(regex("^https?://[^/]+$", var.api_origin))
+    error_message = "api_origin must be a bare scheme+host with no trailing path, e.g. https://api.example.com."
+  }
+}

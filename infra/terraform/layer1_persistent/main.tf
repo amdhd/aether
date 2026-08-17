@@ -203,11 +203,45 @@ resource "aws_cloudfront_distribution" "web" {
   }
 }
 
+locals {
+  # The SPA's access token is deliberately held in memory rather than
+  # localStorage, so an injected script cannot read it. That stops the theft but
+  # not the use: script running on the page can still call the API as the user
+  # and post the results anywhere. connect-src is the directive that closes that
+  # second half, which is why api_origin is worth setting.
+  #
+  # 'unsafe-inline' is needed on style-src and only style-src: React sets inline
+  # style attributes (chart sizing, the popover/dialog primitives' positioning)
+  # and CSP governs those the same as a <style> block. Inline *script* stays
+  # blocked, which is the half that matters — see public/theme-init.js for why
+  # nothing needs it.
+  csp_connect_src = var.api_origin != "" ? "'self' ${var.api_origin}" : "'self' https:"
+
+  content_security_policy = join("; ", [
+    "default-src 'self'",
+    "script-src 'self'",
+    "style-src 'self' 'unsafe-inline'",
+    "img-src 'self' data:",
+    "font-src 'self'",
+    "connect-src ${local.csp_connect_src}",
+    # Belt and braces with the X-Frame-Options header below: frame-ancestors is
+    # the one modern browsers actually honour.
+    "frame-ancestors 'none'",
+    "base-uri 'none'",
+    "form-action 'self'",
+    "object-src 'none'",
+  ])
+}
+
 # Security response headers at the edge (no app code needed).
 resource "aws_cloudfront_response_headers_policy" "security" {
   name = "${var.name_prefix}-security-headers"
 
   security_headers_config {
+    content_security_policy {
+      content_security_policy = local.content_security_policy
+      override                = true
+    }
     content_type_options {
       override = true
     }

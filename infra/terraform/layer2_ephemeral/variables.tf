@@ -100,9 +100,42 @@ variable "enable_tracing" {
 
 # --- Custom domain for the API (enables HTTPS on the ALB) ---
 variable "api_domain_name" {
-  description = "FQDN to serve the API on, e.g. api.example.com. Empty = HTTP-only demo (no TLS on the ALB)."
+  description = "FQDN to serve the API on, e.g. api.example.com. Empty = HTTP-only, which cannot serve the app (see allow_insecure_http)."
   type        = string
   default     = ""
+}
+
+variable "allow_insecure_http" {
+  description = <<-EOT
+    Permit applying without api_domain_name, which leaves the ALB on plaintext
+    HTTP:80 with no TLS listener.
+
+    Sign-in cannot work in that mode, and no setting fixes it. The SPA is served
+    from CloudFront and the API from the ALB — different registrable domains — so
+    the refresh cookie has to be SameSite=None to be sent at all, and browsers
+    reject SameSite=None unless the cookie is also Secure, which requires HTTPS.
+    Login returns a token, the cookie is silently dropped, and the session ends
+    at the next reload. A browser will also refuse to call an HTTP API from an
+    HTTPS page as mixed content, so most requests never leave the SPA.
+
+    Set this only to stand the infrastructure up without a domain — to read the
+    plan, price it, or exercise `make down`. For anything anyone signs in to, set
+    api_domain_name and get the HTTPS listener and the HTTP->HTTPS redirect.
+  EOT
+  type        = bool
+  default     = false
+
+  validation {
+    condition     = var.allow_insecure_http || var.api_domain_name != ""
+    error_message = <<-EOT
+      api_domain_name is empty, so the ALB would serve the API over plaintext
+      HTTP and the app would not be able to sign anyone in: a cross-site refresh
+      cookie needs SameSite=None, which browsers only honour alongside Secure,
+      which needs TLS. Set api_domain_name (plus hosted_zone_name) to get HTTPS,
+      or set allow_insecure_http = true if you deliberately want infrastructure
+      without a working login.
+    EOT
+  }
 }
 
 variable "hosted_zone_name" {

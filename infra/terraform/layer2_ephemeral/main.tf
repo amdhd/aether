@@ -24,6 +24,12 @@ locals {
   custom_domain = var.api_domain_name != ""
   api_url       = local.custom_domain ? "https://${var.api_domain_name}" : "http://${module.ecs.alb_dns_name}"
 
+  # The TLS-less mode, which only exists because it was opted into explicitly
+  # (variables.tf refuses the apply otherwise, and explains why it cannot serve a
+  # login). The cookie flags below are derived from it so the container never
+  # claims a guarantee the connection cannot provide.
+  insecure_http = !local.custom_domain && var.allow_insecure_http
+
   # Non-secret container config. Cross-origin (CloudFront SPA ↔ ALB API) needs
   # Secure + SameSite=None refresh cookies; TRUST_PROXY_HEADERS lets per-IP rate
   # limiting read X-Forwarded-For behind the ALB.
@@ -33,10 +39,15 @@ locals {
   llm_metrics_namespace = "Aether/LLM"
 
   base_environment = {
-    ENVIRONMENT             = local.app_environment
-    TRUST_PROXY_HEADERS     = "true"
-    REFRESH_COOKIE_SECURE   = "true"
-    REFRESH_COOKIE_SAMESITE = "none"
+    ENVIRONMENT         = local.app_environment
+    TRUST_PROXY_HEADERS = "true"
+    # Over plaintext HTTP the browser discards a Secure cookie outright, and
+    # honours SameSite=None only alongside Secure — so asserting both there
+    # guarantees no cookie is stored at all. Deriving them from the transport
+    # keeps the pair coherent; it does not make a cross-site login work in that
+    # mode, which is why the apply is refused unless explicitly allowed.
+    REFRESH_COOKIE_SECURE   = local.insecure_http ? "false" : "true"
+    REFRESH_COOKIE_SAMESITE = local.insecure_http ? "lax" : "none"
     FRONTEND_ORIGIN         = local.frontend_url
     # Turn on per-turn CloudWatch EMF metrics (tokens/cost/latency). Off by
     # default in the app so local logs stay human-readable; on in the deployed

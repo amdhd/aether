@@ -216,9 +216,13 @@ async def test_reset_password_signs_out_existing_sessions(
     )
     assert me.status_code == 401
 
-    # ...and so must the refresh token, so it can't mint a fresh one.
+    # ...and so must the refresh token, so it can't mint a fresh one. Sent with
+    # the CSRF header so the rejection is the revocation and not the guard —
+    # without it this would 403 and pass for the wrong reason on a revert.
     client.cookies.clear()
-    replay = await client.post("/api/v1/auth/refresh", cookies={COOKIE: stolen_refresh})
+    replay = await client.post(
+        "/api/v1/auth/refresh", cookies={COOKIE: stolen_refresh}, headers=CSRF
+    )
     assert replay.status_code == 401
 
     # The new password works.

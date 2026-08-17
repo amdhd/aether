@@ -1,7 +1,14 @@
+import asyncio
+
 import pytest
 from httpx import AsyncClient
+from sqlalchemy import update
 
 from app.core.config import settings
+from app.models.refresh_token import RefreshToken
+from app.models.user import User
+from app.services import refresh_tokens
+from tests.conftest import IS_SQLITE, TestingSessionLocal
 
 COOKIE = settings.REFRESH_COOKIE_NAME
 
@@ -112,6 +119,111 @@ async def test_refresh_rotates_and_detects_reuse(client: AsyncClient) -> None:
     client.cookies.clear()
     after = await client.post("/api/v1/auth/refresh", cookies={COOKIE: rotated})
     assert after.status_code == 401
+
+
+async def _issue_token_for(email: str) -> str:
+    async with TestingSessionLocal() as db:
+        user = User(email=email, name="Race", password_hash="unused")
+        db.add(user)
+        await db.commit()
+        await db.refresh(user)
+        return (await refresh_tokens.issue_token_pair(db, user)).refresh_token
+
+
+async def test_rotation_rejects_a_token_revoked_after_it_was_read(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Rotation has to be atomic, not merely ordered.
+
+    Reading the row, testing `revoked`, then writing it leaves a window: two
+    requests presenting the same token both see it live and both get a successor
+    — which is the replay the family-burn exists to catch, so the race disarmed
+    the detection rather than just duplicating work. The revoke is now conditional
+    on the row still being unrevoked.
+
+    This drives the window directly instead of racing for it: the row is revoked
+    part-way through the rotation, at the point a competing caller's write would
+    land. The conditional UPDATE must then match nothing and reject.
+    """
+    original = await _issue_token_for("midrotation@example.com")
+
+    async with TestingSessionLocal() as db:
+        real_get = db.get
+
+        async def revoke_then_get(*args, **kwargs):
+            # Fires after rotate_refresh_token has read the row and judged it
+            # live, and before it writes — exactly where the loser of a real
+            # race finds itself.
+            await db.execute(update(RefreshToken).values(revoked=True))
+            return await real_get(*args, **kwargs)
+
+        monkeypatch.setattr(db, "get", revoke_then_get)
+
+        with pytest.raises(refresh_tokens.RefreshError):
+            await refresh_tokens.rotate_refresh_token(db, original)
+
+
+@pytest.mark.skipif(
+    IS_SQLITE,
+    reason="StaticPool shares one connection, so overlapping transactions collide "
+    "in the driver before the logic runs; the Postgres CI leg is the real test.",
+)
+async def test_concurrent_rotations_of_one_token_yield_a_single_winner() -> None:
+    """The same guarantee under genuine concurrency."""
+    original = await _issue_token_for("race@example.com")
+
+    async def rotate() -> bool:
+        async with TestingSessionLocal() as db:
+            try:
+                await refresh_tokens.rotate_refresh_token(db, original)
+                return True
+            except refresh_tokens.RefreshError:
+                return False
+
+    outcomes = await asyncio.gather(rotate(), rotate())
+    assert sum(outcomes) == 1, "both callers rotated the same token"
+
+
+async def test_reset_password_signs_out_existing_sessions(
+    client: AsyncClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Resetting a password is the recovery path for a compromised account, so it
+    has to end the sessions the old password bought. A stolen refresh token that
+    survives the reset would rotate itself indefinitely."""
+    from scripts import reset_password
+
+    await client.post(
+        "/api/v1/auth/register",
+        json={"email": "reset@example.com", "name": "Reset", "password": "supersecret123"},
+    )
+    login = await client.post(
+        "/api/v1/auth/login",
+        data={"username": "reset@example.com", "password": "supersecret123"},
+    )
+    stolen_access = login.json()["access_token"]
+    stolen_refresh = client.cookies.get(COOKIE)
+
+    monkeypatch.setattr(reset_password, "AsyncSessionLocal", TestingSessionLocal)
+    monkeypatch.setattr(reset_password.getpass, "getpass", lambda _prompt: "brand-new-password")
+    assert await reset_password._reset("reset@example.com") == 0
+
+    # The access token minted before the reset must stop validating (token_version).
+    me = await client.get(
+        "/api/v1/auth/me", headers={"Authorization": f"Bearer {stolen_access}"}
+    )
+    assert me.status_code == 401
+
+    # ...and so must the refresh token, so it can't mint a fresh one.
+    client.cookies.clear()
+    replay = await client.post("/api/v1/auth/refresh", cookies={COOKIE: stolen_refresh})
+    assert replay.status_code == 401
+
+    # The new password works.
+    relogin = await client.post(
+        "/api/v1/auth/login",
+        data={"username": "reset@example.com", "password": "brand-new-password"},
+    )
+    assert relogin.status_code == 200
 
 
 async def test_refresh_without_cookie(client: AsyncClient) -> None:

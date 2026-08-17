@@ -92,7 +92,24 @@ async def rotate_refresh_token(db: AsyncSession, raw_token: str) -> IssuedTokens
     if user is None or user.token_version != token_version:
         raise RefreshError("Refresh token no longer valid")
 
-    record.revoked = True
+    # Claim the token by revoking it *conditionally on it still being unrevoked*.
+    # Assigning `record.revoked = True` would leave a window between the check
+    # above and the write: two requests presenting the same token both read it as
+    # live, both pass, and both mint a successor — which is exactly the replay
+    # this function exists to catch, so the race blunts the detection rather than
+    # merely duplicating work. Folding the check into the UPDATE makes the
+    # database the arbiter: only one statement can move a row from not-revoked to
+    # revoked, and whoever loses matches no rows.
+    claimed = await db.execute(
+        update(RefreshToken)
+        .where(RefreshToken.jti == jti, RefreshToken.revoked.is_(False))
+        .values(revoked=True)
+    )
+    if claimed.rowcount == 0:
+        await _revoke_family(db, family_id)
+        await db.commit()
+        raise RefreshError("Refresh token reuse detected")
+
     await db.commit()
     return await issue_token_pair(db, user, family_id=family_id)
 

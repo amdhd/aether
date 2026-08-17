@@ -10,7 +10,11 @@ services:
     dockerfilePath: ./api/Dockerfile
     dockerContext: ./api
     plan: free
-    healthCheckPath: /docs
+    # /docs is disabled when ENVIRONMENT=production (see api/app/main.py), so
+    # pointing the health check at it would 404 forever and the service would
+    # never come up. /health is the liveness endpoint and checks no dependencies,
+    # so a transient DB blip won't cycle the instance.
+    healthCheckPath: /health
     preDeployCommand: alembic upgrade head
     envVars:
       - key: ENVIRONMENT
@@ -35,6 +39,15 @@ services:
         value: "true"
       - key: REFRESH_COOKIE_SAMESITE
         value: none
+      # Render terminates TLS at its own edge and forwards to the container, so
+      # the socket peer the app sees is that proxy, not the caller. Without
+      # these, per-IP auth rate limiting buckets every user in the world under
+      # one address: 10 logins per minute for the entire service, and no
+      # per-attacker limiting at all. One Render proxy in front = 1 hop.
+      - key: TRUST_PROXY_HEADERS
+        value: "true"
+      - key: TRUSTED_PROXY_HOPS
+        value: "1"
       - key: FRONTEND_ORIGIN
         sync: false
       - key: DEEPSEEK_API_KEY

@@ -110,6 +110,10 @@ class Settings(BaseSettings):
 
     # Rate limiting
     CHAT_RATE_LIMIT_PER_MINUTE: int = 20
+    # Note writes call the embeddings API, so they spend money per request the
+    # same way a chat turn does and need the same kind of ceiling. Set high
+    # enough that ordinary editing never notices it.
+    NOTES_WRITE_RATE_LIMIT_PER_MINUTE: int = 30
     WEB_SEARCH_RATE_LIMIT_PER_MINUTE: int = 10
     CALENDAR_RATE_LIMIT_PER_MINUTE: int = 20
     AUTH_RATE_LIMIT_PER_MINUTE: int = 10

@@ -289,7 +289,7 @@ resource "aws_s3_bucket_policy" "web" {
 # Terraform from clobbering them on later applies.
 resource "aws_secretsmanager_secret" "app" {
   name                    = "${var.name_prefix}/app"
-  description             = "Aether app secrets (SECRET_KEY, ENCRYPTION_KEY, API keys, Google OAuth)."
+  description             = "Aether app secrets (SECRET_KEY, ENCRYPTION_KEY, API keys, Google OAuth, SMTP)."
   recovery_window_in_days = 0 # allow immediate delete/recreate in non-prod
 }
 
@@ -304,6 +304,13 @@ resource "aws_secretsmanager_secret_version" "app" {
     GOOGLE_CLIENT_ID     = ""
     GOOGLE_CLIENT_SECRET = ""
     GOOGLE_REDIRECT_URI  = ""
+    # Outbound mail for password reset / address verification. Provider-agnostic
+    # SMTP, so the ECS task role needs no AWS permissions and stays empty. Leave
+    # SMTP_HOST blank and the app logs mail instead of sending it.
+    SMTP_HOST     = ""
+    SMTP_USERNAME = ""
+    SMTP_PASSWORD = ""
+    SMTP_FROM     = ""
   })
 
   lifecycle {

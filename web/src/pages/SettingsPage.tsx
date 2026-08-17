@@ -3,6 +3,8 @@ import { useEffect, useState } from 'react'
 import { useSearchParams } from 'react-router-dom'
 
 import { disconnectGoogle, getGoogleConnectUrl, getGoogleStatus } from '@/api/integrations'
+import { ChangePasswordCard } from '@/components/settings/ChangePasswordCard'
+import { EmailVerificationCard } from '@/components/settings/EmailVerificationCard'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
@@ -63,6 +65,8 @@ export function SettingsPage() {
           </p>
         </CardContent>
       </Card>
+      <EmailVerificationCard />
+      <ChangePasswordCard />
       <Card>
         <CardHeader>
           <CardTitle>Google Calendar</CardTitle>

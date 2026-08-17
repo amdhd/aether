@@ -85,6 +85,10 @@ locals {
     GOOGLE_CLIENT_ID     = "${local.app_secret_arn}:GOOGLE_CLIENT_ID::"
     GOOGLE_CLIENT_SECRET = "${local.app_secret_arn}:GOOGLE_CLIENT_SECRET::"
     GOOGLE_REDIRECT_URI  = "${local.app_secret_arn}:GOOGLE_REDIRECT_URI::"
+    SMTP_HOST            = "${local.app_secret_arn}:SMTP_HOST::"
+    SMTP_USERNAME        = "${local.app_secret_arn}:SMTP_USERNAME::"
+    SMTP_PASSWORD        = "${local.app_secret_arn}:SMTP_PASSWORD::"
+    SMTP_FROM            = "${local.app_secret_arn}:SMTP_FROM::"
   }
 }
 

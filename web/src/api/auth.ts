@@ -39,3 +39,41 @@ export function logout() {
 export function getMe() {
   return apiFetch<User>(`${API_PREFIX}/auth/me`)
 }
+
+export function changePassword(input: { current_password: string; new_password: string }) {
+  return apiFetch<AccessToken>(`${API_PREFIX}/auth/change-password`, {
+    method: 'POST',
+    body: input,
+  })
+}
+
+export function forgotPassword(email: string) {
+  // Deliberately unauthenticated, and the server answers identically whether or
+  // not the address has an account — so there is nothing here to branch on.
+  return apiFetch<{ detail: string }>(`${API_PREFIX}/auth/forgot-password`, {
+    method: 'POST',
+    body: { email },
+    skipAuth: true,
+  })
+}
+
+export function resetPassword(input: { token: string; new_password: string }) {
+  return apiFetch<void>(`${API_PREFIX}/auth/reset-password`, {
+    method: 'POST',
+    body: input,
+    skipAuth: true,
+  })
+}
+
+export function sendVerificationEmail() {
+  return apiFetch<{ detail: string }>(`${API_PREFIX}/auth/verify-email/send`, { method: 'POST' })
+}
+
+export function confirmEmail(token: string) {
+  // Opened from a mail client, which may not be a browser holding a session.
+  return apiFetch<void>(`${API_PREFIX}/auth/verify-email/confirm`, {
+    method: 'POST',
+    body: { token },
+    skipAuth: true,
+  })
+}

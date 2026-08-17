@@ -10,6 +10,8 @@ export interface User {
   email: string
   name: string
   created_at: string
+  /** Advisory: nothing is gated on it, it drives the confirmation prompt. */
+  email_verified: boolean
 }
 
 export interface AccessToken {

@@ -4,7 +4,7 @@ import type { User } from '@/types'
 
 import { useAuthStore } from './auth'
 
-const mockUser: User = { id: 1, email: 'a@example.com', name: 'A', created_at: '2026-01-01T00:00:00Z' }
+const mockUser: User = { id: 1, email: 'a@example.com', name: 'A', created_at: '2026-01-01T00:00:00Z', email_verified: true }
 
 describe('useAuthStore', () => {
   beforeEach(() => {

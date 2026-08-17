@@ -11,7 +11,7 @@ import { SettingsPage } from './SettingsPage'
 
 vi.mock('@/api/integrations')
 
-const mockUser: User = { id: 1, email: 'a@example.com', name: 'Ada Lovelace', created_at: '2026-01-01T00:00:00Z' }
+const mockUser: User = { id: 1, email: 'a@example.com', name: 'Ada Lovelace', created_at: '2026-01-01T00:00:00Z', email_verified: true }
 
 describe('SettingsPage', () => {
   afterEach(() => {

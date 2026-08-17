@@ -7,6 +7,9 @@ import { ProtectedRoute } from '@/components/ProtectedRoute'
 
 const AnalyticsPage = lazy(() => import('@/pages/AnalyticsPage').then((m) => ({ default: m.AnalyticsPage })))
 const ChatPage = lazy(() => import('@/pages/ChatPage').then((m) => ({ default: m.ChatPage })))
+const ForgotPasswordPage = lazy(() => import('@/pages/ForgotPasswordPage').then((m) => ({ default: m.ForgotPasswordPage })))
+const ResetPasswordPage = lazy(() => import('@/pages/ResetPasswordPage').then((m) => ({ default: m.ResetPasswordPage })))
+const VerifyEmailPage = lazy(() => import('@/pages/VerifyEmailPage').then((m) => ({ default: m.VerifyEmailPage })))
 const DashboardPage = lazy(() => import('@/pages/DashboardPage').then((m) => ({ default: m.DashboardPage })))
 const LoginPage = lazy(() => import('@/pages/LoginPage').then((m) => ({ default: m.LoginPage })))
 const NotesPage = lazy(() => import('@/pages/NotesPage').then((m) => ({ default: m.NotesPage })))
@@ -26,6 +29,20 @@ export const router = createBrowserRouter([
   {
     path: '/register',
     element: withSuspense(<RegisterPage />),
+  },
+  // Unauthenticated on purpose: these are reached from a mail client, which may
+  // not be a browser the user is signed into.
+  {
+    path: '/forgot-password',
+    element: withSuspense(<ForgotPasswordPage />),
+  },
+  {
+    path: '/reset-password',
+    element: withSuspense(<ResetPasswordPage />),
+  },
+  {
+    path: '/verify-email',
+    element: withSuspense(<VerifyEmailPage />),
   },
   {
     element: <ProtectedRoute />,

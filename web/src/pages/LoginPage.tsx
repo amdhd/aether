@@ -81,6 +81,14 @@ export function LoginPage() {
             </Button>
           </form>
           <p className="mt-4 text-center text-sm text-muted-foreground">
+            <Link
+              to="/forgot-password"
+              className="font-medium text-foreground underline underline-offset-2 hover:text-muted-foreground"
+            >
+              Forgot your password?
+            </Link>
+          </p>
+          <p className="mt-2 text-center text-sm text-muted-foreground">
             Don&apos;t have an account?{' '}
             <Link to="/register" className="font-medium text-foreground underline underline-offset-2 hover:text-muted-foreground">
               Create one

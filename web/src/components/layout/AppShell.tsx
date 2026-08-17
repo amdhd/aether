@@ -4,6 +4,7 @@ import { NavLink, Outlet, useLocation, useNavigate } from 'react-router-dom'
 import { ChatHistoryNav } from '@/components/layout/ChatHistoryNav'
 import { Button } from '@/components/ui/button'
 import { ThemeToggle } from '@/components/ThemeToggle'
+import { UnverifiedEmailBanner } from '@/components/layout/UnverifiedEmailBanner'
 import { UserAvatar } from '@/components/UserAvatar'
 import { useAuthStore } from '@/store/auth'
 import { logout as logoutRequest } from '@/api/auth'
@@ -93,6 +94,7 @@ export function AppShell() {
           </div>
         </header>
 
+        <UnverifiedEmailBanner />
         <main className="min-h-0 flex-1 overflow-y-auto p-4 pb-24 sm:p-6">
           <Outlet />
         </main>

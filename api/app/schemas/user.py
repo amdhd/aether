@@ -33,3 +33,7 @@ class UserRead(UserBase):
 
     id: int
     created_at: datetime
+    # Read off User.email_verified. Exposed so the SPA can prompt for
+    # confirmation; nothing is gated on it — verification is advisory — so this
+    # drives a banner, not access.
+    email_verified: bool

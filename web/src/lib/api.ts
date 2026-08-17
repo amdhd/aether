@@ -4,6 +4,15 @@ import type { AccessToken } from '@/types'
 export const API_URL = import.meta.env.VITE_API_URL ?? 'http://localhost:8000'
 export const API_PREFIX = '/api/v1'
 
+// The refresh endpoint authenticates with a cookie, so the browser attaches it
+// to cross-site requests on its own and the server requires this header as proof
+// the request came from us. It sits outside the CORS safelist, so sending it
+// forces a preflight that only our own origin passes — which is exactly why an
+// attacker's page cannot reproduce it. Every other endpoint uses a Bearer token
+// and needs no such marker.
+export const CSRF_HEADER = 'X-Requested-With'
+export const CSRF_HEADERS: Record<string, string> = { [CSRF_HEADER]: 'XMLHttpRequest' }
+
 export class ApiError extends Error {
   status: number
   body: unknown
@@ -28,6 +37,7 @@ export async function refreshAccessToken(): Promise<string | null> {
         const res = await fetch(`${API_URL}${API_PREFIX}/auth/refresh`, {
           method: 'POST',
           credentials: 'include',
+          headers: CSRF_HEADERS,
         })
         if (!res.ok) {
           logout()

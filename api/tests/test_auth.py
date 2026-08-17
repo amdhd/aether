@@ -4,6 +4,9 @@ from httpx import AsyncClient
 from app.core.config import settings
 
 COOKIE = settings.REFRESH_COOKIE_NAME
+# /auth/refresh is the one cookie-authenticated endpoint, so it demands a header
+# a cross-site caller cannot set. Every legitimate call carries it.
+CSRF = {"X-Requested-With": "XMLHttpRequest"}
 
 
 async def test_register_and_login(client: AsyncClient) -> None:
@@ -69,7 +72,7 @@ async def test_full_auth_flow(client: AsyncClient) -> None:
     assert me_resp.json()["email"] == "carol@example.com"
 
     # The refresh cookie is sent automatically by the client's cookie jar.
-    refresh_resp = await client.post("/api/v1/auth/refresh")
+    refresh_resp = await client.post("/api/v1/auth/refresh", headers=CSRF)
     assert refresh_resp.status_code == 200
     new_access = refresh_resp.json()["access_token"]
     assert new_access
@@ -98,29 +101,31 @@ async def test_refresh_rotates_and_detects_reuse(client: AsyncClient) -> None:
     stolen = client.cookies.get(COOKIE)
 
     # Legitimate rotation: the presented token is consumed, a new one is issued.
-    first = await client.post("/api/v1/auth/refresh")
+    first = await client.post("/api/v1/auth/refresh", headers=CSRF)
     assert first.status_code == 200
     rotated = client.cookies.get(COOKIE)
     assert rotated != stolen
 
     # Replaying the now-revoked original token is treated as theft -> 401.
     client.cookies.clear()
-    replay = await client.post("/api/v1/auth/refresh", cookies={COOKIE: stolen})
+    replay = await client.post("/api/v1/auth/refresh", cookies={COOKIE: stolen}, headers=CSRF)
     assert replay.status_code == 401
 
     # ...and the whole family is burned, so the legitimately rotated token dies too.
     client.cookies.clear()
-    after = await client.post("/api/v1/auth/refresh", cookies={COOKIE: rotated})
+    after = await client.post("/api/v1/auth/refresh", cookies={COOKIE: rotated}, headers=CSRF)
     assert after.status_code == 401
 
 
 async def test_refresh_without_cookie(client: AsyncClient) -> None:
-    resp = await client.post("/api/v1/auth/refresh")
+    resp = await client.post("/api/v1/auth/refresh", headers=CSRF)
     assert resp.status_code == 401
 
 
 async def test_refresh_with_invalid_cookie(client: AsyncClient) -> None:
-    resp = await client.post("/api/v1/auth/refresh", cookies={COOKIE: "not-a-real-token"})
+    resp = await client.post(
+        "/api/v1/auth/refresh", cookies={COOKIE: "not-a-real-token"}, headers=CSRF
+    )
     assert resp.status_code == 401
 
 
@@ -259,3 +264,71 @@ async def test_login_with_an_over_long_password_is_rejected_not_a_crash(client: 
         "/api/v1/auth/login", data={"username": "victim@example.com", "password": "A" * 100}
     )
     assert resp.status_code == 401
+
+
+async def test_refresh_rejects_a_request_without_the_csrf_header(client: AsyncClient) -> None:
+    """The refresh endpoint is the only one that authenticates with a cookie, so
+    it is the only one a cross-site page can invoke with the victim's credentials
+    simply by making the browser send them. Production issues that cookie with
+    SameSite=none — the SPA and the API are on different origins — so SameSite
+    cannot be what stops this."""
+    await client.post(
+        "/api/v1/auth/register",
+        json={"email": "csrf@example.com", "name": "Csrf", "password": "supersecret123"},
+    )
+    await client.post(
+        "/api/v1/auth/login",
+        data={"username": "csrf@example.com", "password": "supersecret123"},
+    )
+    cookie = client.cookies.get(COOKIE)
+
+    # A forged cross-site POST: the cookie is valid and present, the header is
+    # not, because a form or a no-cors fetch cannot set one.
+    forged = await client.post("/api/v1/auth/refresh")
+    assert forged.status_code == 403
+
+    # The cookie must survive the rejection — a forged request that consumed the
+    # victim's token would burn the family on their next legitimate refresh,
+    # turning a blocked attack into a forced logout.
+    legitimate = await client.post(
+        "/api/v1/auth/refresh", cookies={COOKIE: cookie}, headers=CSRF
+    )
+    assert legitimate.status_code == 200
+
+
+async def test_refresh_rate_limit(client: AsyncClient) -> None:
+    """/refresh is unauthenticated, reachable by anyone, and does real work on
+    every call — a JWT verify, a lookup, and on the replay path a family-wide
+    UPDATE and commit. It needs the same per-IP ceiling as login."""
+    for _ in range(settings.AUTH_RATE_LIMIT_PER_MINUTE):
+        resp = await client.post("/api/v1/auth/refresh", headers=CSRF)
+        assert resp.status_code == 401
+
+    limited = await client.post("/api/v1/auth/refresh", headers=CSRF)
+    assert limited.status_code == 429
+    assert "Retry-After" in limited.headers
+
+
+async def test_refresh_rate_limit_meters_requests_that_fail_the_csrf_check(
+    client: AsyncClient,
+) -> None:
+    """The rate limit is solved before the CSRF guard on purpose. If the guard
+    ran first, omitting the header would be a free way to hammer the endpoint."""
+    for _ in range(settings.AUTH_RATE_LIMIT_PER_MINUTE):
+        resp = await client.post("/api/v1/auth/refresh")
+        assert resp.status_code == 403
+
+    limited = await client.post("/api/v1/auth/refresh")
+    assert limited.status_code == 429
+
+
+async def test_refresh_bucket_is_separate_from_login(client: AsyncClient) -> None:
+    """Exhausting one auth endpoint must not lock a user out of the other."""
+    for _ in range(settings.AUTH_RATE_LIMIT_PER_MINUTE):
+        assert (await client.post("/api/v1/auth/refresh", headers=CSRF)).status_code == 401
+    assert (await client.post("/api/v1/auth/refresh", headers=CSRF)).status_code == 429
+
+    login = await client.post(
+        "/api/v1/auth/login", data={"username": "nobody@example.com", "password": "wrong"}
+    )
+    assert login.status_code == 401

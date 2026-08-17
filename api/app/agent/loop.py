@@ -10,7 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from app.agent.client import get_deepseek_client
 from app.agent.memory import maybe_summarize_history
 from app.agent.personas import get_system_prompt
-from app.agent.tools import TOOL_SCHEMAS, call_tool
+from app.agent.tools import TOOL_SCHEMAS, UNTRUSTED_RESULT_TOOLS, call_tool, format_tool_result_block
 from app.core import metrics
 from app.core.config import settings
 from app.core.inflight import release_turn_slot
@@ -42,6 +42,10 @@ def _message_to_api(message: Message) -> dict[str, Any]:
     if message.role == MessageRole.user and message.attachment_content:
         block = format_attachment_block(message.attachment_name or "", message.attachment_content)
         content = f"{content or ''}\n\n{block}".strip()
+    if message.role == MessageRole.tool and message.tool_name in UNTRUSTED_RESULT_TOOLS:
+        # Web pages and calendar invites are written by third parties, so their
+        # text is fenced as data before it reaches the model. See tools.py.
+        content = format_tool_result_block(message.tool_name, content or "")
     out: dict[str, Any] = {"role": message.role.value, "content": content}
     if message.tool_calls:
         out["tool_calls"] = message.tool_calls

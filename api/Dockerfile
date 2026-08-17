@@ -28,8 +28,18 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     PIP_NO_CACHE_DIR=1
 
+# `apt-get upgrade` picks up Debian security updates published since the base
+# image was last rebuilt. Without it the image inherits whatever was fixed
+# upstream but not yet rolled into the python:3.12-slim tag, and the Trivy gate
+# fails on CVEs in packages we never asked for — util-linux, most recently — with
+# no change on our side to explain it. Pinning a digest would make the drift
+# visible but not fix it; this actually resolves it, at the cost of the layer not
+# being byte-reproducible.
+#
 # libpq5 is the runtime shared lib asyncpg/psycopg need; curl is for HEALTHCHECK.
-RUN apt-get update && apt-get install -y --no-install-recommends \
+RUN apt-get update \
+    && apt-get upgrade -y \
+    && apt-get install -y --no-install-recommends \
     libpq5 curl \
     && rm -rf /var/lib/apt/lists/*
 

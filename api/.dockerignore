@@ -1,0 +1,31 @@
+# The Dockerfile ends with `COPY . .`, so anything left here lands in the image.
+#
+# CI builds from a fresh checkout and therefore never had most of these, which is
+# why the gap stayed invisible: it only affects builds run from a working tree —
+# `docker compose build`, and `make image`, which pushes straight to ECR. Those
+# are precisely the builds that carry a developer's real credentials.
+
+# Secrets and local data. The reason this file exists: api/.env holds SECRET_KEY,
+# ENCRYPTION_KEY and the provider API keys, and aether.db is a real database with
+# real password hashes in it. Neither belongs in a layer that gets pushed.
+.env
+.env.*
+*.db
+*.sqlite3
+
+# Local virtualenvs: hundreds of megabytes, built against a different Python than
+# the image, and carrying their own copies of dependencies. Those shadow copies
+# also show up in image vulnerability scans, so the scanner reports CVEs for
+# packages the application never actually runs.
+.venv/
+venv/
+
+# Caches and build artefacts — noise in the layer, and they invalidate the build
+# cache on every local test run.
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+.vite/
+.coverage
+htmlcov/

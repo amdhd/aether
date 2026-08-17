@@ -15,8 +15,13 @@ high_availability = false
 
 # alert_email = "you@example.com"   # CloudWatch alarm notifications
 
-# Custom domain → HTTPS on the API (recommended). Requires a Route53 hosted zone
-# you own. Leave both empty for an HTTP-only demo (frontend-over-HTTPS won't be
-# able to call it, so a domain is needed for a working end-to-end demo).
-# api_domain_name  = "api.example.com"
-# hosted_zone_name = "example.com"
+# Custom domain → HTTPS on the API. Required for a working app, not merely
+# recommended: without it the ALB is plaintext HTTP, the browser blocks an HTTPS
+# page from calling it as mixed content, and the cross-site refresh cookie cannot
+# be set at all (SameSite=None is only honoured with Secure, which needs TLS).
+# Requires a Route53 hosted zone you own. Applying without it is refused unless
+# allow_insecure_http is set — see the variable for what that mode can and can't do.
+api_domain_name  = "api.example.com"
+hosted_zone_name = "example.com"
+
+# allow_insecure_http = true   # infrastructure without a working login

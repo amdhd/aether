@@ -46,9 +46,11 @@ skip-check:
   # --- Need a custom domain / ACM cert (no domain in the demo) ---
   # NOTE: the ALB is directly internet-facing — CloudFront only fronts the S3
   # SPA, NOT the API. With a custom domain (api_domain_name set) the ALB gets an
-  # HTTPS listener + HTTP->HTTPS redirect and TLS 1.3. Without one, the API is
-  # HTTP-only: an unencrypted demo, not for real credentials/JWT traffic. Set a
-  # domain for any real use (the SPA can't call it over HTTP anyway — mixed content).
+  # HTTPS listener + HTTP->HTTPS redirect and TLS 1.3, which is now the default
+  # path: applying without a domain is refused unless allow_insecure_http is set
+  # explicitly, because that mode cannot sign anyone in (mixed content, and a
+  # cross-site cookie that cannot carry Secure). These skips therefore cover an
+  # opt-in mode, not the shape anyone gets by accident.
   - CKV_AWS_2    # ALB listener HTTPS — no ACM cert without a custom domain (demo only)
   - CKV_AWS_378  # ALB HTTP protocol — HTTP-only demo; HTTPS listener needs ACM + domain
   - CKV2_AWS_20  # ALB HTTP->HTTPS redirect — redirect is enabled once a domain/cert exists

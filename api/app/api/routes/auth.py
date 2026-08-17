@@ -3,7 +3,7 @@ from fastapi.security import OAuth2PasswordRequestForm
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.deps import get_current_user
+from app.api.deps import get_current_user, require_csrf_header
 from app.core.config import settings
 from app.core.rate_limit import enforce_auth_rate_limit
 from app.core.security import fake_verify_password, hash_password, verify_password
@@ -93,7 +93,17 @@ async def login(
     return _token_response(response, tokens)
 
 
-@router.post("/refresh", response_model=AccessToken)
+@router.post(
+    "/refresh",
+    response_model=AccessToken,
+    # Order matters: the rate limit runs first so that every caller is metered,
+    # including one that fails the CSRF check. Solving CSRF first would let an
+    # attacker hammer the endpoint for free by simply omitting the header.
+    dependencies=[
+        Depends(enforce_auth_rate_limit("refresh")),
+        Depends(require_csrf_header),
+    ],
+)
 async def refresh(
     response: Response,
     refresh_token: str | None = Cookie(default=None, alias=settings.REFRESH_COOKIE_NAME),

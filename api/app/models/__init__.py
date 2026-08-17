@@ -1,4 +1,5 @@
 from app.models.conversation import Conversation, Persona
+from app.models.email_token import EmailToken, EmailTokenPurpose
 from app.models.google_credential import GoogleCredential
 from app.models.message import Message, MessageRole
 from app.models.note import Note
@@ -18,4 +19,6 @@ __all__ = [
     "UsageLog",
     "GoogleCredential",
     "RefreshToken",
+    "EmailToken",
+    "EmailTokenPurpose",
 ]

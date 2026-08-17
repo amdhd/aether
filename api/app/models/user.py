@@ -9,6 +9,7 @@ from app.db.base import Base
 
 if TYPE_CHECKING:
     from app.models.conversation import Conversation
+    from app.models.email_token import EmailToken
     from app.models.google_credential import GoogleCredential
     from app.models.note import Note
     from app.models.refresh_token import RefreshToken
@@ -23,6 +24,13 @@ class User(Base):
     password_hash: Mapped[str] = mapped_column(String(255), nullable=False)
     name: Mapped[str] = mapped_column(String(255), nullable=False)
     token_version: Mapped[int] = mapped_column(default=0, nullable=False)
+    # NULL until the address is proven. Advisory: nothing is gated on it today,
+    # so accounts that predate verification keep working and simply see the
+    # prompt. Read `email_verified` rather than testing the column, so a later
+    # decision to enforce has one place to change.
+    email_verified_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
     tasks: Mapped[list["Task"]] = relationship(back_populates="user", cascade="all, delete-orphan")
@@ -36,3 +44,10 @@ class User(Base):
     refresh_tokens: Mapped[list["RefreshToken"]] = relationship(
         back_populates="user", cascade="all, delete-orphan"
     )
+    email_tokens: Mapped[list["EmailToken"]] = relationship(
+        back_populates="user", cascade="all, delete-orphan"
+    )
+
+    @property
+    def email_verified(self) -> bool:
+        return self.email_verified_at is not None

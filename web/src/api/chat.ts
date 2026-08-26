@@ -97,19 +97,19 @@ function dispatchEvent(event: string, data: string, handlers: ChatStreamHandlers
   }
   switch (event) {
     case 'token':
-      handlers.onToken?.(parsed.content)
+      handlers.onToken?.(parsed.content ?? '')
       break
     case 'reasoning':
-      handlers.onReasoning?.(parsed.content)
+      handlers.onReasoning?.(parsed.content ?? '')
       break
     case 'tool_call':
-      handlers.onToolCall?.(parsed.name)
+      handlers.onToolCall?.(parsed.name ?? '')
       break
     case 'done':
       handlers.onDone?.({ conversation_title: parsed.conversation_title ?? '' })
       break
     case 'error':
-      handlers.onError?.(parsed.message)
+      handlers.onError?.(parsed.message ?? '')
       break
   }
 }

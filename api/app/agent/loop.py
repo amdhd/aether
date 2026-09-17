@@ -26,6 +26,10 @@ logger = get_logger(__name__)
 
 MAX_TOOL_ITERATIONS = 5
 
+# What the client is told when a turn fails after headers are sent. Shared so the
+# several places that can reach it cannot drift apart.
+TURN_FAILED_MESSAGE = "The assistant hit an error while responding. Please try again."
+
 
 def _usage_log(user: User, conversation: Conversation, usage: dict[str, int]) -> UsageLog:
     return UsageLog(
@@ -203,8 +207,35 @@ async def _run_agent(
     await db.commit()
 
     client = get_deepseek_client()
-    await maybe_summarize_history(db, conversation, client)
-    messages = await _build_context(db, conversation)
+
+    # Everything from here on runs with the response headers already sent, so an
+    # exception that escapes this generator cannot become an HTTP error — it just
+    # truncates the SSE stream, and the user watches a bubble that never resolves.
+    # The streaming call below has had a handler for that since it was written;
+    # these two did not, though both can fail the same way.
+
+    # Summarizing is a provider call, so it fails whenever the provider does. It
+    # is also best-effort: the summary is a cache of older history, and skipping
+    # it costs a longer context, not a wrong answer. So log and carry on.
+    try:
+        await maybe_summarize_history(db, conversation, client)
+    except Exception:
+        logger.exception(
+            "llm.summarize.failed user_id=%s conversation_id=%s", user.id, conversation.id
+        )
+
+    # Building the context is not best-effort — there is no turn without it — so
+    # this one surfaces as an `error` event instead. It also catches a session
+    # left unusable by a failed summarize commit above, which is why it follows
+    # rather than shares that handler.
+    try:
+        messages = await _build_context(db, conversation)
+    except Exception:
+        logger.exception(
+            "llm.context.failed user_id=%s conversation_id=%s", user.id, conversation.id
+        )
+        yield _sse_event("error", {"message": TURN_FAILED_MESSAGE})
+        return
 
     for _ in range(MAX_TOOL_ITERATIONS):
         content_parts: list[str] = []
@@ -282,9 +313,7 @@ async def _run_agent(
                 conversation.id,
                 int((time.monotonic() - started_at) * 1000),
             )
-            yield _sse_event(
-                "error", {"message": "The assistant hit an error while responding. Please try again."}
-            )
+            yield _sse_event("error", {"message": TURN_FAILED_MESSAGE})
             return
 
         prompt_tokens = usage["prompt_tokens"] if usage else 0

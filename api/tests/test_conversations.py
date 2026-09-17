@@ -854,3 +854,63 @@ async def test_an_interrupted_turn_does_not_brick_the_conversation(
     answered = [m["tool_call_id"] for m in sent if m["role"] == "tool"]
     assert called == ["call_orphan"]
     assert answered == ["call_orphan"]
+
+
+# --- failures before the stream starts ----------------------------------------
+#
+# maybe_summarize_history and _build_context run after the response headers are
+# sent but before the streaming call's own handler. An exception escaping either
+# one truncates the SSE stream with no event at all.
+
+
+async def test_a_failed_summarization_does_not_kill_the_turn(
+    client: AsyncClient, auth_headers: dict[str, str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Summarizing is a provider call and the summary is only a cache, so a 429
+    there must cost a longer context, not the turn."""
+    _patch_deepseek(
+        monkeypatch,
+        responses=[[_content_chunk("Answered anyway."), _usage_chunk(10, 5)]],
+    )
+
+    async def _boom(*args: object, **kwargs: object) -> None:
+        raise RuntimeError("provider 429")
+
+    monkeypatch.setattr("app.agent.loop.maybe_summarize_history", _boom)
+
+    create_resp = await client.post("/api/v1/conversations", json={}, headers=auth_headers)
+    conversation_id = create_resp.json()["id"]
+
+    resp = await client.post(
+        f"/api/v1/conversations/{conversation_id}/messages",
+        data={"content": "hello"},
+        headers=auth_headers,
+    )
+    assert resp.status_code == 200
+    assert "event: done" in resp.text
+    assert "Answered anyway." in resp.text
+
+
+async def test_a_failed_context_build_streams_an_error_event(
+    client: AsyncClient, auth_headers: dict[str, str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Without a context there is no turn — but the client still has to be told,
+    or the stream just stops mid-flight with nothing to render."""
+    _patch_deepseek(monkeypatch, responses=[[_content_chunk("never reached")]])
+
+    async def _boom(*args: object, **kwargs: object) -> None:
+        raise RuntimeError("db is down")
+
+    monkeypatch.setattr("app.agent.loop._build_context", _boom)
+
+    create_resp = await client.post("/api/v1/conversations", json={}, headers=auth_headers)
+    conversation_id = create_resp.json()["id"]
+
+    resp = await client.post(
+        f"/api/v1/conversations/{conversation_id}/messages",
+        data={"content": "hello"},
+        headers=auth_headers,
+    )
+    assert resp.status_code == 200
+    assert "event: error" in resp.text
+    assert "db is down" not in resp.text

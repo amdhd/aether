@@ -12,6 +12,10 @@ from app.agent.tools import (
 )
 from app.core.config import settings
 from app.core.rate_limit import reset_rate_limits
+from app.models.task import Task, TaskPriority
+from app.models.user import User
+
+from .conftest import TestingSessionLocal
 
 
 class _FakeResponse:
@@ -307,3 +311,70 @@ def test_tool_result_block_tolerates_whitespace_in_a_forged_fence() -> None:
 def test_tool_result_block_sanitises_the_tool_name() -> None:
     block = format_tool_result_block('web"><script>', "{}")
     assert '<tool_result name="webscript">' in block
+
+
+# --- call_tool failure containment -------------------------------------------
+#
+# Tool arguments arrive as free-form JSON from the model, and call_tool runs from
+# inside the SSE generator — past the point where headers are sent, and outside
+# the try/except in agent.loop that converts a failure into an `error` event. An
+# exception escaping here truncates the stream with no signal at all.
+
+
+async def test_call_tool_contains_a_wrong_argument_type() -> None:
+    """{"location": 123} raises AttributeError on .strip() — not a ValueError,
+    so the narrow handler this replaced let it escape the generator."""
+    raw = await call_tool("get_weather", {"location": 123}, None, SimpleNamespace(id=1))
+    result = json.loads(raw)
+    assert "error" in result
+
+
+async def test_call_tool_does_not_leak_internal_exception_text() -> None:
+    result = json.loads(await call_tool("get_weather", {"location": 123}, None, SimpleNamespace(id=1)))
+    # The message reaches the model's context and from there the user's reply,
+    # so it names the tool and nothing about our internals.
+    assert result["error"] == "The get_weather tool failed unexpectedly."
+    assert "strip" not in result["error"]
+    assert "AttributeError" not in result["error"]
+
+
+async def test_call_tool_still_reports_a_bad_argument_value_to_the_model() -> None:
+    """A missing key is the model's mistake to fix, so that text is handed back
+    rather than replaced with the generic message."""
+    result = json.loads(await call_tool("get_weather", {}, None, SimpleNamespace(id=1)))
+    assert "location" in result["error"]
+
+
+async def test_update_task_does_not_half_apply_a_rejected_change() -> None:
+    """A bad enum value raises after the earlier fields would already have been
+    assigned. Those assignments are not rolled back anywhere — the agent loop's
+    next commit flushes whatever is dirty on the session — so the parse has to
+    happen before the first assignment, not between them."""
+    async with TestingSessionLocal() as db:
+        user = User(email="update-task@example.com", name="T", password_hash="x")
+        db.add(user)
+        await db.commit()
+        await db.refresh(user)
+
+        task = Task(user_id=user.id, title="Original", priority=TaskPriority.low)
+        db.add(task)
+        await db.commit()
+        await db.refresh(task)
+
+        result = json.loads(
+            await call_tool(
+                "update_task",
+                {"task_id": task.id, "title": "Renamed", "priority": "not-a-priority"},
+                db,
+                user,
+            )
+        )
+        assert "error" in result
+
+        # The whole update is rejected, so the rename must not have survived.
+        await db.commit()
+    async with TestingSessionLocal() as db:
+        stored = await db.get(Task, task.id)
+        assert stored is not None
+        assert stored.title == "Original"
+        assert stored.priority == TaskPriority.low

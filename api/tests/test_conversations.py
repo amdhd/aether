@@ -614,7 +614,8 @@ async def test_concurrent_turn_is_rejected_and_the_slot_is_reusable(
         user_id = (await db.execute(select(User))).scalars().first().id
 
     # Stand in for a turn that is still streaming.
-    assert await acquire_turn_slot(user_id) is True
+    held = await acquire_turn_slot(user_id)
+    assert held is not None
 
     resp = await client.post(
         f"/api/v1/conversations/{conversation_id}/messages",
@@ -625,7 +626,7 @@ async def test_concurrent_turn_is_rejected_and_the_slot_is_reusable(
     assert "still in progress" in resp.json()["detail"]
 
     # Once that turn ends the user is not locked out.
-    await release_turn_slot(user_id)
+    await release_turn_slot(held)
     resp = await client.post(
         f"/api/v1/conversations/{conversation_id}/messages",
         data={"content": "Hi"},
@@ -634,7 +635,7 @@ async def test_concurrent_turn_is_rejected_and_the_slot_is_reusable(
     assert resp.status_code == 200
     # Streaming the body to completion is what releases the slot again.
     assert "First reply." in resp.text
-    assert await acquire_turn_slot(user_id) is True
+    assert await acquire_turn_slot(user_id) is not None
 
 
 async def test_web_search_results_reach_the_model_fenced_as_data(

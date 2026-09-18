@@ -124,16 +124,25 @@ async def send_message(
     # Claimed here rather than in a dependency so a rejected upload above can't
     # strand a slot: from this point the generator below always runs and always
     # releases it. The cost cap depends on this ceiling to be enforceable at all.
-    if not await acquire_turn_slot(current_user.id):
+    slot = await acquire_turn_slot(current_user.id)
+    if slot is None:
         raise HTTPException(
             status_code=status.HTTP_429_TOO_MANY_REQUESTS,
             detail="Another reply is still in progress. Wait for it to finish and try again.",
             headers={"Retry-After": "5"},
         )
 
+    # The slot travels with the generator: it records which counter granted it,
+    # and only that counter can correctly take it back.
     return StreamingResponse(
         stream_agent_response(
-            session_factory, current_user, conversation.id, content, attachment_name, attachment_content
+            session_factory,
+            current_user,
+            conversation.id,
+            content,
+            attachment_name,
+            attachment_content,
+            slot=slot,
         ),
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},

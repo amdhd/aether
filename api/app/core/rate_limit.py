@@ -90,6 +90,12 @@ def _inmemory_hit(log: dict, key, limit: int) -> tuple[bool, int]:
 
 # --- Redis backend ----------------------------------------------------------
 
+# ElastiCache in-VPC round trips are sub-millisecond, so a limiter call that has
+# not answered in half a second is not slow, it is gone.
+REDIS_SOCKET_TIMEOUT_SECONDS = 0.5
+REDIS_CONNECT_TIMEOUT_SECONDS = 1.0
+REDIS_HEALTH_CHECK_SECONDS = 30
+
 
 class _RedisLimiter:
     """Global sliding window backed by one Redis sorted set per key.
@@ -108,7 +114,28 @@ class _RedisLimiter:
     def from_url(cls, url: str) -> "_RedisLimiter":
         import redis.asyncio as aioredis
 
-        return cls(aioredis.from_url(url, decode_responses=True))
+        return cls(
+            aioredis.from_url(
+                url,
+                decode_responses=True,
+                # Without these, the client waits forever. The fallback below
+                # catches *exceptions*, not *hangs*, so a wedged node would not
+                # degrade to the in-memory backend — it would park the request.
+                # And this runs as a dependency on every auth and chat call, so
+                # that is the whole request path stalling, not one feature.
+                #
+                # Both are short because the alternative is cheap and local: the
+                # cost of giving up early is a per-process limiter for a few
+                # seconds, which is the documented degraded mode anyway.
+                socket_connect_timeout=REDIS_CONNECT_TIMEOUT_SECONDS,
+                socket_timeout=REDIS_SOCKET_TIMEOUT_SECONDS,
+                # A connection can die without either end noticing — an
+                # ElastiCache failover, an idle NAT mapping dropped. Without a
+                # health check the pool hands out the dead one and the first
+                # command pays a full socket timeout to discover it.
+                health_check_interval=REDIS_HEALTH_CHECK_SECONDS,
+            )
+        )
 
     async def hit(self, key: str, limit: int) -> tuple[bool, int]:
         now_ms = int(time.time() * 1000)

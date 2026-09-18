@@ -194,3 +194,37 @@ async def test_no_summary_when_below_threshold() -> None:
             select(func.count()).select_from(UsageLog).where(UsageLog.conversation_id == conversation_id)
         )
         assert usage_count == 0
+
+
+async def test_char_len_counts_an_attachment() -> None:
+    """An attachment is the largest single thing a message can carry — 200 KB
+    against a 24k threshold — so leaving it uncounted made a conversation of
+    uploads look small enough to skip folding, exactly when folding was what it
+    needed."""
+    from app.agent.memory import _message_char_len
+
+    bare = Message(conversation_id=1, role=MessageRole.user, content="here")
+    with_file = Message(
+        conversation_id=1,
+        role=MessageRole.user,
+        content="here",
+        attachment_name="sales.csv",
+        attachment_content="x" * 50_000,
+    )
+    assert _message_char_len(with_file) - _message_char_len(bare) == 50_000
+
+
+async def test_summary_keeps_the_fact_of_an_upload_without_its_payload() -> None:
+    from app.agent.memory import _format_message_for_summary
+
+    line = _format_message_for_summary(
+        Message(
+            conversation_id=1,
+            role=MessageRole.user,
+            content="what does this show?",
+            attachment_name="sales.csv",
+            attachment_content="a,b\n1,2\n",
+        )
+    )
+    assert "sales.csv" in line
+    assert "1,2" not in line

@@ -25,10 +25,17 @@ SUMMARY_SYSTEM_PROMPT = (
 
 def _message_char_len(message: Message) -> int:
     """Approximate the context-window footprint of a message. Counts not just
-    the visible content but the reasoning trace and serialized tool-call
-    arguments too, since in a tool-heavy chat those dominate the token count and
-    a content-only estimate would under-trigger summarization."""
+    the visible content but the reasoning trace, serialized tool-call arguments
+    and any attached file, since in a tool-heavy or file-heavy chat those
+    dominate the token count and a content-only estimate would under-trigger
+    summarization.
+
+    The attachment is the largest single thing a message can carry — 200 KB
+    against a 24k-char threshold — so leaving it uncounted meant a conversation
+    of uploads looked small enough to skip folding, precisely when folding was
+    what it needed."""
     size = len(message.content or "") + len(message.reasoning_content or "")
+    size += len(message.attachment_content or "")
     if message.tool_calls:
         for call in message.tool_calls:
             function = call.get("function", {})
@@ -37,6 +44,12 @@ def _message_char_len(message: Message) -> int:
 
 
 def _format_message_for_summary(message: Message) -> str:
+    if message.role == MessageRole.user and message.attachment_content:
+        # The file itself is deliberately left out — folding 200 KB of CSV into a
+        # prose summary is neither useful nor affordable — but the fact of it is
+        # kept, so the summary does not read as though the user never sent one.
+        name = message.attachment_name or "a file"
+        return f"user (uploaded {name}): {message.content or ''}"
     if message.role == MessageRole.tool:
         return f"[result from tool '{message.tool_name}']: {message.content}"
     if message.tool_calls:

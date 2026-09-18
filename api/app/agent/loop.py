@@ -20,7 +20,11 @@ from app.models.message import Message, MessageRole
 from app.agent.redaction import VendorRedactor
 from app.models.usage_log import UsageLog
 from app.models.user import User
-from app.services.attachments import format_attachment_block
+from app.services.attachments import (
+    MAX_ATTACHMENT_BYTES,
+    format_attachment_block,
+    sanitize_attachment_name,
+)
 
 logger = get_logger(__name__)
 
@@ -29,6 +33,16 @@ MAX_TOOL_ITERATIONS = 5
 # What the client is told when a turn fails after headers are sent. Shared so the
 # several places that can reach it cannot drift apart.
 TURN_FAILED_MESSAGE = "The assistant hit an error while responding. Please try again."
+
+# Ceiling on attachment text held verbatim in one context, summed across every
+# message in it. The upload path bounds each *file* at MAX_ATTACHMENT_BYTES, but
+# nothing bounded the sum: the recent-message window is a count of messages, so
+# ten recent messages each carrying a 200 KB CSV built a ~2 MB context — far past
+# any model's window — and the turn died on a provider 400.
+#
+# Pinned to the per-file ceiling, so the worst case a whole conversation can cost
+# is what the app already accepts for a single upload.
+MAX_ATTACHMENT_CONTEXT_CHARS = MAX_ATTACHMENT_BYTES
 
 
 def _usage_log(user: User, conversation: Conversation, usage: dict[str, int]) -> UsageLog:
@@ -41,10 +55,21 @@ def _usage_log(user: User, conversation: Conversation, usage: dict[str, int]) ->
     )
 
 
-def _message_to_api(message: Message) -> dict[str, Any]:
+def _message_to_api(message: Message, *, include_attachment: bool = True) -> dict[str, Any]:
     content = message.content
     if message.role == MessageRole.user and message.attachment_content:
-        block = format_attachment_block(message.attachment_name or "", message.attachment_content)
+        if include_attachment:
+            block = format_attachment_block(message.attachment_name or "", message.attachment_content)
+        else:
+            # The file is over the context budget, but silently dropping it would
+            # leave the model answering about a file it cannot see and unable to
+            # say so. Keep the fact, lose the payload.
+            block = (
+                f"[The user uploaded a file named "
+                f"{sanitize_attachment_name(message.attachment_name or '')!r} earlier in this "
+                "conversation. Its contents are no longer in context, having been displaced by "
+                "more recent uploads. Ask the user to re-send it if you need it.]"
+            )
         content = f"{content or ''}\n\n{block}".strip()
     if message.role == MessageRole.tool and message.tool_name in UNTRUSTED_RESULT_TOOLS:
         # Web pages and calendar invites are written by third parties, so their
@@ -113,6 +138,31 @@ def _repair_orphaned_tool_calls(history: list[Message]) -> list[Message]:
     return repaired
 
 
+def _attachments_within_budget(history: list[Message]) -> set[int]:
+    """Ids of the messages whose attachment text still fits in one context.
+
+    Walked newest first, stopping at the first file that does not fit rather than
+    skipping it to squeeze in an older one: a context holding an old upload while
+    the newest is missing is a worse thing to hand a model than a shorter run of
+    the most recent ones.
+
+    Summarization is what normally bounds a long history, but it cannot help
+    here. It only folds messages *older* than the recent window, and that window
+    is a count of messages — so a run of large uploads inside it is out of its
+    reach no matter how big it gets.
+    """
+    kept: set[int] = set()
+    remaining = MAX_ATTACHMENT_CONTEXT_CHARS
+    for message in reversed(history):
+        if not message.attachment_content:
+            continue
+        if len(message.attachment_content) > remaining:
+            break
+        remaining -= len(message.attachment_content)
+        kept.add(message.id)
+    return kept
+
+
 async def _build_context(db: AsyncSession, conversation: Conversation) -> list[dict[str, Any]]:
     messages: list[dict[str, Any]] = [
         {"role": "system", "content": get_system_prompt(conversation.persona)},
@@ -133,8 +183,11 @@ async def _build_context(db: AsyncSession, conversation: Conversation) -> list[d
     if conversation.memory_summarized_until_id:
         history_stmt = history_stmt.where(Message.id > conversation.memory_summarized_until_id)
     history = list(await db.scalars(history_stmt))
+    budgeted = _attachments_within_budget(history)
     for message in _repair_orphaned_tool_calls(history):
-        messages.append(_message_to_api(message))
+        messages.append(
+            _message_to_api(message, include_attachment=message.id in budgeted)
+        )
     return messages
 
 

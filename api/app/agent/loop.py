@@ -13,7 +13,7 @@ from app.agent.personas import get_system_prompt
 from app.agent.tools import TOOL_SCHEMAS, UNTRUSTED_RESULT_TOOLS, call_tool, format_tool_result_block
 from app.core import metrics
 from app.core.config import settings
-from app.core.inflight import release_turn_slot
+from app.core.inflight import TurnSlot, release_turn_slot
 from app.core.logging import get_logger
 from app.models.conversation import Conversation
 from app.models.message import Message, MessageRole
@@ -202,6 +202,7 @@ async def stream_agent_response(
     user_message: str,
     attachment_name: str | None = None,
     attachment_content: str | None = None,
+    slot: TurnSlot | None = None,
 ) -> AsyncGenerator[str, None]:
     """Persist the user's message, run the tool-calling agent loop against
     DeepSeek, and yield SSE-formatted events as the response streams in.
@@ -228,7 +229,7 @@ async def stream_agent_response(
             ):
                 yield event
     finally:
-        await release_turn_slot(user.id)
+        await release_turn_slot(slot)
 
 
 async def _run_agent(

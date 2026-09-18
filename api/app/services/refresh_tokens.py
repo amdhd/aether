@@ -36,9 +36,12 @@ def _expiry() -> datetime:
     return datetime.now(timezone.utc) + timedelta(days=settings.REFRESH_TOKEN_EXPIRE_DAYS)
 
 
-async def issue_token_pair(db: AsyncSession, user: User, family_id: str | None = None) -> IssuedTokens:
-    """Mint an access token plus a new refresh token. Pass `family_id` to keep
-    a rotation chain going; omit it to start a fresh family (i.e. a new login)."""
+def _stage_token_pair(db: AsyncSession, user: User, family_id: str | None = None) -> IssuedTokens:
+    """Build the token pair and add its row to the session, without committing.
+
+    Split out so rotation can put the revoke and the successor in one
+    transaction; nothing else should need it.
+    """
     jti = uuid.uuid4().hex
     family = family_id or uuid.uuid4().hex
     db.add(
@@ -46,11 +49,18 @@ async def issue_token_pair(db: AsyncSession, user: User, family_id: str | None =
             jti=jti, family_id=family, user_id=user.id, revoked=False, expires_at=_expiry()
         )
     )
-    await db.commit()
     return IssuedTokens(
         access_token=create_access_token(str(user.id), user.token_version),
         refresh_token=create_refresh_token(str(user.id), user.token_version, jti, family),
     )
+
+
+async def issue_token_pair(db: AsyncSession, user: User, family_id: str | None = None) -> IssuedTokens:
+    """Mint an access token plus a new refresh token. Pass `family_id` to keep
+    a rotation chain going; omit it to start a fresh family (i.e. a new login)."""
+    tokens = _stage_token_pair(db, user, family_id)
+    await db.commit()
+    return tokens
 
 
 async def _revoke_family(db: AsyncSession, family_id: str) -> None:
@@ -110,8 +120,18 @@ async def rotate_refresh_token(db: AsyncSession, raw_token: str) -> IssuedTokens
         await db.commit()
         raise RefreshError("Refresh token reuse detected")
 
+    # The revoke and its successor commit together. Committing the revoke first
+    # and issuing afterwards left a window where a failure in between killed the
+    # session outright: the presented token was already revoked and no successor
+    # existed, so the client's natural retry with the old token looked exactly
+    # like a replay and burned the whole family.
+    #
+    # One transaction removes that without weakening anything. It cannot produce
+    # two live tokens — the revoke and the insert apply or neither does — so if
+    # it rolls back the old token is simply still valid and the retry succeeds.
+    tokens = _stage_token_pair(db, user, family_id=family_id)
     await db.commit()
-    return await issue_token_pair(db, user, family_id=family_id)
+    return tokens
 
 
 async def revoke_all_for_user(db: AsyncSession, user: User) -> None:

@@ -247,8 +247,13 @@ Kept here so nobody re-files them:
   semantic path's distance floor is the real control.
 - In-memory rate-limit fallback when Redis is down → availability over
   strictness, logged at call time.
-- Rotation's two-commit window (revoke committed before the successor is
+- ~~Rotation's two-commit window (revoke committed before the successor is
   issued) → fail-secure: worst case the user re-logs-in; no window where two
-  live tokens exist.
+  live tokens exist.~~ **Superseded.** This was listed here as accepted while
+  `pre-deploy-review.md` listed the same thing as a finding (T1) — the two
+  documents disagreed. Resolved in favour of the finding: the revoke and its
+  successor now commit in one transaction. The fail-secure property is kept
+  (the pair applies atomically, so two live tokens remain impossible) and the
+  dead-session case is removed, so there was nothing left to trade off.
 - Dockerfile `apt-get upgrade` over digest pinning → CVE remediation over
   byte-reproducibility (spelled out in the Dockerfile comment).

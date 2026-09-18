@@ -11,6 +11,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
+from app.core.logging import get_logger
 from app.core.rate_limit import check_tool_rate_limit
 from app.models.note import Note
 from app.models.task import Task, TaskPriority, TaskStatus
@@ -23,6 +24,8 @@ from app.schemas.note import (
 )
 from app.services import google_oauth
 from app.services.note_search import refresh_note_embedding, search_notes
+
+logger = get_logger(__name__)
 
 WEATHER_API_URL = "https://api.data.gov.my/weather/forecast/"
 WEATHER_CACHE_TTL_SECONDS = 3600
@@ -328,16 +331,26 @@ async def _update_task(db: AsyncSession, user: User, args: dict[str, Any]) -> di
     if task is None or task.user_id != user.id:
         return {"error": f"Task {args['task_id']} not found."}
 
+    # Parse every supplied field before assigning any of them. These values come
+    # from the model as free-form JSON, so a bad date or enum raises partway
+    # through — and assigning as we go would leave the ORM object dirty with the
+    # fields that already landed. Nothing rolls that back: the caller returns the
+    # error as a tool result and the agent loop's next commit flushes the partial
+    # mutation anyway. Validating first makes the update all-or-nothing.
+    updates: dict[str, Any] = {}
     if "title" in args:
-        task.title = args["title"]
+        updates["title"] = args["title"]
     if "description" in args:
-        task.description = args["description"]
+        updates["description"] = args["description"]
     if "due_date" in args:
-        task.due_date = date.fromisoformat(args["due_date"]) if args["due_date"] else None
+        updates["due_date"] = date.fromisoformat(args["due_date"]) if args["due_date"] else None
     if "priority" in args:
-        task.priority = TaskPriority(args["priority"])
+        updates["priority"] = TaskPriority(args["priority"])
     if "status" in args:
-        task.status = TaskStatus(args["status"])
+        updates["status"] = TaskStatus(args["status"])
+
+    for field, value in updates.items():
+        setattr(task, field, value)
 
     await db.commit()
     await db.refresh(task)
@@ -678,6 +691,27 @@ async def call_tool(name: str, arguments: dict[str, Any], db: AsyncSession, user
     try:
         result = await handler(db, user, arguments)
     except (ValueError, KeyError) as exc:
+        # The handlers raise these for arguments the model got wrong: a missing
+        # required key, an unparseable date, a value outside an enum. The text is
+        # about the argument, so handing it back lets the model correct itself on
+        # the next iteration rather than failing the whole turn.
         return json.dumps({"error": str(exc)})
+    except Exception:
+        # Everything else. The model supplies these arguments as free-form JSON,
+        # so a wrong *type* reaches a handler that only guards against a wrong
+        # *value*: {"location": 123} raises AttributeError on .strip(),
+        # {"max_results": []} raises TypeError in int(). Neither is a ValueError.
+        #
+        # This call site sits outside the try/except in agent.loop that turns a
+        # mid-turn failure into an SSE `error` event, and the response headers
+        # are long since sent by the time a tool runs. So without this, such an
+        # exception escapes the generator, the stream truncates with no signal,
+        # and the user watches a bubble that never resolves.
+        #
+        # The message is deliberately generic: unlike the branch above, this
+        # text is not ours to show. It would carry internal exception wording
+        # into the model's context and from there into the user's reply.
+        logger.exception("tool.failed tool=%s user_id=%s", name, user.id)
+        return json.dumps({"error": f"The {name} tool failed unexpectedly."})
 
     return json.dumps(result)

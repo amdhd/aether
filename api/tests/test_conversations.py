@@ -738,3 +738,179 @@ async def test_the_users_own_task_results_are_not_fenced(
     sent_messages = fake_client.chat.completions.stream_calls[1]["messages"]
     tool_msg = next(m for m in sent_messages if m["role"] == "tool")
     assert "<tool_result" not in tool_msg["content"]
+
+
+# --- orphaned tool calls ------------------------------------------------------
+#
+# An assistant message carrying tool_calls is only replayable alongside the
+# `tool` rows answering it. History is replayed verbatim on every turn, so one
+# gap fails every later turn in that conversation rather than just the turn that
+# created it.
+
+
+async def _seed_orphaned_tool_call(db: AsyncSession, user_id: int) -> Conversation:
+    """A conversation in the state a crash between the two old commits left:
+    the assistant's tool call persisted, its result never written."""
+    conversation = Conversation(user_id=user_id, title="Interrupted")
+    db.add(conversation)
+    await db.commit()
+    await db.refresh(conversation)
+
+    db.add(Message(conversation_id=conversation.id, role=MessageRole.user, content="weather?"))
+    db.add(
+        Message(
+            conversation_id=conversation.id,
+            role=MessageRole.assistant,
+            content=None,
+            tool_calls=[
+                {
+                    "id": "call_orphan",
+                    "type": "function",
+                    "function": {"name": "get_weather", "arguments": '{"location": "Ipoh"}'},
+                }
+            ],
+        )
+    )
+    await db.commit()
+    return conversation
+
+
+async def test_build_context_answers_an_orphaned_tool_call() -> None:
+    from app.agent.loop import _build_context
+
+    async with TestingSessionLocal() as db:
+        user = User(email="orphan@example.com", name="O", password_hash="x")
+        db.add(user)
+        await db.commit()
+        await db.refresh(user)
+        conversation = await _seed_orphaned_tool_call(db, user.id)
+
+        context = await _build_context(db, conversation)
+
+    called = [c["id"] for m in context if m.get("tool_calls") for c in m["tool_calls"]]
+    answered = [m["tool_call_id"] for m in context if m["role"] == "tool"]
+    assert called == ["call_orphan"]
+    # Without this the provider 400s on every turn from here on, forever.
+    assert answered == ["call_orphan"]
+
+
+async def test_build_context_leaves_a_complete_tool_group_alone() -> None:
+    from app.agent.loop import _build_context
+
+    async with TestingSessionLocal() as db:
+        user = User(email="complete@example.com", name="C", password_hash="x")
+        db.add(user)
+        await db.commit()
+        await db.refresh(user)
+        conversation = await _seed_orphaned_tool_call(db, user.id)
+        db.add(
+            Message(
+                conversation_id=conversation.id,
+                role=MessageRole.tool,
+                content='{"forecast": "sunny"}',
+                tool_call_id="call_orphan",
+                tool_name="get_weather",
+            )
+        )
+        await db.commit()
+
+        context = await _build_context(db, conversation)
+
+    tool_messages = [m for m in context if m["role"] == "tool"]
+    assert len(tool_messages) == 1
+    assert "sunny" in tool_messages[0]["content"]
+    assert "did not complete" not in tool_messages[0]["content"]
+
+
+async def test_an_interrupted_turn_does_not_brick_the_conversation(
+    client: AsyncClient, auth_headers: dict[str, str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The regression that matters: after a turn dies mid tool-call, the *next*
+    turn still has to work."""
+    async with TestingSessionLocal() as db:
+        user = (await db.execute(select(User))).scalars().first()
+        assert user is not None
+        conversation = await _seed_orphaned_tool_call(db, user.id)
+
+    fake = _patch_deepseek(
+        monkeypatch,
+        responses=[[_content_chunk("Sorry about that — sunny today."), _usage_chunk(10, 5)]],
+    )
+
+    resp = await client.post(
+        f"/api/v1/conversations/{conversation.id}/messages",
+        data={"content": "try again"},
+        headers=auth_headers,
+    )
+    assert resp.status_code == 200
+    assert "event: done" in resp.text
+
+    # The fake client accepts anything, so asserting on the response alone would
+    # pass with or without the fix. Assert the invariant the *real* provider
+    # enforces instead: every tool_call id it is sent must be answered by a
+    # following tool message, or it 400s the turn.
+    sent = fake.chat.completions.stream_calls[0]["messages"]
+    called = [c["id"] for m in sent if m.get("tool_calls") for c in m["tool_calls"]]
+    answered = [m["tool_call_id"] for m in sent if m["role"] == "tool"]
+    assert called == ["call_orphan"]
+    assert answered == ["call_orphan"]
+
+
+# --- failures before the stream starts ----------------------------------------
+#
+# maybe_summarize_history and _build_context run after the response headers are
+# sent but before the streaming call's own handler. An exception escaping either
+# one truncates the SSE stream with no event at all.
+
+
+async def test_a_failed_summarization_does_not_kill_the_turn(
+    client: AsyncClient, auth_headers: dict[str, str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Summarizing is a provider call and the summary is only a cache, so a 429
+    there must cost a longer context, not the turn."""
+    _patch_deepseek(
+        monkeypatch,
+        responses=[[_content_chunk("Answered anyway."), _usage_chunk(10, 5)]],
+    )
+
+    async def _boom(*args: object, **kwargs: object) -> None:
+        raise RuntimeError("provider 429")
+
+    monkeypatch.setattr("app.agent.loop.maybe_summarize_history", _boom)
+
+    create_resp = await client.post("/api/v1/conversations", json={}, headers=auth_headers)
+    conversation_id = create_resp.json()["id"]
+
+    resp = await client.post(
+        f"/api/v1/conversations/{conversation_id}/messages",
+        data={"content": "hello"},
+        headers=auth_headers,
+    )
+    assert resp.status_code == 200
+    assert "event: done" in resp.text
+    assert "Answered anyway." in resp.text
+
+
+async def test_a_failed_context_build_streams_an_error_event(
+    client: AsyncClient, auth_headers: dict[str, str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Without a context there is no turn — but the client still has to be told,
+    or the stream just stops mid-flight with nothing to render."""
+    _patch_deepseek(monkeypatch, responses=[[_content_chunk("never reached")]])
+
+    async def _boom(*args: object, **kwargs: object) -> None:
+        raise RuntimeError("db is down")
+
+    monkeypatch.setattr("app.agent.loop._build_context", _boom)
+
+    create_resp = await client.post("/api/v1/conversations", json={}, headers=auth_headers)
+    conversation_id = create_resp.json()["id"]
+
+    resp = await client.post(
+        f"/api/v1/conversations/{conversation_id}/messages",
+        data={"content": "hello"},
+        headers=auth_headers,
+    )
+    assert resp.status_code == 200
+    assert "event: error" in resp.text
+    assert "db is down" not in resp.text

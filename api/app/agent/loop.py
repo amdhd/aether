@@ -26,6 +26,10 @@ logger = get_logger(__name__)
 
 MAX_TOOL_ITERATIONS = 5
 
+# What the client is told when a turn fails after headers are sent. Shared so the
+# several places that can reach it cannot drift apart.
+TURN_FAILED_MESSAGE = "The assistant hit an error while responding. Please try again."
+
 
 def _usage_log(user: User, conversation: Conversation, usage: dict[str, int]) -> UsageLog:
     return UsageLog(
@@ -61,6 +65,54 @@ def _message_to_api(message: Message) -> dict[str, Any]:
     return out
 
 
+def _repair_orphaned_tool_calls(history: list[Message]) -> list[Message]:
+    """Stand in a result for any tool call whose own row never got written.
+
+    The provider rejects an assistant message carrying `tool_calls` unless every
+    one of those ids is answered by a following `tool` message. History is
+    replayed verbatim on every turn, so a single gap does not fail one turn — it
+    fails *every* turn in that conversation from then on, permanently, and the
+    user's only escape is deleting the conversation.
+
+    A gap is written whenever a turn dies between persisting the assistant's tool
+    call and persisting its result: an unhandled tool exception, a deploy, a task
+    kill. The write path is ordered to make that window as small as it can be
+    (see the tool loop below), but it cannot be closed entirely while tool
+    handlers commit the session they share with this loop. So the read path
+    treats a gap as something to survive rather than something that cannot
+    happen, which also unbricks conversations already damaged by an earlier
+    version.
+    """
+    answered = {m.tool_call_id for m in history if m.role == MessageRole.tool and m.tool_call_id}
+    repaired: list[Message] = []
+    for message in history:
+        repaired.append(message)
+        if message.role != MessageRole.assistant or not message.tool_calls:
+            continue
+        for call in message.tool_calls:
+            call_id = call.get("id")
+            if not call_id or call_id in answered:
+                continue
+            logger.warning(
+                "context.orphaned_tool_call conversation_id=%s tool_call_id=%s",
+                message.conversation_id,
+                call_id,
+            )
+            # Transient: constructed for this context only, never added to the
+            # session. Writing it back would be repairing history we cannot
+            # reconstruct. tool_name is left unset because this text is ours, so
+            # it must not be fenced as third-party output.
+            repaired.append(
+                Message(
+                    conversation_id=message.conversation_id,
+                    role=MessageRole.tool,
+                    content=json.dumps({"error": "This tool call did not complete."}),
+                    tool_call_id=call_id,
+                )
+            )
+    return repaired
+
+
 async def _build_context(db: AsyncSession, conversation: Conversation) -> list[dict[str, Any]]:
     messages: list[dict[str, Any]] = [
         {"role": "system", "content": get_system_prompt(conversation.persona)},
@@ -80,8 +132,8 @@ async def _build_context(db: AsyncSession, conversation: Conversation) -> list[d
     history_stmt = select(Message).where(Message.conversation_id == conversation.id).order_by(Message.id)
     if conversation.memory_summarized_until_id:
         history_stmt = history_stmt.where(Message.id > conversation.memory_summarized_until_id)
-    history = await db.scalars(history_stmt)
-    for message in history.all():
+    history = list(await db.scalars(history_stmt))
+    for message in _repair_orphaned_tool_calls(history):
         messages.append(_message_to_api(message))
     return messages
 
@@ -155,8 +207,35 @@ async def _run_agent(
     await db.commit()
 
     client = get_deepseek_client()
-    await maybe_summarize_history(db, conversation, client)
-    messages = await _build_context(db, conversation)
+
+    # Everything from here on runs with the response headers already sent, so an
+    # exception that escapes this generator cannot become an HTTP error — it just
+    # truncates the SSE stream, and the user watches a bubble that never resolves.
+    # The streaming call below has had a handler for that since it was written;
+    # these two did not, though both can fail the same way.
+
+    # Summarizing is a provider call, so it fails whenever the provider does. It
+    # is also best-effort: the summary is a cache of older history, and skipping
+    # it costs a longer context, not a wrong answer. So log and carry on.
+    try:
+        await maybe_summarize_history(db, conversation, client)
+    except Exception:
+        logger.exception(
+            "llm.summarize.failed user_id=%s conversation_id=%s", user.id, conversation.id
+        )
+
+    # Building the context is not best-effort — there is no turn without it — so
+    # this one surfaces as an `error` event instead. It also catches a session
+    # left unusable by a failed summarize commit above, which is why it follows
+    # rather than shares that handler.
+    try:
+        messages = await _build_context(db, conversation)
+    except Exception:
+        logger.exception(
+            "llm.context.failed user_id=%s conversation_id=%s", user.id, conversation.id
+        )
+        yield _sse_event("error", {"message": TURN_FAILED_MESSAGE})
+        return
 
     for _ in range(MAX_TOOL_ITERATIONS):
         content_parts: list[str] = []
@@ -234,9 +313,7 @@ async def _run_agent(
                 conversation.id,
                 int((time.monotonic() - started_at) * 1000),
             )
-            yield _sse_event(
-                "error", {"message": "The assistant hit an error while responding. Please try again."}
-            )
+            yield _sse_event("error", {"message": TURN_FAILED_MESSAGE})
             return
 
         prompt_tokens = usage["prompt_tokens"] if usage else 0
@@ -286,7 +363,19 @@ async def _run_agent(
             db.add(assistant_msg)
             if usage:
                 db.add(_usage_log(user, conversation, usage))
-            await db.commit()
+            # Deliberately *not* committed here. An assistant message carrying
+            # tool_calls is only replayable alongside the `tool` rows answering
+            # it (see _repair_orphaned_tool_calls), so the two are held pending
+            # and committed together once the loop below has built them.
+            #
+            # That makes the pair atomic for read-only tools, which is the common
+            # case. It cannot for a tool that writes: _create_task and friends
+            # commit the session this loop shares with them, and that commit
+            # flushes whatever is pending, including this message. Closing the
+            # window completely means giving tool handlers their own session —
+            # worth doing, but a wider change than this. The read path covers
+            # what remains.
+            await db.flush()
             messages.append(_message_to_api(assistant_msg))
 
             for tool_call in tool_calls:

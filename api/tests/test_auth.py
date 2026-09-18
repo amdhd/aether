@@ -448,3 +448,51 @@ async def test_refresh_bucket_is_separate_from_login(client: AsyncClient) -> Non
         "/api/v1/auth/login", data={"username": "nobody@example.com", "password": "wrong"}
     )
     assert login.status_code == 401
+
+
+async def test_a_failed_rotation_leaves_the_presented_token_usable(
+    client: AsyncClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The revoke and its successor commit together.
+
+    Committing the revoke first and issuing afterwards left a window where a
+    failure in between killed the session outright: the token was already
+    revoked, no successor existed, and the client's natural retry with the old
+    token looked exactly like a replay — burning the whole family.
+    """
+    await client.post(
+        "/api/v1/auth/register",
+        json={"email": "rotate@example.com", "name": "R", "password": "correct-horse-1"},
+    )
+    login = await client.post(
+        "/api/v1/auth/login",
+        data={"username": "rotate@example.com", "password": "correct-horse-1"},
+    )
+    assert login.status_code == 200
+    refresh_cookie = login.cookies["refresh_token"]
+
+    # Fail at the point the successor is staged — after the revoke has been
+    # issued against the session, before anything is committed.
+    def _boom(*args: object, **kwargs: object) -> None:
+        raise RuntimeError("database went away mid-rotation")
+
+    monkeypatch.setattr("app.services.refresh_tokens._stage_token_pair", _boom)
+
+    with pytest.raises(RuntimeError):
+        await client.post(
+            "/api/v1/auth/refresh",
+            headers={"X-Requested-With": "XMLHttpRequest"},
+            cookies={"refresh_token": refresh_cookie},
+        )
+
+    monkeypatch.undo()
+
+    # The transaction rolled back, so the presented token was never really
+    # revoked and the retry works — rather than tripping reuse detection.
+    retry = await client.post(
+        "/api/v1/auth/refresh",
+        headers={"X-Requested-With": "XMLHttpRequest"},
+        cookies={"refresh_token": refresh_cookie},
+    )
+    assert retry.status_code == 200
+    assert retry.json()["access_token"]

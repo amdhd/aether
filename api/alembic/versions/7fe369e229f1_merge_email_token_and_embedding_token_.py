@@ -16,8 +16,8 @@ Create Date: 2026-09-18 19:27:40.530255
 """
 from typing import Sequence, Union
 
-from alembic import op
-import sqlalchemy as sa
+# No `op` / `sa` import: the generated template brings them in, but a merge
+# revision emits no DDL and ruff fails the build on the unused imports.
 
 
 # revision identifiers, used by Alembic.

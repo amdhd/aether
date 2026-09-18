@@ -107,3 +107,33 @@ async def test_redis_failure_falls_back_to_in_memory() -> None:
     # Despite Redis erroring, the call still enforces a limit (in-memory path).
     assert await rate_limit.check_tool_rate_limit(1, "web_search", 1) is True
     assert await rate_limit.check_tool_rate_limit(1, "web_search", 1) is False
+
+
+# --- client configuration ----------------------------------------------------
+
+
+def test_the_redis_client_is_built_with_timeouts() -> None:
+    """The fallback below catches exceptions, not hangs. Without these a wedged
+    node parks the request instead of degrading — and this limiter is a
+    dependency on every auth and chat call, so that is the whole request path."""
+    limiter = rate_limit._RedisLimiter.from_url("redis://localhost:6379/0")
+    kwargs = limiter._redis.connection_pool.connection_kwargs
+
+    assert kwargs["socket_timeout"] == rate_limit.REDIS_SOCKET_TIMEOUT_SECONDS
+    assert kwargs["socket_connect_timeout"] == rate_limit.REDIS_CONNECT_TIMEOUT_SECONDS
+    assert kwargs["health_check_interval"] == rate_limit.REDIS_HEALTH_CHECK_SECONDS
+
+
+async def test_a_redis_timeout_degrades_to_in_memory() -> None:
+    """Timeouts are the failure the two kwargs above turn a hang into, so the
+    fallback has to actually cover that class and not just ConnectionError."""
+    import redis.exceptions
+
+    class _TimingOutLimiter:
+        async def hit(self, key, limit):
+            raise redis.exceptions.TimeoutError("timed out reading from socket")
+
+    rate_limit.set_redis_limiter_for_test(_TimingOutLimiter())
+
+    assert await rate_limit.check_tool_rate_limit(1, "web_search", 1) is True
+    assert await rate_limit.check_tool_rate_limit(1, "web_search", 1) is False

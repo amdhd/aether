@@ -8,6 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_asyn
 from sqlalchemy.pool import NullPool, StaticPool
 
 from app.core.inflight import reset_inflight
+from app.core.login_backoff import reset_login_backoff
 from app.core.rate_limit import reset_rate_limits
 from app.db.base import Base
 from app.db.session import enable_sqlite_foreign_keys, get_db, get_session_factory
@@ -58,6 +59,9 @@ async def setup_database() -> AsyncGenerator[None, None]:
     reset_rate_limits()
     # A turn slot leaked by one test would 429 the next one.
     reset_inflight()
+    # Likewise a locked-out address: the bucket is keyed on the email, and tests
+    # reuse the same ones.
+    reset_login_backoff()
     yield
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.drop_all)

@@ -245,13 +245,23 @@ async def test_refresh_with_invalid_cookie(client: AsyncClient) -> None:
     assert resp.status_code == 401
 
 
+def _distinct_login(n: int) -> dict[str, str]:
+    """Credentials for a different account each call.
+
+    These tests measure the *per-IP* limiter, which exists to bound one caller
+    spraying many accounts. The per-account backoff has a lower threshold, so
+    reusing one address would trip that instead and the assertion would no
+    longer be about the limiter it names.
+    """
+    return {"username": f"nobody{n}@example.com", "password": "wrong"}
+
+
 async def test_login_rate_limit(client: AsyncClient) -> None:
-    payload = {"username": "nobody@example.com", "password": "wrong"}
-    for _ in range(settings.AUTH_RATE_LIMIT_PER_MINUTE):
-        resp = await client.post("/api/v1/auth/login", data=payload)
+    for n in range(settings.AUTH_RATE_LIMIT_PER_MINUTE):
+        resp = await client.post("/api/v1/auth/login", data=_distinct_login(n))
         assert resp.status_code == 401
 
-    resp = await client.post("/api/v1/auth/login", data=payload)
+    resp = await client.post("/api/v1/auth/login", data=_distinct_login(99))
     assert resp.status_code == 429
     assert "Retry-After" in resp.headers
 
@@ -281,23 +291,26 @@ async def test_auth_rate_limit_ignores_a_spoofed_forwarded_prefix(
     left let an attacker mint a fresh bucket per request and brute-force logins
     without limit; only the rightmost hop is ours to trust."""
     monkeypatch.setattr(settings, "TRUST_PROXY_HEADERS", True)
-    payload = {"username": "nobody@example.com", "password": "wrong"}
     # What the app receives once the ALB has appended the real peer: the client's
     # own (forged) value first, ours last.
     spoofed = lambda n: {"X-Forwarded-For": f"10.0.0.{n}, 203.0.113.7"}  # noqa: E731
 
     for n in range(settings.AUTH_RATE_LIMIT_PER_MINUTE):
-        resp = await client.post("/api/v1/auth/login", data=payload, headers=spoofed(n))
+        resp = await client.post(
+            "/api/v1/auth/login", data=_distinct_login(n), headers=spoofed(n)
+        )
         assert resp.status_code == 401
 
     # A brand-new forged prefix must not buy another window — the bucket belongs
     # to 203.0.113.7 either way.
-    limited = await client.post("/api/v1/auth/login", data=payload, headers=spoofed(99))
+    limited = await client.post("/api/v1/auth/login", data=_distinct_login(99), headers=spoofed(99))
     assert limited.status_code == 429
 
     # ...while a genuinely different client, as seen by the proxy, still gets one.
     other = await client.post(
-        "/api/v1/auth/login", data=payload, headers={"X-Forwarded-For": "10.0.0.1, 198.51.100.4"}
+        "/api/v1/auth/login",
+        data=_distinct_login(100),
+        headers={"X-Forwarded-For": "10.0.0.1, 198.51.100.4"},
     )
     assert other.status_code == 401
 
@@ -306,21 +319,20 @@ async def test_auth_rate_limit_uses_forwarded_ip_when_trusted(
     client: AsyncClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setattr(settings, "TRUST_PROXY_HEADERS", True)
-    payload = {"username": "nobody@example.com", "password": "wrong"}
 
-    for _ in range(settings.AUTH_RATE_LIMIT_PER_MINUTE):
+    for n in range(settings.AUTH_RATE_LIMIT_PER_MINUTE):
         resp = await client.post(
-            "/api/v1/auth/login", data=payload, headers={"X-Forwarded-For": "1.1.1.1"}
+            "/api/v1/auth/login", data=_distinct_login(n), headers={"X-Forwarded-For": "1.1.1.1"}
         )
         assert resp.status_code == 401
     limited = await client.post(
-        "/api/v1/auth/login", data=payload, headers={"X-Forwarded-For": "1.1.1.1"}
+        "/api/v1/auth/login", data=_distinct_login(99), headers={"X-Forwarded-For": "1.1.1.1"}
     )
     assert limited.status_code == 429
 
     # A different forwarded client IP gets its own bucket.
     other = await client.post(
-        "/api/v1/auth/login", data=payload, headers={"X-Forwarded-For": "2.2.2.2"}
+        "/api/v1/auth/login", data=_distinct_login(100), headers={"X-Forwarded-For": "2.2.2.2"}
     )
     assert other.status_code == 401
 
@@ -328,15 +340,14 @@ async def test_auth_rate_limit_uses_forwarded_ip_when_trusted(
 async def test_auth_rate_limit_ignores_forwarded_ip_when_untrusted(client: AsyncClient) -> None:
     # TRUST_PROXY_HEADERS is off by default, so a spoofed X-Forwarded-For must
     # not let a caller escape the limit by rotating the header value.
-    payload = {"username": "nobody@example.com", "password": "wrong"}
-    for _ in range(settings.AUTH_RATE_LIMIT_PER_MINUTE):
+    for n in range(settings.AUTH_RATE_LIMIT_PER_MINUTE):
         resp = await client.post(
-            "/api/v1/auth/login", data=payload, headers={"X-Forwarded-For": "1.1.1.1"}
+            "/api/v1/auth/login", data=_distinct_login(n), headers={"X-Forwarded-For": "1.1.1.1"}
         )
         assert resp.status_code == 401
 
     resp = await client.post(
-        "/api/v1/auth/login", data=payload, headers={"X-Forwarded-For": "9.9.9.9"}
+        "/api/v1/auth/login", data=_distinct_login(99), headers={"X-Forwarded-For": "9.9.9.9"}
     )
     assert resp.status_code == 429
 

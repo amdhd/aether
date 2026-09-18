@@ -7,6 +7,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import get_current_user, require_csrf_header
 from app.core.config import settings
+from app.core import login_backoff
 from app.core.rate_limit import enforce_auth_rate_limit
 from app.core.security import fake_verify_password, hash_password, verify_password
 from app.db.session import get_db
@@ -98,6 +99,17 @@ async def login(
     form_data: OAuth2PasswordRequestForm = Depends(),
     db: AsyncSession = Depends(get_db),
 ) -> AccessToken:
+    # The per-IP limiter above bounds one caller; this bounds attempts against
+    # one *account*, which rotating addresses would otherwise make unlimited.
+    # Checked before the lookup so a locked address costs nothing to refuse.
+    retry_after = await login_backoff.seconds_until_retry(form_data.username)
+    if retry_after:
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail="Too many failed sign-in attempts for this account. Try again shortly.",
+            headers={"Retry-After": str(retry_after)},
+        )
+
     user = await db.scalar(select(User).where(User.email == form_data.username))
     # Run a bcrypt comparison on both branches so a missing account and a wrong
     # password are indistinguishable by timing (prevents email enumeration).
@@ -107,11 +119,20 @@ async def login(
     else:
         password_ok = verify_password(form_data.password, user.password_hash)
     if user is None or not password_ok:
+        # Counted for unknown addresses too. A counter that only applied to real
+        # accounts would answer "does this address exist?" through the lockout —
+        # a cleaner oracle than the timing difference the branch above exists to
+        # erase.
+        await login_backoff.record_failure(form_data.username)
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Incorrect email or password",
             headers={"WWW-Authenticate": "Bearer"},
         )
+
+    # Whoever knows the password owns the account, so an attacker's failed run
+    # must not keep delaying the person it belongs to.
+    await login_backoff.clear(form_data.username)
     tokens = await refresh_tokens.issue_token_pair(db, user)
     return _token_response(response, tokens)
 

@@ -914,3 +914,90 @@ async def test_a_failed_context_build_streams_an_error_event(
     assert resp.status_code == 200
     assert "event: error" in resp.text
     assert "db is down" not in resp.text
+
+
+# --- attachment context budget ------------------------------------------------
+#
+# Each uploaded file is bounded at MAX_ATTACHMENT_BYTES, but nothing bounded the
+# sum. The recent-verbatim window is a count of messages, so a run of large
+# uploads inside it was out of summarization's reach however big it got, and the
+# turn died on a provider 400 — then stayed dead, because the user message is
+# committed first and every retry added another.
+
+
+async def _conversation_with_attachments(db: AsyncSession, user_id: int, sizes: list[int]) -> Conversation:
+    conversation = Conversation(user_id=user_id, title="Uploads")
+    db.add(conversation)
+    await db.commit()
+    await db.refresh(conversation)
+
+    for index, size in enumerate(sizes):
+        db.add(
+            Message(
+                conversation_id=conversation.id,
+                role=MessageRole.user,
+                content=f"file {index}",
+                attachment_name=f"file{index}.csv",
+                attachment_content=f"{index}" * size,
+            )
+        )
+    await db.commit()
+    return conversation
+
+
+async def test_a_run_of_large_attachments_stays_within_the_budget() -> None:
+    from app.agent.loop import MAX_ATTACHMENT_CONTEXT_CHARS, _build_context
+
+    async with TestingSessionLocal() as db:
+        user = User(email="uploads@example.com", name="U", password_hash="x")
+        db.add(user)
+        await db.commit()
+        await db.refresh(user)
+        # Ten at the per-file ceiling is the case from the report: all ten sit
+        # inside the recent window, so nothing folds them.
+        conversation = await _conversation_with_attachments(db, user.id, [200_000] * 10)
+
+        context = await _build_context(db, conversation)
+
+    total = sum(len(m["content"] or "") for m in context)
+    assert total < MAX_ATTACHMENT_CONTEXT_CHARS * 2  # payload + fencing, not 2 MB
+
+
+async def test_the_newest_attachment_is_the_one_kept() -> None:
+    """Dropping from the newest end would leave the model holding an old upload
+    while the file the user just sent is missing."""
+    from app.agent.loop import _build_context
+
+    async with TestingSessionLocal() as db:
+        user = User(email="newest@example.com", name="N", password_hash="x")
+        db.add(user)
+        await db.commit()
+        await db.refresh(user)
+        conversation = await _conversation_with_attachments(db, user.id, [150_000, 150_000])
+
+        context = await _build_context(db, conversation)
+
+    joined = "\n".join(m["content"] or "" for m in context)
+    assert "1" * 1000 in joined, "the newest attachment must survive"
+    assert "0" * 1000 not in joined, "the older one is over budget"
+    # Dropped, but not silently: the model has to be able to say the file is gone
+    # rather than answer about one it cannot see.
+    assert "file0.csv" in joined
+    assert "no longer in context" in joined
+
+
+async def test_a_single_attachment_is_untouched() -> None:
+    from app.agent.loop import _build_context
+
+    async with TestingSessionLocal() as db:
+        user = User(email="single@example.com", name="S", password_hash="x")
+        db.add(user)
+        await db.commit()
+        await db.refresh(user)
+        conversation = await _conversation_with_attachments(db, user.id, [199_000])
+
+        context = await _build_context(db, conversation)
+
+    joined = "\n".join(m["content"] or "" for m in context)
+    assert "0" * 199_000 in joined
+    assert "no longer in context" not in joined

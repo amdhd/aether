@@ -7,6 +7,7 @@ from app.api.router import api_router
 from app.core.body_limit import MaxBodySizeMiddleware
 from app.core.config import settings
 from app.core.logging import configure_logging
+from app.core.security_headers import SecurityHeadersMiddleware
 from app.core.tracing import configure_tracing
 from app.db.session import engine, get_db
 
@@ -33,6 +34,21 @@ app.add_middleware(
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
+)
+
+# Added last, so it is the outermost layer and decorates every response —
+# including the body limit's 413 and CORS's preflight replies, neither of which
+# reaches a route handler.
+#
+# no-store covers /auth: those response bodies carry access tokens, and the
+# refresh endpoints set the session cookie. Nothing declares them uncacheable
+# otherwise, and "no explicit headers" is not the same as "no cache will store
+# it". The CSP is suppressed wherever the docs are served, because Swagger UI is
+# a real HTML page that loads its own scripts and styles.
+app.add_middleware(
+    SecurityHeadersMiddleware,
+    no_store_prefixes=(f"{settings.API_V1_PREFIX}/auth",),
+    send_csp=not _docs_enabled,
 )
 
 app.include_router(api_router, prefix=settings.API_V1_PREFIX)

@@ -19,6 +19,11 @@ from pathlib import Path
 import pytest
 from alembic.config import Config
 from alembic.script import ScriptDirectory
+from sqlalchemy import inspect as sa_inspect
+from sqlalchemy.ext.asyncio import create_async_engine
+
+import app.models  # noqa: F401  (registers every model on Base.metadata)
+from app.db.base import Base
 
 API_ROOT = Path(__file__).resolve().parents[1]
 
@@ -74,3 +79,80 @@ def test_the_chain_upgrades_from_empty_to_head(tmp_path: Path) -> None:
 
     assert result.returncode == 0, f"alembic upgrade head failed:\n{result.stderr}"
     assert db.exists()
+
+
+# --- the migrations and the models must describe the same schema --------------
+
+
+def _collect(sync_conn) -> dict[str, dict]:
+    inspector = sa_inspect(sync_conn)
+    schema: dict[str, dict] = {}
+    for table in inspector.get_table_names():
+        if table == "alembic_version":
+            continue
+        schema[table] = {
+            "columns": {c["name"] for c in inspector.get_columns(table)},
+            "indexes": {
+                (tuple(ix["column_names"]), bool(ix.get("unique")))
+                for ix in inspector.get_indexes(table)
+            },
+        }
+    return schema
+
+
+async def _schema_of(db_path: Path) -> dict[str, dict]:
+    engine = create_async_engine(f"sqlite+aiosqlite:///{db_path}")
+    try:
+        async with engine.connect() as conn:
+            return await conn.run_sync(_collect)
+    finally:
+        await engine.dispose()
+
+
+async def test_the_migrated_schema_matches_the_models(tmp_path: Path) -> None:
+    """Migrating from empty must land on what the models describe.
+
+    These are two independent descriptions of one schema, and only the models
+    are exercised by the suite — everything else here builds its tables with
+    `Base.metadata.create_all`. So a column or index added to a model without a
+    matching migration passes every other test and is simply missing in
+    production, where `create_all` never runs.
+
+    Always SQLite, on both CI legs: the comparison is between the two
+    descriptions, not between database engines.
+    """
+    migrated_db = tmp_path / "migrated.db"
+    result = subprocess.run(
+        [sys.executable, "-m", "alembic", "upgrade", "head"],
+        cwd=API_ROOT,
+        env={
+            "PATH": "/usr/bin:/bin",
+            "DATABASE_URL": f"sqlite+aiosqlite:///{migrated_db}",
+            "ENVIRONMENT": "development",
+        },
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 0, f"alembic upgrade head failed:\n{result.stderr}"
+
+    declared_db = tmp_path / "declared.db"
+    engine = create_async_engine(f"sqlite+aiosqlite:///{declared_db}")
+    try:
+        async with engine.begin() as conn:
+            await conn.run_sync(Base.metadata.create_all)
+    finally:
+        await engine.dispose()
+
+    migrated = await _schema_of(migrated_db)
+    declared = await _schema_of(declared_db)
+
+    assert set(migrated) == set(declared), "tables differ between migrations and models"
+    for table in sorted(migrated):
+        assert migrated[table]["columns"] == declared[table]["columns"], (
+            f"{table}: columns differ between migrations and models"
+        )
+        assert migrated[table]["indexes"] == declared[table]["indexes"], (
+            f"{table}: indexes differ — "
+            f"only in migrations: {migrated[table]['indexes'] - declared[table]['indexes']}, "
+            f"only in models: {declared[table]['indexes'] - migrated[table]['indexes']}"
+        )

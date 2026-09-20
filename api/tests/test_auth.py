@@ -3,6 +3,7 @@ import asyncio
 import pytest
 from httpx import AsyncClient
 from sqlalchemy import update
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
 from app.models.refresh_token import RefreshToken
@@ -507,3 +508,33 @@ async def test_a_failed_rotation_leaves_the_presented_token_usable(
     )
     assert retry.status_code == 200
     assert retry.json()["access_token"]
+
+
+async def test_a_concurrent_duplicate_registration_is_a_400_not_a_500(
+    client: AsyncClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The existence check and the insert are not one atomic step, so two
+    registrations for one address can both pass the check and the second hits
+    the unique constraint. Registration is public and unauthenticated, so an
+    unhandled 500 there is both a worse answer than the 400 the checked path
+    gives and a line of noise in error alerting."""
+    creds = {"email": "racer@example.com", "name": "R", "password": "correct-horse-1"}
+    first = await client.post("/api/v1/auth/register", json=creds)
+    assert first.status_code == 201
+
+    # Stand in for losing the race: the existence check misses, so the insert
+    # proceeds into the constraint the first registration already satisfied.
+    real_scalar = AsyncSession.scalar
+    calls = {"n": 0}
+
+    async def check_misses_once(self, *args: object, **kwargs: object):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            return None
+        return await real_scalar(self, *args, **kwargs)
+
+    monkeypatch.setattr(AsyncSession, "scalar", check_misses_once)
+
+    second = await client.post("/api/v1/auth/register", json=creds)
+    assert second.status_code == 400
+    assert second.json()["detail"] == "Email already registered"

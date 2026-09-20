@@ -194,6 +194,29 @@ class Settings(BaseSettings):
                 raise ValueError("SECRET_KEY must be set to a real secret when ENVIRONMENT=production")
             if not self.ENCRYPTION_KEY:
                 raise ValueError("ENCRYPTION_KEY must be set when ENVIRONMENT=production")
+
+            origins = [o.strip() for o in self.FRONTEND_ORIGIN.split(",") if o.strip()]
+            # app.main pairs this allowlist with allow_credentials=True, and the
+            # two are only safe together because the list is explicit. A wildcard
+            # there means any site a signed-in user visits can call this API with
+            # their cookies attached and read the replies. Browsers reject the
+            # literal combination, but Starlette also treats "*" as "echo the
+            # caller's Origin back", which is the same hole with the check
+            # passed — so refuse it here rather than rely on the browser.
+            if "*" in origins:
+                raise ValueError(
+                    "FRONTEND_ORIGIN must list explicit origins when ENVIRONMENT=production; "
+                    "'*' with credentialed CORS lets any site read authenticated responses"
+                )
+            if not origins:
+                raise ValueError("FRONTEND_ORIGIN must be set when ENVIRONMENT=production")
+            # Mailed links are built from the first entry, so a scheme-less value
+            # produces links that do not resolve.
+            for origin in origins:
+                if not origin.startswith(("http://", "https://")):
+                    raise ValueError(
+                        f"FRONTEND_ORIGIN entry {origin!r} must include a scheme (https://...)"
+                    )
         return self
 
 

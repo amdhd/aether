@@ -5,7 +5,9 @@ from httpx import AsyncClient
 
 from app.core.config import settings
 from app.core.security import create_oauth_state_token
+from app.models.user import User
 from app.services import google_oauth
+from tests.conftest import TestingSessionLocal
 
 
 @pytest.fixture(autouse=True)
@@ -287,3 +289,53 @@ async def test_get_valid_access_token_refreshes_when_expired(
         access_token = await google_oauth.get_valid_access_token(session, user)
 
     assert access_token == "access-new"
+
+
+async def test_a_concurrent_oauth_callback_does_not_500(monkeypatch: pytest.MonkeyPatch) -> None:
+    """google_credentials.user_id is unique and the read-then-insert is not
+    atomic, so two callbacks arriving together — a double-clicked consent
+    screen, a retried redirect — both find no row and both insert. The loser
+    should end up with the credential the winner wrote, not a 500."""
+    token_data = {
+        "access_token": "access-123",
+        "refresh_token": "refresh-456",
+        "expires_in": 3600,
+        "scope": settings.GOOGLE_OAUTH_SCOPES,
+    }
+
+    async with TestingSessionLocal() as db:
+        user = User(email="oauth-race@example.com", name="O", password_hash="x")
+        db.add(user)
+        await db.commit()
+        await db.refresh(user)
+        # Captured before the losing path rolls back: a rollback expires every
+        # instance, and reading an expired attribute under the async engine
+        # emits a sync SELECT and raises MissingGreenlet.
+        user_id = user.id
+
+        first = await google_oauth.upsert_credential(db, user, token_data)
+        assert first is not None
+        winner_id = first.id
+
+        # Stand in for losing the race: the existence check misses, so the
+        # insert proceeds into the constraint the winner already satisfied.
+        real_get = google_oauth.get_credential
+        calls = {"n": 0}
+
+        async def miss_once(session, for_user):
+            calls["n"] += 1
+            if calls["n"] == 1:
+                return None
+            return await real_get(session, for_user)
+
+        monkeypatch.setattr(google_oauth, "get_credential", miss_once)
+
+        credential = await google_oauth.upsert_credential(db, user, token_data)
+
+        # Read inside the session: the losing path rolls back, which expires
+        # every instance, so touching these after the block would lazy-load on
+        # a closed session rather than assert anything.
+        assert credential is not None
+        assert credential.user_id == user_id
+        # The winner's row, recovered — not a second row, and not a 500.
+        assert credential.id == winner_id

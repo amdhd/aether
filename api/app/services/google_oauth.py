@@ -4,6 +4,7 @@ from urllib.parse import urlencode
 
 import httpx
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
@@ -70,6 +71,11 @@ async def get_credential(db: AsyncSession, user: User) -> GoogleCredential | Non
 
 
 async def upsert_credential(db: AsyncSession, user: User, token_data: dict[str, Any]) -> GoogleCredential:
+    # Read before any commit or rollback. A rollback expires every instance in
+    # the session, and reading an expired attribute emits a synchronous SELECT,
+    # which raises MissingGreenlet under the async engine — so the recovery path
+    # below cannot touch `user` at all.
+    user_id = user.id
     expires_in = token_data.get("expires_in", 3600)
     expiry = datetime.now(timezone.utc) + timedelta(seconds=expires_in)
     refresh_token = token_data.get("refresh_token")
@@ -79,7 +85,7 @@ async def upsert_credential(db: AsyncSession, user: User, token_data: dict[str, 
         if not refresh_token:
             raise ValueError("Google did not return a refresh token; reconnect and grant offline access.")
         credential = GoogleCredential(
-            user_id=user.id,
+            user_id=user_id,
             access_token_encrypted=encrypt_token(token_data["access_token"]),
             refresh_token_encrypted=encrypt_token(refresh_token),
             token_expiry=expiry,
@@ -94,7 +100,24 @@ async def upsert_credential(db: AsyncSession, user: User, token_data: dict[str, 
         if token_data.get("scope"):
             credential.scope = token_data["scope"]
 
-    await db.commit()
+    try:
+        await db.commit()
+    except IntegrityError:
+        # google_credentials.user_id is unique, and the read-then-insert above
+        # is not atomic: OAuth callbacks arriving together (a double-clicked
+        # consent screen, a retried redirect) both find no row and both insert.
+        # The loser re-reads what the winner wrote, which is the same connection
+        # either way, so there is nothing to tell the user about.
+        await db.rollback()
+        credential = (
+            await db.scalars(select(GoogleCredential).where(GoogleCredential.user_id == user_id))
+        ).first()
+        if credential is None:
+            # The constraint that fired was not the one we are recovering from,
+            # so this is not the race — don't dress it up as success.
+            raise
+        return credential
+
     await db.refresh(credential)
     return credential
 

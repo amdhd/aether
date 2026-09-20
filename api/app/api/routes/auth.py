@@ -3,6 +3,7 @@ from datetime import datetime, timezone
 from fastapi import APIRouter, BackgroundTasks, Cookie, Depends, HTTPException, Response, status
 from fastapi.security import OAuth2PasswordRequestForm
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import get_current_user, require_csrf_header
@@ -79,7 +80,18 @@ async def register(
         password_hash=hash_password(user_in.password),
     )
     db.add(user)
-    await db.commit()
+    try:
+        await db.commit()
+    except IntegrityError:
+        # The check above is not atomic with this insert, so two registrations
+        # for one address can both pass it and the second hits the unique
+        # constraint. Rare, but this is a public unauthenticated endpoint — an
+        # unhandled 500 here is both a worse answer than the 400 the first
+        # branch gives and a line of noise in error alerting.
+        await db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail="Email already registered"
+        ) from None
     await db.refresh(user)
 
     # Mint the verification token inside the request (it needs the session, which

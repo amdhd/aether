@@ -378,3 +378,141 @@ async def test_update_task_does_not_half_apply_a_rejected_change() -> None:
         assert stored is not None
         assert stored.title == "Original"
         assert stored.priority == TaskPriority.low
+
+
+# --- calendar create is idempotent -------------------------------------------
+#
+# A POST that times out *after* Google created the event makes the tool report a
+# failure the model may retry. Without a stable id, that retry books a second
+# entry on a real calendar.
+
+
+class _ScriptedCalendarClient:
+    """Answers each call from a script, recording what it was asked."""
+
+    def __init__(self, posts: list[_FakeResponse], gets: list[_FakeResponse] | None = None) -> None:
+        self._posts = list(posts)
+        self._gets = list(gets or [])
+        self.post_bodies: list[dict] = []
+        self.get_urls: list[str] = []
+
+    async def __aenter__(self) -> "_ScriptedCalendarClient":
+        return self
+
+    async def __aexit__(self, *args: object) -> None:
+        return None
+
+    async def post(self, url: str, json: dict | None = None, headers: dict | None = None):
+        # A copy: the real client serialises the body at call time, so recording
+        # a reference would let a later mutation rewrite what this call sent.
+        self.post_bodies.append(dict(json or {}))
+        return self._posts.pop(0)
+
+    async def get(self, url: str, params: dict | None = None, headers: dict | None = None):
+        self.get_urls.append(url)
+        return self._gets.pop(0)
+
+
+EVENT_ARGS = {
+    "summary": "Doctor appointment",
+    "start": "2026-06-16T09:00:00+08:00",
+    "end": "2026-06-16T10:00:00+08:00",
+}
+
+
+def _calendar_token(monkeypatch: pytest.MonkeyPatch) -> None:
+    async def fake_get_token(db, user):
+        return "access-token"
+
+    monkeypatch.setattr("app.agent.tools.google_oauth.get_valid_access_token", fake_get_token)
+
+
+def test_the_event_id_is_stable_for_the_same_event() -> None:
+    from app.agent.tools import _deterministic_event_id
+
+    first = _deterministic_event_id(1, EVENT_ARGS)
+    assert first == _deterministic_event_id(1, dict(EVENT_ARGS))
+    # Same slot, different person.
+    assert first != _deterministic_event_id(2, EVENT_ARGS)
+    # Same person, different slot.
+    assert first != _deterministic_event_id(1, {**EVENT_ARGS, "start": "2026-06-17T09:00:00+08:00"})
+    # Editing a typo in the description must not make it a different event.
+    assert first == _deterministic_event_id(1, {**EVENT_ARGS, "description": "bring records"})
+
+
+def test_the_event_id_uses_only_characters_google_accepts() -> None:
+    """Google requires base32hex — digits and a-v — and 5 to 1024 characters."""
+    from app.agent.tools import _deterministic_event_id
+
+    event_id = _deterministic_event_id(1, EVENT_ARGS)
+    assert 5 <= len(event_id) <= 1024
+    assert set(event_id) <= set("0123456789abcdefghijklmnopqrstuv")
+
+
+async def test_a_retried_create_returns_the_existing_event(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Google refuses the duplicate id; the event is already there, so report it
+    rather than booking a second one."""
+    _calendar_token(monkeypatch)
+    existing = {
+        "id": "abc",
+        "summary": "Doctor appointment",
+        "start": {"dateTime": EVENT_ARGS["start"]},
+        "end": {"dateTime": EVENT_ARGS["end"]},
+        "htmlLink": "https://calendar.google.com/event?eid=abc",
+    }
+    client = _ScriptedCalendarClient(
+        posts=[_FakeResponse({"error": "duplicate"}, status_code=409)],
+        gets=[_FakeResponse(existing)],
+    )
+    monkeypatch.setattr("app.agent.tools.httpx.AsyncClient", lambda **kwargs: client)
+
+    result = json.loads(await call_tool("calendar_create_event", EVENT_ARGS, None, SimpleNamespace(id=1)))
+
+    assert result["event"]["id"] == "abc"
+    # One insert attempt, not two: no second event was created.
+    assert len(client.post_bodies) == 1
+
+
+async def test_a_deleted_event_can_be_created_again(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Google does not reliably free a deleted event's id, so a 409 can be the
+    tombstone of an event the user deleted. Reporting success there would tell
+    them their calendar holds something it does not."""
+    _calendar_token(monkeypatch)
+    recreated = {
+        "id": "server-assigned",
+        "summary": "Doctor appointment",
+        "start": {"dateTime": EVENT_ARGS["start"]},
+        "end": {"dateTime": EVENT_ARGS["end"]},
+        "htmlLink": "https://calendar.google.com/event?eid=server-assigned",
+    }
+    client = _ScriptedCalendarClient(
+        posts=[_FakeResponse({"error": "duplicate"}, status_code=409), _FakeResponse(recreated)],
+        gets=[_FakeResponse({}, status_code=404)],
+    )
+    monkeypatch.setattr("app.agent.tools.httpx.AsyncClient", lambda **kwargs: client)
+
+    result = json.loads(await call_tool("calendar_create_event", EVENT_ARGS, None, SimpleNamespace(id=1)))
+
+    assert result["event"]["id"] == "server-assigned"
+    # The retry drops the id and lets Google assign one.
+    assert "id" in client.post_bodies[0]
+    assert "id" not in client.post_bodies[1]
+
+
+async def test_a_cancelled_event_is_treated_as_gone(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A deleted event can answer 200 with status "cancelled" rather than 404,
+    which names nothing the user would see either."""
+    _calendar_token(monkeypatch)
+    client = _ScriptedCalendarClient(
+        posts=[
+            _FakeResponse({"error": "duplicate"}, status_code=409),
+            _FakeResponse({"id": "fresh", "summary": "Doctor appointment"}),
+        ],
+        gets=[_FakeResponse({"id": "abc", "status": "cancelled"})],
+    )
+    monkeypatch.setattr("app.agent.tools.httpx.AsyncClient", lambda **kwargs: client)
+
+    result = json.loads(await call_tool("calendar_create_event", EVENT_ARGS, None, SimpleNamespace(id=1)))
+
+    assert result["event"]["id"] == "fresh"
+    assert len(client.post_bodies) == 2

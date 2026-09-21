@@ -113,3 +113,71 @@ describe('streamChatMessage error messages', () => {
     await expect(streamChatMessage(1, 'hi', {})).rejects.toThrow('Something went wrong (error 502). Please try again.')
   })
 })
+
+describe('streamChatMessage idempotency', () => {
+  const headersOf = (call: number) =>
+    (fetchMock.mock.calls[call][1] as RequestInit).headers as Record<string, string>
+
+  it('reuses one key across the 401 refresh retry', async () => {
+    // The retry re-POSTs the same body. Minting a second key there would make
+    // the server treat one send as two attempts, which is the duplicate the
+    // header exists to prevent.
+    fetchMock
+      .mockResolvedValueOnce(new Response(null, { status: 401 }))
+      .mockResolvedValueOnce(
+        new Response('event: done\ndata: {"conversation_title":"T"}\n\n', {
+          status: 200,
+          headers: { 'Content-Type': 'text/event-stream' },
+        }),
+      )
+    refreshMock.mockResolvedValue('fresh-token')
+
+    await streamChatMessage(1, 'hi', {})
+
+    expect(fetchMock).toHaveBeenCalledTimes(2)
+    expect(headersOf(0)['Idempotency-Key']).toBeTruthy()
+    expect(headersOf(1)['Idempotency-Key']).toBe(headersOf(0)['Idempotency-Key'])
+  })
+
+  it('mints a different key for a different send', async () => {
+    // Reusing one across two real messages would have the server silently drop
+    // the second — the opposite failure.
+    const ok = () =>
+      new Response('event: done\ndata: {"conversation_title":"T"}\n\n', {
+        status: 200,
+        headers: { 'Content-Type': 'text/event-stream' },
+      })
+    fetchMock.mockResolvedValueOnce(ok()).mockResolvedValueOnce(ok())
+    useAuthStore.setState({ accessToken: 'good-token' })
+
+    await streamChatMessage(1, 'one', {})
+    await streamChatMessage(1, 'two', {})
+
+    expect(headersOf(1)['Idempotency-Key']).not.toBe(headersOf(0)['Idempotency-Key'])
+  })
+
+  it('reports a refused duplicate as a replay rather than an empty answer', async () => {
+    fetchMock.mockResolvedValue(
+      new Response(
+        'event: replay\ndata: {"message":"That message was already sent.","conversation_title":"T"}\n\n' +
+          'event: done\ndata: {"conversation_title":"T"}\n\n',
+        { status: 200, headers: { 'Content-Type': 'text/event-stream' } },
+      ),
+    )
+    useAuthStore.setState({ accessToken: 'good-token' })
+
+    let replayed = ''
+    const tokens: string[] = []
+    await streamChatMessage(1, 'hi', {
+      onReplay: (data) => {
+        replayed = data.message
+      },
+      onToken: (chunk) => tokens.push(chunk),
+    })
+
+    expect(replayed).toBe('That message was already sent.')
+    // Nothing streamed, which is why the caller has to reload rather than keep
+    // what it has on screen.
+    expect(tokens).toEqual([])
+  })
+})

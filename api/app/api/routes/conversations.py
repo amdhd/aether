@@ -1,13 +1,23 @@
-from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile, status
+from fastapi import (
+    APIRouter,
+    Depends,
+    File,
+    Form,
+    Header,
+    HTTPException,
+    Query,
+    UploadFile,
+    status,
+)
 from fastapi.responses import StreamingResponse
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from app.agent.loop import stream_agent_response
+from app.agent.loop import stream_agent_response, stream_replayed_turn
 from app.api.deps import get_current_user, get_owned_or_404
 from app.core.config import settings
 from app.core.cost_cap import enforce_monthly_cost_cap
-from app.core.inflight import acquire_turn_slot
+from app.core.inflight import acquire_turn_slot, release_turn_slot
 from app.core.rate_limit import enforce_chat_rate_limit
 from app.db.session import get_db, get_session_factory
 from app.models.conversation import Conversation
@@ -20,9 +30,15 @@ from app.schemas.conversation import (
     ConversationRead,
     ConversationUpdate,
 )
+from app.services import idempotency
 from app.services.attachments import MAX_ATTACHMENT_BYTES, parse_tabular_file
 
 router = APIRouter(prefix="/conversations", tags=["conversations"])
+
+# Idempotency keys are namespaced per endpoint; this is this endpoint's name.
+SEND_MESSAGE_SCOPE = "conversations.send_message"
+
+_SSE_HEADERS = {"Cache-Control": "no-cache", "X-Accel-Buffering": "no"}
 
 
 async def _get_owned_conversation(conversation_id: int, user: User, db: AsyncSession) -> Conversation:
@@ -98,6 +114,9 @@ async def send_message(
     conversation_id: int,
     content: str = Form(..., min_length=1, max_length=MAX_MESSAGE_CHARS),
     file: UploadFile | None = File(default=None),
+    idempotency_key: str | None = Header(
+        default=None, alias="Idempotency-Key", max_length=idempotency.MAX_KEY_LENGTH
+    ),
     current_user: User = Depends(enforce_chat_rate_limit),
     _budget: User = Depends(enforce_monthly_cost_cap),
     db: AsyncSession = Depends(get_db),
@@ -132,6 +151,33 @@ async def send_message(
             headers={"Retry-After": "5"},
         )
 
+    # Read before the claim below. Its duplicate path rolls back, and a rollback
+    # expires every instance in the session whatever expire_on_commit says — so
+    # touching `conversation` afterwards would emit a synchronous SELECT and
+    # raise MissingGreenlet under the async engine.
+    conversation_title = conversation.title
+
+    # Claimed after the slot, so that a 429 above leaves the key unspent and the
+    # caller can retry with it. Everything that can refuse this request — auth,
+    # the rate limit, the cost cap, a bad upload, a missing provider key — also
+    # sits above this line, because a key spent on a request that never ran
+    # would refuse the retry that should have worked.
+    #
+    # Below this line the turn starts, and a retry from here on is the duplicate
+    # this exists to stop: it would re-bill a full turn and append a second copy
+    # of the user's message, which history then replays verbatim forever.
+    if idempotency_key and not await idempotency.claim(
+        db, current_user, SEND_MESSAGE_SCOPE, idempotency_key
+    ):
+        # Hand the slot back: this request is not going to run a turn, and
+        # holding it would count against the user's concurrent-turn ceiling.
+        await release_turn_slot(slot)
+        return StreamingResponse(
+            stream_replayed_turn(conversation_title),
+            media_type="text/event-stream",
+            headers=_SSE_HEADERS,
+        )
+
     # The slot travels with the generator: it records which counter granted it,
     # and only that counter can correctly take it back.
     return StreamingResponse(
@@ -145,5 +191,5 @@ async def send_message(
             slot=slot,
         ),
         media_type="text/event-stream",
-        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+        headers=_SSE_HEADERS,
     )

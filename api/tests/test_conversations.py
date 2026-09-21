@@ -1002,3 +1002,168 @@ async def test_a_single_attachment_is_untouched() -> None:
     joined = "\n".join(m["content"] or "" for m in context)
     assert "0" * 199_000 in joined
     assert "no longer in context" not in joined
+
+
+# --- idempotency --------------------------------------------------------------
+#
+# The chat write streams, so a mid-turn network drop is exactly when a client
+# retries — and the retry re-bills a whole LLM turn and appends a second copy of
+# the user's message, which history then replays verbatim forever.
+
+
+async def _send(
+    client: AsyncClient, conversation_id: int, headers: dict[str, str], key: str | None = None
+):
+    extra = dict(headers)
+    if key is not None:
+        extra["Idempotency-Key"] = key
+    return await client.post(
+        f"/api/v1/conversations/{conversation_id}/messages", data={"content": "Hi"}, headers=extra
+    )
+
+
+async def _new_conversation(client: AsyncClient, headers: dict[str, str]) -> int:
+    resp = await client.post("/api/v1/conversations", json={}, headers=headers)
+    return resp.json()["id"]
+
+
+async def test_a_retried_send_does_not_run_a_second_turn(
+    client: AsyncClient, auth_headers: dict[str, str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    fake = _patch_deepseek(
+        monkeypatch,
+        responses=[[_content_chunk("First reply."), _usage_chunk(10, 5)]],
+    )
+    conversation_id = await _new_conversation(client, auth_headers)
+
+    first = await _send(client, conversation_id, auth_headers, key="key-1")
+    assert first.status_code == 200
+    assert "First reply." in first.text
+
+    replay = await _send(client, conversation_id, auth_headers, key="key-1")
+    assert replay.status_code == 200
+    assert "event: replay" in replay.text
+    # The money assertion: the provider was called once, not twice.
+    assert fake.chat.completions.call_count == 1
+
+
+async def test_a_retried_send_does_not_duplicate_the_user_message(
+    client: AsyncClient, auth_headers: dict[str, str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _patch_deepseek(monkeypatch, responses=[[_content_chunk("Reply."), _usage_chunk(10, 5)]])
+    conversation_id = await _new_conversation(client, auth_headers)
+
+    await _send(client, conversation_id, auth_headers, key="key-2")
+    await _send(client, conversation_id, auth_headers, key="key-2")
+
+    detail = await client.get(f"/api/v1/conversations/{conversation_id}", headers=auth_headers)
+    roles = [m["role"] for m in detail.json()["messages"]]
+    assert roles == ["user", "assistant"]
+
+
+async def test_the_replay_still_terminates_the_stream(
+    client: AsyncClient, auth_headers: dict[str, str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`done` follows the replay event so a client written before this existed
+    ignores the unknown event and ends cleanly instead of hanging."""
+    _patch_deepseek(monkeypatch, responses=[[_content_chunk("Reply."), _usage_chunk(10, 5)]])
+    conversation_id = await _new_conversation(client, auth_headers)
+
+    await _send(client, conversation_id, auth_headers, key="key-3")
+    replay = await _send(client, conversation_id, auth_headers, key="key-3")
+
+    assert "event: replay" in replay.text
+    assert "event: done" in replay.text
+    # Not a token of model output, which is the thing it must not fabricate.
+    assert "event: token" not in replay.text
+
+
+async def test_a_different_key_sends_a_new_message(
+    client: AsyncClient, auth_headers: dict[str, str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    fake = _patch_deepseek(
+        monkeypatch,
+        responses=[
+            [_content_chunk("One."), _usage_chunk(10, 5)],
+            [_content_chunk("Two."), _usage_chunk(10, 5)],
+        ],
+    )
+    conversation_id = await _new_conversation(client, auth_headers)
+
+    assert (await _send(client, conversation_id, auth_headers, key="key-a")).status_code == 200
+    assert (await _send(client, conversation_id, auth_headers, key="key-b")).status_code == 200
+    assert fake.chat.completions.call_count == 2
+
+
+async def test_a_send_without_a_key_is_unaffected(
+    client: AsyncClient, auth_headers: dict[str, str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The header is optional, so a client that does not send one behaves
+    exactly as before rather than being refused."""
+    fake = _patch_deepseek(
+        monkeypatch,
+        responses=[
+            [_content_chunk("One."), _usage_chunk(10, 5)],
+            [_content_chunk("Two."), _usage_chunk(10, 5)],
+        ],
+    )
+    conversation_id = await _new_conversation(client, auth_headers)
+
+    assert (await _send(client, conversation_id, auth_headers)).status_code == 200
+    assert (await _send(client, conversation_id, auth_headers)).status_code == 200
+    assert fake.chat.completions.call_count == 2
+
+
+async def test_the_replay_hands_back_the_turn_slot(
+    client: AsyncClient, auth_headers: dict[str, str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A replay runs no turn, so holding the slot would count a phantom turn
+    against the user's concurrent ceiling — and CHAT_MAX_CONCURRENT_TURNS
+    replays would lock them out of chat entirely."""
+    monkeypatch.setattr(settings, "CHAT_MAX_CONCURRENT_TURNS", 1)
+    _patch_deepseek(
+        monkeypatch,
+        responses=[
+            [_content_chunk("One."), _usage_chunk(10, 5)],
+            [_content_chunk("Two."), _usage_chunk(10, 5)],
+        ],
+    )
+    conversation_id = await _new_conversation(client, auth_headers)
+
+    await _send(client, conversation_id, auth_headers, key="key-slot")
+    replay = await _send(client, conversation_id, auth_headers, key="key-slot")
+    assert "event: replay" in replay.text
+
+    # If the replay had kept the slot, this would be a 429.
+    assert (await _send(client, conversation_id, auth_headers, key="key-next")).status_code == 200
+
+
+async def test_one_users_key_does_not_block_another(
+    client: AsyncClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Keys are client-chosen, so unscoped ones would let any account consume —
+    or probe for — another's."""
+    fake = _patch_deepseek(
+        monkeypatch,
+        responses=[
+            [_content_chunk("One."), _usage_chunk(10, 5)],
+            [_content_chunk("Two."), _usage_chunk(10, 5)],
+        ],
+    )
+
+    headers = []
+    for n in (1, 2):
+        creds = {"email": f"idem{n}@example.com", "name": f"U{n}", "password": "correct-horse-1"}
+        await client.post("/api/v1/auth/register", json=creds)
+        login = await client.post(
+            "/api/v1/auth/login", data={"username": creds["email"], "password": creds["password"]}
+        )
+        headers.append({"Authorization": f"Bearer {login.json()['access_token']}"})
+
+    shared_key = "collision"
+    first = await _send(client, await _new_conversation(client, headers[0]), headers[0], shared_key)
+    second = await _send(client, await _new_conversation(client, headers[1]), headers[1], shared_key)
+
+    assert "event: replay" not in first.text
+    assert "event: replay" not in second.text
+    assert fake.chat.completions.call_count == 2

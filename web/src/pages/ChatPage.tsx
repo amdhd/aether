@@ -214,10 +214,11 @@ function Message({
 }
 
 // Transient feedback about one conversation's last turn. `error` reads as a
-// failure; `stopped` is the user's own doing and stays neutral.
+// failure; `stopped` and `replay` are neutral — the first is the user's own
+// doing, the second is the server declining to run a turn twice.
 interface Notice {
   id: number
-  kind: 'error' | 'stopped'
+  kind: 'error' | 'stopped' | 'replay'
   message: string
 }
 
@@ -476,6 +477,16 @@ export function ChatPage() {
           onReasoning: (chunk) => setStreamingReasoning((prev) => prev + chunk),
           onToolCall: (name) => setStreamingToolCalls((prev) => [...prev, name]),
           onError: (message) => setNotice({ id: sendingTo, kind: 'error', message }),
+          // A duplicate send the server refused. The turn it belongs to already
+          // ran, so nothing streams here — say so, because the refetch in
+          // `finally` is about to replace an empty bubble with a reply the user
+          // did not watch arrive.
+          onReplay: () =>
+            setNotice({
+              id: sendingTo,
+              kind: 'replay',
+              message: 'That message had already been sent, so its reply is shown below.',
+            }),
         },
         file,
         controller.signal,

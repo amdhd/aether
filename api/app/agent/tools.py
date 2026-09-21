@@ -1,3 +1,5 @@
+import base64
+import hashlib
 import json
 import re
 import time
@@ -565,12 +567,59 @@ async def _calendar_list_events(db: AsyncSession, user: User, args: dict[str, An
     return {"events": events}
 
 
+# Google accepts a client-supplied event id, and rejects a second insert that
+# reuses one. Deriving it from the event's own identity makes creating the same
+# event twice a no-op at Google rather than two entries on a real calendar.
+#
+# The case this closes is narrow but real: our POST times out *after* Google
+# created the event. The tool reports an error, the model retries, and without a
+# stable id the retry books a duplicate. (A retry of the whole HTTP request is
+# already stopped upstream by the idempotency key on the chat endpoint.)
+#
+# Identity is (user, summary, start, end) — the same person putting the same
+# thing in the same slot. Not description or location: editing a typo in the
+# description should not make it a different event.
+#
+# base32hex is exactly Google's allowed alphabet for an id: digits and a-v once
+# lowercased. 32 characters is well inside the 5-1024 range and keeps far more
+# collision resistance than the domain needs.
+_EVENT_ID_CHARS = 32
+
+
+def _deterministic_event_id(user_id: int, args: dict[str, Any]) -> str:
+    identity = "\x00".join(
+        [str(user_id), str(args.get("summary", "")), str(args.get("start", "")), str(args.get("end", ""))]
+    )
+    digest = hashlib.sha256(identity.encode("utf-8")).digest()
+    return base64.b32hexencode(digest).decode("ascii").lower().rstrip("=")[:_EVENT_ID_CHARS]
+
+
+async def _get_calendar_event(client: httpx.AsyncClient, access_token: str, event_id: str):
+    """The event at `event_id`, or None if there is nothing live there.
+
+    A deleted event answers 404 or 410 depending on how far Google has purged
+    it, and a cancelled one answers 200 with status "cancelled" — all three mean
+    the id names nothing a user would see.
+    """
+    resp = await client.get(
+        f"{CALENDAR_API_URL}/calendars/primary/events/{quote(event_id, safe='')}",
+        headers={"Authorization": f"Bearer {access_token}"},
+    )
+    if resp.status_code in (404, 410):
+        return None
+    resp.raise_for_status()
+    data = resp.json()
+    return None if data.get("status") == "cancelled" else data
+
+
 async def _calendar_create_event(db: AsyncSession, user: User, args: dict[str, Any]) -> dict[str, Any]:
     access_token, error = await _calendar_guard(db, user)
     if error:
         return error
 
+    event_id = _deterministic_event_id(user.id, args)
     body: dict[str, Any] = {
+        "id": event_id,
         "summary": args["summary"],
         "start": {"dateTime": args["start"]},
         "end": {"dateTime": args["end"]},
@@ -582,13 +631,31 @@ async def _calendar_create_event(db: AsyncSession, user: User, args: dict[str, A
 
     try:
         async with httpx.AsyncClient(timeout=10.0) as client:
+            headers = {"Authorization": f"Bearer {access_token}"}
             resp = await client.post(
-                f"{CALENDAR_API_URL}/calendars/primary/events",
-                json=body,
-                headers={"Authorization": f"Bearer {access_token}"},
+                f"{CALENDAR_API_URL}/calendars/primary/events", json=body, headers=headers
             )
-            resp.raise_for_status()
-            data = resp.json()
+
+            if resp.status_code == 409:
+                # The id is taken. Either this exact event already exists — the
+                # duplicate we are preventing — or it is the tombstone of one the
+                # user deleted, because Google does not reliably free a deleted
+                # event's id. Look, rather than assume: reporting success for a
+                # deleted event would tell the user their calendar holds
+                # something it does not.
+                existing = await _get_calendar_event(client, access_token, event_id)
+                if existing is not None:
+                    data = existing
+                else:
+                    body.pop("id")
+                    resp = await client.post(
+                        f"{CALENDAR_API_URL}/calendars/primary/events", json=body, headers=headers
+                    )
+                    resp.raise_for_status()
+                    data = resp.json()
+            else:
+                resp.raise_for_status()
+                data = resp.json()
     except httpx.HTTPError as exc:
         return {"error": f"Google Calendar request failed: {_google_error_message(exc)}"}
 

@@ -59,6 +59,27 @@ export interface ChatStreamHandlers {
   onToolCall?: (name: string) => void
   onDone?: (data: { conversation_title: string }) => void
   onError?: (message: string) => void
+  /**
+   * The send was a duplicate the server refused, so no reply is coming on this
+   * stream — the turn it belongs to already ran. Distinct from `onDone` because
+   * the caller has to reload the conversation to see that turn's result rather
+   * than keep whatever it streamed locally.
+   */
+  onReplay?: (data: { message: string; conversation_title: string }) => void
+}
+
+/**
+ * One key per send attempt, reused by every retry of that same attempt.
+ *
+ * That is the whole contract: the server spends a key once, so reusing one
+ * across two *different* messages would silently drop the second, and minting a
+ * fresh one per retry would defeat the point and re-bill the turn.
+ */
+function newIdempotencyKey(): string {
+  if (typeof crypto !== 'undefined' && 'randomUUID' in crypto) return crypto.randomUUID()
+  // Older Safari and any non-secure context lack randomUUID. Uniqueness per
+  // user is all that is required — the server scopes keys by account.
+  return `${Date.now()}-${Math.random().toString(36).slice(2)}`
 }
 
 async function postChatMessage(
@@ -66,15 +87,18 @@ async function postChatMessage(
   content: string,
   file: File | null,
   token: string | null,
+  idempotencyKey: string,
   signal?: AbortSignal,
 ): Promise<Response> {
   const form = new FormData()
   form.append('content', content)
   if (file) form.append('file', file)
+  const headers: Record<string, string> = { 'Idempotency-Key': idempotencyKey }
+  if (token) headers.Authorization = `Bearer ${token}`
   // Let the browser set the multipart Content-Type (with boundary) itself.
   return fetch(`${API_URL}${API_PREFIX}/conversations/${conversationId}/messages`, {
     method: 'POST',
-    headers: token ? { Authorization: `Bearer ${token}` } : {},
+    headers,
     body: form,
     signal,
   })
@@ -107,6 +131,12 @@ function dispatchEvent(event: string, data: string, handlers: ChatStreamHandlers
       break
     case 'done':
       handlers.onDone?.({ conversation_title: parsed.conversation_title ?? '' })
+      break
+    case 'replay':
+      handlers.onReplay?.({
+        message: parsed.message ?? '',
+        conversation_title: parsed.conversation_title ?? '',
+      })
       break
     case 'error':
       handlers.onError?.(parsed.message ?? '')
@@ -148,7 +178,10 @@ export async function streamChatMessage(
   signal?: AbortSignal,
 ): Promise<void> {
   let token = useAuthStore.getState().accessToken
-  let res = await postChatMessage(conversationId, content, file, token, signal)
+  // Minted once per send, so the 401 retry below re-POSTs under the same key
+  // and the server sees one attempt rather than two.
+  const idempotencyKey = newIdempotencyKey()
+  let res = await postChatMessage(conversationId, content, file, token, idempotencyKey, signal)
 
   if (res.status === 401) {
     token = await refreshAccessToken()
@@ -158,7 +191,7 @@ export async function streamChatMessage(
     // otherwise fall through with the original 401 instead of firing a second
     // doomed request that surfaces a confusing raw error.
     if (token) {
-      res = await postChatMessage(conversationId, content, file, token, signal)
+      res = await postChatMessage(conversationId, content, file, token, idempotencyKey, signal)
     }
   }
 

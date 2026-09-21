@@ -1,6 +1,7 @@
 from app.models.conversation import Conversation, Persona
 from app.models.email_token import EmailToken, EmailTokenPurpose
 from app.models.google_credential import GoogleCredential
+from app.models.idempotency_key import IdempotencyKey
 from app.models.message import Message, MessageRole
 from app.models.note import Note
 from app.models.refresh_token import RefreshToken
@@ -21,4 +22,5 @@ __all__ = [
     "RefreshToken",
     "EmailToken",
     "EmailTokenPurpose",
+    "IdempotencyKey",
 ]

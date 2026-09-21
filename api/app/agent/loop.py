@@ -195,6 +195,29 @@ def _sse_event(event: str, data: dict[str, Any]) -> str:
     return f"event: {event}\ndata: {json.dumps(data)}\n\n"
 
 
+async def stream_replayed_turn(conversation_title: str) -> AsyncGenerator[str, None]:
+    """The answer to a retried send whose idempotency key was already spent.
+
+    A turn cannot be replayed from storage — it is a stream of tokens produced
+    once, at cost — so a duplicate is refused rather than reproduced. The client
+    is told in its own event type, because "this already happened, reload the
+    conversation" is a different instruction from "here is your reply", and a
+    client that could not tell them apart would show the user an empty answer.
+
+    `done` follows so the stream still terminates the way every other turn does.
+    That is what a client written before this event existed needs: it ignores the
+    unknown event and ends cleanly, rather than hanging on a stream that stops.
+    """
+    yield _sse_event(
+        "replay",
+        {
+            "message": "That message was already sent.",
+            "conversation_title": conversation_title,
+        },
+    )
+    yield _sse_event("done", {"conversation_title": conversation_title})
+
+
 async def stream_agent_response(
     session_factory: async_sessionmaker[AsyncSession],
     user: User,

@@ -489,15 +489,18 @@ export function ChatPage() {
           onReasoning: (chunk) => setStreamingReasoning((prev) => prev + chunk),
           onToolCall: (name) => setStreamingToolCalls((prev) => [...prev, name]),
           onError: (message) => setNotice({ id: sendingTo, kind: 'error', message }),
-          // A duplicate send the server refused. The turn it belongs to already
-          // ran, so nothing streams here — say so, because the refetch in
-          // `finally` is about to replace an empty bubble with a reply the user
-          // did not watch arrive.
+          // A duplicate send the server refused, so nothing streams here. The
+          // refetch in `finally` shows the message, but not necessarily a
+          // reply: the original turn may still be running, or — the usual case,
+          // since a dropped stream is what led to the resend — it was cut off
+          // before its reply was saved. Promise nothing, and say what to do if
+          // no reply shows. The retry key was dropped when this send started,
+          // so sending again is a new message rather than another refusal.
           onReplay: () =>
             setNotice({
               id: sendingTo,
               kind: 'replay',
-              message: 'That message had already been sent, so its reply is shown below.',
+              message: 'That message was already sent, so it wasn’t sent twice. If no reply appears, send it again.',
             }),
         },
         file,

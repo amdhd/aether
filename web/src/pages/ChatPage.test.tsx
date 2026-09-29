@@ -589,4 +589,36 @@ describe('ChatPage', () => {
     await waitFor(() => expect(chatApi.streamChatMessage).toHaveBeenCalledTimes(3))
     expect(keyOf(2)).not.toBe(keyOf(1))
   })
+
+  it('does not promise a reply after a refused duplicate, and lets it be sent again', async () => {
+    vi.mocked(chatApi.listConversations).mockResolvedValue(mockConversationsPage(mockConversations))
+    vi.mocked(chatApi.getConversation).mockResolvedValue({ ...mockDetail, messages: [] })
+    vi.mocked(chatApi.streamChatMessage)
+      .mockRejectedValueOnce(new Error('network error'))
+      .mockImplementationOnce(async (_id, _content, handlers) => {
+        handlers.onReplay?.({ message: 'That message was already sent.', conversation_title: 'T' })
+        handlers.onDone?.({ conversation_title: 'T' })
+      })
+      .mockResolvedValue(undefined)
+
+    renderWithProviders(<ChatPage />)
+    await screen.findByRole('heading', { name: 'Trip planning' })
+
+    const textbox = () => screen.getByLabelText('Message')
+    await userEvent.type(textbox(), 'Hello Aether')
+    await userEvent.click(screen.getByRole('button', { name: /send message/i }))
+    await waitFor(() => expect(textbox()).toHaveValue('Hello Aether'))
+    await userEvent.click(screen.getByRole('button', { name: /send message/i }))
+
+    expect(await screen.findByText(/if no reply appears, send it again/i)).toBeInTheDocument()
+    expect(screen.queryByText(/reply is shown below/i)).not.toBeInTheDocument()
+
+    // Sending it again, as the notice says, must not be refused a second time.
+    await userEvent.type(textbox(), 'Hello Aether')
+    await userEvent.click(screen.getByRole('button', { name: /send message/i }))
+    await waitFor(() => expect(chatApi.streamChatMessage).toHaveBeenCalledTimes(3))
+    const keyOf = (call: number) => vi.mocked(chatApi.streamChatMessage).mock.calls[call][5]
+    expect(keyOf(1)).toBe(keyOf(0))
+    expect(keyOf(2)).not.toBe(keyOf(1))
+  })
 })

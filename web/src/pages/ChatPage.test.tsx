@@ -63,6 +63,8 @@ describe('ChatPage', () => {
   // "was this endpoint called?" assertion depend on test order.
   beforeEach(() => {
     vi.clearAllMocks()
+    let n = 0
+    vi.mocked(chatApi.newIdempotencyKey).mockImplementation(() => `key-${++n}`)
   })
 
   it('shows an empty state when there are no conversations', async () => {
@@ -158,6 +160,7 @@ describe('ChatPage', () => {
       expect.any(Object),
       null,
       expect.any(AbortSignal),
+      expect.any(String),
     )
 
     resolveStream()
@@ -555,5 +558,35 @@ describe('ChatPage', () => {
     expect(screen.queryByText('Hello Aether')).not.toBeInTheDocument()
 
     resolveStream()
+  })
+
+  it('resends a handed-back draft under the key of the attempt that failed', async () => {
+    // A dropped stream can fail after the server saved the message. Resending
+    // it under a new key would run and bill the turn twice.
+    vi.mocked(chatApi.listConversations).mockResolvedValue(mockConversationsPage(mockConversations))
+    vi.mocked(chatApi.getConversation).mockResolvedValue({ ...mockDetail, messages: [] })
+    vi.mocked(chatApi.streamChatMessage).mockRejectedValue(new Error('network error'))
+
+    renderWithProviders(<ChatPage />)
+    await screen.findByRole('heading', { name: 'Trip planning' })
+
+    // Re-queried each time: the composer re-mounts across a send.
+    const textbox = () => screen.getByLabelText('Message')
+    await userEvent.type(textbox(), 'Hello Aether')
+    await userEvent.click(screen.getByRole('button', { name: /send message/i }))
+    await waitFor(() => expect(textbox()).toHaveValue('Hello Aether'))
+    await userEvent.click(screen.getByRole('button', { name: /send message/i }))
+    await waitFor(() => expect(chatApi.streamChatMessage).toHaveBeenCalledTimes(2))
+
+    const keyOf = (call: number) => vi.mocked(chatApi.streamChatMessage).mock.calls[call][5]
+    expect(keyOf(1)).toBe(keyOf(0))
+
+    // Edited, it is a different message, and reusing the key would have the
+    // server drop it as a duplicate.
+    await waitFor(() => expect(textbox()).toHaveValue('Hello Aether'))
+    await userEvent.type(textbox(), '!')
+    await userEvent.click(screen.getByRole('button', { name: /send message/i }))
+    await waitFor(() => expect(chatApi.streamChatMessage).toHaveBeenCalledTimes(3))
+    expect(keyOf(2)).not.toBe(keyOf(1))
   })
 })

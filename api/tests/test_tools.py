@@ -516,3 +516,75 @@ async def test_a_cancelled_event_is_treated_as_gone(monkeypatch: pytest.MonkeyPa
 
     assert result["event"]["id"] == "fresh"
     assert len(client.post_bodies) == 2
+
+
+async def test_a_moved_event_is_not_reported_as_the_new_one(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The id outlives edits: an event created for this slot and then moved still
+    holds it. Returning that one would report a booking for a slot that is empty."""
+    _calendar_token(monkeypatch)
+    moved = {
+        "id": "abc",
+        "summary": "Doctor appointment",
+        "start": {"dateTime": "2026-06-18T14:00:00+08:00"},
+        "end": {"dateTime": "2026-06-18T15:00:00+08:00"},
+    }
+    created = {
+        "id": "server-assigned",
+        "summary": "Doctor appointment",
+        "start": {"dateTime": EVENT_ARGS["start"]},
+        "end": {"dateTime": EVENT_ARGS["end"]},
+    }
+    client = _ScriptedCalendarClient(
+        posts=[_FakeResponse({"error": "duplicate"}, status_code=409), _FakeResponse(created)],
+        gets=[_FakeResponse(moved)],
+    )
+    monkeypatch.setattr("app.agent.tools.httpx.AsyncClient", lambda **kwargs: client)
+
+    result = json.loads(await call_tool("calendar_create_event", EVENT_ARGS, None, SimpleNamespace(id=1)))
+
+    assert result["event"]["id"] == "server-assigned"
+    assert "id" not in client.post_bodies[1]
+
+
+async def test_a_renamed_event_is_not_reported_as_the_new_one(monkeypatch: pytest.MonkeyPatch) -> None:
+    _calendar_token(monkeypatch)
+    renamed = {
+        "id": "abc",
+        "summary": "Dentist",
+        "start": {"dateTime": EVENT_ARGS["start"]},
+        "end": {"dateTime": EVENT_ARGS["end"]},
+    }
+    client = _ScriptedCalendarClient(
+        posts=[
+            _FakeResponse({"error": "duplicate"}, status_code=409),
+            _FakeResponse({"id": "fresh", "summary": "Doctor appointment"}),
+        ],
+        gets=[_FakeResponse(renamed)],
+    )
+    monkeypatch.setattr("app.agent.tools.httpx.AsyncClient", lambda **kwargs: client)
+
+    result = json.loads(await call_tool("calendar_create_event", EVENT_ARGS, None, SimpleNamespace(id=1)))
+
+    assert result["event"]["id"] == "fresh"
+
+
+async def test_the_same_moment_in_another_offset_is_still_a_match(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Google echoes times back in its own form; the retry this exists for must
+    still be recognised when the offset is written differently."""
+    _calendar_token(monkeypatch)
+    existing = {
+        "id": "abc",
+        "summary": "Doctor appointment",
+        "start": {"dateTime": "2026-06-16T01:00:00Z"},
+        "end": {"dateTime": "2026-06-16T02:00:00Z"},
+    }
+    client = _ScriptedCalendarClient(
+        posts=[_FakeResponse({"error": "duplicate"}, status_code=409)],
+        gets=[_FakeResponse(existing)],
+    )
+    monkeypatch.setattr("app.agent.tools.httpx.AsyncClient", lambda **kwargs: client)
+
+    result = json.loads(await call_tool("calendar_create_event", EVENT_ARGS, None, SimpleNamespace(id=1)))
+
+    assert result["event"]["id"] == "abc"
+    assert len(client.post_bodies) == 1

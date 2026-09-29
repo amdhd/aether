@@ -613,8 +613,9 @@ describe('ChatPage', () => {
     expect(await screen.findByText(/if no reply appears, send it again/i)).toBeInTheDocument()
     expect(screen.queryByText(/reply is shown below/i)).not.toBeInTheDocument()
 
-    // Sending it again, as the notice says, must not be refused a second time.
-    await userEvent.type(textbox(), 'Hello Aether')
+    // The message is back in the composer, so sending it again is one click —
+    // and must not be refused a second time.
+    await waitFor(() => expect(textbox()).toHaveValue('Hello Aether'))
     await userEvent.click(screen.getByRole('button', { name: /send message/i }))
     await waitFor(() => expect(chatApi.streamChatMessage).toHaveBeenCalledTimes(3))
     const keyOf = (call: number) => vi.mocked(chatApi.streamChatMessage).mock.calls[call][5]

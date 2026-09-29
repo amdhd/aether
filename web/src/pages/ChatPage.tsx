@@ -37,6 +37,7 @@ import {
   deleteConversation,
   getConversation,
   listConversations,
+  newIdempotencyKey,
   streamChatMessage,
   updateConversation,
 } from '@/api/chat'
@@ -275,6 +276,13 @@ export function ChatPage() {
   const [notice, setNotice] = useState<Notice | null>(null)
   // Lets the Stop button tear down the in-flight request. Null when idle.
   const abortRef = useRef<AbortController | null>(null)
+  // The idempotency key of a send that failed and was handed back to the
+  // composer, per conversation. The failure may have come after the server
+  // saved the message — a dropped stream looks the same as one never sent —
+  // so resending that same draft has to reuse the key, or the server runs and
+  // bills the turn twice and stores the message twice. Anything edited is a
+  // new message and gets a new key.
+  const retryKeysRef = useRef<Record<number, { content: string; file: File | null; key: string }>>({})
   const scrollRef = useRef<HTMLDivElement>(null)
   // Only follow the tail while the reader is already at it — otherwise scrolling
   // up to re-read something yanks you back down on the next token. State rather
@@ -457,6 +465,10 @@ export function ChatPage() {
 
     const sendingTo = activeId
     const file = attachedFile
+    const retry = retryKeysRef.current[sendingTo]
+    const idempotencyKey =
+      retry && retry.content === content && retry.file === file ? retry.key : newIdempotencyKey()
+    delete retryKeysRef.current[sendingTo]
     const controller = new AbortController()
     abortRef.current = controller
     setDraftFor(sendingTo, '')
@@ -477,19 +489,28 @@ export function ChatPage() {
           onReasoning: (chunk) => setStreamingReasoning((prev) => prev + chunk),
           onToolCall: (name) => setStreamingToolCalls((prev) => [...prev, name]),
           onError: (message) => setNotice({ id: sendingTo, kind: 'error', message }),
-          // A duplicate send the server refused. The turn it belongs to already
-          // ran, so nothing streams here — say so, because the refetch in
-          // `finally` is about to replace an empty bubble with a reply the user
-          // did not watch arrive.
-          onReplay: () =>
+          // A duplicate send the server refused, so nothing streams here. The
+          // refetch in `finally` shows the message, but not necessarily a
+          // reply: the original turn may still be running, or — the usual case,
+          // since a dropped stream is what led to the resend — it was cut off
+          // before its reply was saved. Promise nothing, and say what to do if
+          // no reply shows — with the message back in the composer, so doing it
+          // takes one click rather than retyping. The retry key was dropped when
+          // this send started, so sending again is a new message rather than
+          // another refusal.
+          onReplay: () => {
             setNotice({
               id: sendingTo,
               kind: 'replay',
-              message: 'That message had already been sent, so its reply is shown below.',
-            }),
+              message: 'That message was already sent, so it wasn’t sent twice. If no reply appears, send it again.',
+            })
+            setDraftFor(sendingTo, (current) => current || content)
+            setAttachmentFor(sendingTo, (current) => current ?? file)
+          },
         },
         file,
         controller.signal,
+        idempotencyKey,
       )
     } catch (err) {
       // Stopping is a choice, not a failure: no error banner, and no handing the
@@ -514,6 +535,7 @@ export function ChatPage() {
         // was written for, and never over something typed there since.
         setDraftFor(sendingTo, (current) => current || content)
         setAttachmentFor(sendingTo, (current) => current ?? file)
+        retryKeysRef.current[sendingTo] = { content, file, key: idempotencyKey }
       }
     } finally {
       if (abortRef.current === controller) abortRef.current = null

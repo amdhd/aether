@@ -612,6 +612,40 @@ async def _get_calendar_event(client: httpx.AsyncClient, access_token: str, even
     return None if data.get("status") == "cancelled" else data
 
 
+def _same_time(google_time: dict[str, Any] | None, requested: Any) -> bool:
+    """Whether Google's start/end names the same moment as the requested one.
+
+    Compared as datetimes, not strings: Google echoes the time back in its own
+    RFC 3339 form, so "…Z" and "…+00:00" are one moment. A naive request is
+    placed in the calendar's zone by Google, so it is compared by wall clock.
+    """
+    returned = (google_time or {}).get("dateTime")
+    if not returned or not requested:
+        return False
+    try:
+        a = datetime.fromisoformat(str(returned))
+        b = datetime.fromisoformat(str(requested))
+    except ValueError:
+        return str(returned) == str(requested)
+    if (a.tzinfo is None) != (b.tzinfo is None):
+        return a.replace(tzinfo=None) == b.replace(tzinfo=None)
+    return a == b
+
+
+def _is_requested_event(existing: dict[str, Any], args: dict[str, Any]) -> bool:
+    """Whether the event already holding our id is still the one being asked for.
+
+    The id is derived from summary, start and end, but the event behind it can be
+    moved or renamed afterwards and keeps its id. Returning that one would report
+    success for a slot the user's calendar no longer has anything in.
+    """
+    return (
+        existing.get("summary") == args.get("summary")
+        and _same_time(existing.get("start"), args.get("start"))
+        and _same_time(existing.get("end"), args.get("end"))
+    )
+
+
 async def _calendar_create_event(db: AsyncSession, user: User, args: dict[str, Any]) -> dict[str, Any]:
     access_token, error = await _calendar_guard(db, user)
     if error:
@@ -640,11 +674,11 @@ async def _calendar_create_event(db: AsyncSession, user: User, args: dict[str, A
                 # The id is taken. Either this exact event already exists — the
                 # duplicate we are preventing — or it is the tombstone of one the
                 # user deleted, because Google does not reliably free a deleted
-                # event's id. Look, rather than assume: reporting success for a
-                # deleted event would tell the user their calendar holds
-                # something it does not.
+                # event's id, or it is an event since moved or renamed. Look,
+                # rather than assume: reporting success for any but the first
+                # would tell the user their calendar holds something it does not.
                 existing = await _get_calendar_event(client, access_token, event_id)
-                if existing is not None:
+                if existing is not None and _is_requested_event(existing, args):
                     data = existing
                 else:
                     body.pop("id")

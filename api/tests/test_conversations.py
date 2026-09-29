@@ -1167,3 +1167,27 @@ async def test_one_users_key_does_not_block_another(
     assert "event: replay" not in first.text
     assert "event: replay" not in second.text
     assert fake.chat.completions.call_count == 2
+
+
+async def test_a_failed_claim_hands_back_the_turn_slot(
+    client: AsyncClient, auth_headers: dict[str, str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The claim commits, so it can fail for reasons other than a duplicate. The
+    slot is already held by then and the generator that would release it never
+    starts — so without an explicit release, each DB blip leaks one slot."""
+    monkeypatch.setattr(settings, "CHAT_MAX_CONCURRENT_TURNS", 1)
+    _patch_deepseek(monkeypatch, responses=[[_content_chunk("Reply."), _usage_chunk(10, 5)]])
+    conversation_id = await _new_conversation(client, auth_headers)
+
+    async def broken_claim(*args, **kwargs):
+        raise RuntimeError("database went away")
+
+    monkeypatch.setattr("app.api.routes.conversations.idempotency.claim", broken_claim)
+    with pytest.raises(RuntimeError):
+        await _send(client, conversation_id, auth_headers, key="key-broken")
+    monkeypatch.undo()
+
+    monkeypatch.setattr(settings, "CHAT_MAX_CONCURRENT_TURNS", 1)
+    _patch_deepseek(monkeypatch, responses=[[_content_chunk("Reply."), _usage_chunk(10, 5)]])
+    # If the failed claim had kept the slot, this would be a 429.
+    assert (await _send(client, conversation_id, auth_headers, key="key-after")).status_code == 200

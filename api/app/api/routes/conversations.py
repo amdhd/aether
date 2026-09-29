@@ -166,9 +166,19 @@ async def send_message(
     # Below this line the turn starts, and a retry from here on is the duplicate
     # this exists to stop: it would re-bill a full turn and append a second copy
     # of the user's message, which history then replays verbatim forever.
-    if idempotency_key and not await idempotency.claim(
-        db, current_user, SEND_MESSAGE_SCOPE, idempotency_key
-    ):
+    #
+    # The claim commits, so it can raise for reasons other than a duplicate (a
+    # dropped connection, a pool timeout). The slot is already held and the
+    # generator that would release it never starts, so release it here — a
+    # leaked slot per DB blip is the lockout `inflight` exists to prevent.
+    try:
+        claimed = not idempotency_key or await idempotency.claim(
+            db, current_user, SEND_MESSAGE_SCOPE, idempotency_key
+        )
+    except BaseException:
+        await release_turn_slot(slot)
+        raise
+    if not claimed:
         # Hand the slot back: this request is not going to run a turn, and
         # holding it would count against the user's concurrent-turn ceiling.
         await release_turn_slot(slot)

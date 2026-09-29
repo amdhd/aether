@@ -156,6 +156,20 @@ describe('streamChatMessage idempotency', () => {
     expect(headersOf(1)['Idempotency-Key']).not.toBe(headersOf(0)['Idempotency-Key'])
   })
 
+  it('sends a caller-supplied key for a retry of an earlier send', async () => {
+    fetchMock.mockResolvedValue(
+      new Response('event: done\ndata: {"conversation_title":"T"}\n\n', {
+        status: 200,
+        headers: { 'Content-Type': 'text/event-stream' },
+      }),
+    )
+    useAuthStore.setState({ accessToken: 'good-token' })
+
+    await streamChatMessage(1, 'hi', {}, null, undefined, 'earlier-key')
+
+    expect(headersOf(0)['Idempotency-Key']).toBe('earlier-key')
+  })
+
   it('reports a refused duplicate as a replay rather than an empty answer', async () => {
     fetchMock.mockResolvedValue(
       new Response(

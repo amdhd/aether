@@ -75,7 +75,7 @@ export interface ChatStreamHandlers {
  * across two *different* messages would silently drop the second, and minting a
  * fresh one per retry would defeat the point and re-bill the turn.
  */
-function newIdempotencyKey(): string {
+export function newIdempotencyKey(): string {
   if (typeof crypto !== 'undefined' && 'randomUUID' in crypto) return crypto.randomUUID()
   // Older Safari and any non-secure context lack randomUUID. Uniqueness per
   // user is all that is required — the server scopes keys by account.
@@ -176,11 +176,12 @@ export async function streamChatMessage(
   handlers: ChatStreamHandlers,
   file: File | null = null,
   signal?: AbortSignal,
+  // Pass the key of an earlier attempt when this is a retry of that same send;
+  // the default treats it as a new one. Either way the 401 retry below re-POSTs
+  // under this key, so the server sees one attempt rather than two.
+  idempotencyKey: string = newIdempotencyKey(),
 ): Promise<void> {
   let token = useAuthStore.getState().accessToken
-  // Minted once per send, so the 401 retry below re-POSTs under the same key
-  // and the server sees one attempt rather than two.
-  const idempotencyKey = newIdempotencyKey()
   let res = await postChatMessage(conversationId, content, file, token, idempotencyKey, signal)
 
   if (res.status === 401) {

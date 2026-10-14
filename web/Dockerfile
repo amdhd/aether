@@ -1,7 +1,7 @@
 # syntax=docker/dockerfile:1
 
 # --- Builder: produce the static SPA bundle ---
-FROM node:22-alpine AS builder
+FROM node:24-alpine AS builder
 
 WORKDIR /app
 
@@ -20,7 +20,7 @@ RUN npm run build
 # NOTE: the primary production path serves web/dist from S3 + CloudFront (see
 # infra/terraform). This image is the fallback for running the frontend as a
 # container (e.g. ECS/local) — it is NOT the Vite dev server.
-FROM nginx:1.27-alpine AS runtime
+FROM nginx:1.30.5-alpine AS runtime
 
 # SPA history fallback: unknown routes return index.html so client-side routing
 # works on refresh/deep-link.

@@ -2,7 +2,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Any, Literal
 
 import bcrypt
-from jose import jwt
+import jwt
 
 from app.core.config import settings
 
@@ -109,7 +109,7 @@ def create_oauth_state_token(user_id: int) -> str:
 
 def verify_oauth_state_token(token: str) -> int:
     """Returns the user id encoded in an OAuth state token, or raises
-    jose.JWTError / ValueError if it's invalid, expired, or the wrong type."""
+    jwt.InvalidTokenError / ValueError if it's invalid, expired, or the wrong type."""
     payload = jwt.decode(token, settings.SECRET_KEY, algorithms=[settings.ALGORITHM])
     if payload.get("type") != "oauth_state":
         raise ValueError("Invalid state token type")

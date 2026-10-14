@@ -2,7 +2,7 @@ from typing import Protocol, TypeVar
 
 from fastapi import Depends, HTTPException, Request, status
 from fastapi.security import OAuth2PasswordBearer
-from jose import JWTError
+from jwt import InvalidTokenError as JWTError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings

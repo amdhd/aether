@@ -78,7 +78,7 @@ locals {
       logDriver = "awslogs"
       options = {
         "awslogs-group"         = aws_cloudwatch_log_group.api.name
-        "awslogs-region"        = data.aws_region.current.name
+        "awslogs-region"        = data.aws_region.current.region
         "awslogs-stream-prefix" = "api"
       }
     }
@@ -104,7 +104,7 @@ locals {
       batch:
     exporters:
       awsxray:
-        region: ${data.aws_region.current.name}
+        region: ${data.aws_region.current.region}
     service:
       pipelines:
         traces:
@@ -123,7 +123,7 @@ locals {
       logDriver = "awslogs"
       options = {
         "awslogs-group"         = aws_cloudwatch_log_group.api.name
-        "awslogs-region"        = data.aws_region.current.name
+        "awslogs-region"        = data.aws_region.current.region
         "awslogs-stream-prefix" = "adot"
       }
     }

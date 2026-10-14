@@ -38,7 +38,7 @@ jobs:
     name: Gate · IaC (Checkov)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
 
       # Enforcing IaC gate. Every accepted exception is documented with a reason
       # in infra/terraform/.checkov.yaml; anything NOT fixed or listed there fails
@@ -55,7 +55,7 @@ jobs:
 
       - name: Upload Checkov SARIF
         if: always()
-        uses: github/codeql-action/upload-sarif@v3
+        uses: github/codeql-action/upload-sarif@v4
         with:
           sarif_file: checkov.sarif
           category: checkov
@@ -71,7 +71,7 @@ jobs:
       # Fail the PR if it raises estimated monthly cost by more than this (USD).
       COST_INCREASE_LIMIT_USD: "10"
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0
 
@@ -141,7 +141,7 @@ jobs:
     outputs:
       image_tag: ${{ github.sha }}
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
 
       # arm64 image (Fargate runs Graviton) built on an amd64 runner needs QEMU.
       - uses: docker/setup-qemu-action@v3
@@ -169,7 +169,7 @@ jobs:
       # workflow stays green on main until AWS_DEPLOY_ROLE_ARN is set.
       - name: Configure AWS credentials (OIDC)
         if: github.event_name != 'pull_request' && vars.AWS_DEPLOY_ROLE_ARN != ''
-        uses: aws-actions/configure-aws-credentials@v4
+        uses: aws-actions/configure-aws-credentials@v6
         with:
           role-to-assume: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
           aws-region: ${{ env.AWS_REGION }}
@@ -193,7 +193,7 @@ jobs:
     if: github.event_name != 'pull_request' && vars.AWS_DEPLOY_ROLE_ARN != ''
     steps:
       - name: Configure AWS credentials (OIDC)
-        uses: aws-actions/configure-aws-credentials@v4
+        uses: aws-actions/configure-aws-credentials@v6
         with:
           role-to-assume: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
           aws-region: ${{ env.AWS_REGION }}

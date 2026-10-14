@@ -290,7 +290,7 @@ produces a final answer.
 ### Prerequisites
 
 - Docker and Docker Compose
-- (Optional, for running outside Docker) Python 3.12 and Node 20+
+- (Optional, for running outside Docker) Python 3.12 and Node 24 LTS
 
 ### 1. Configure environment variables
 

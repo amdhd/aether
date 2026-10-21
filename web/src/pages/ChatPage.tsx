@@ -47,6 +47,8 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/u
 import { Skeleton } from '@/components/ui/skeleton'
 import { useCrudMutations } from '@/hooks/useCrudMutations'
 import { cn } from '@/lib/utils'
+import { actionLabel, toolLabel } from '@/lib/toolLabels'
+import type { ActionProgress } from '@/types'
 import type { Conversation, ConversationCreateInput, MessageRole, Persona } from '@/types'
 
 // Short labels + icons for the welcome-screen persona picker.
@@ -270,7 +272,7 @@ export function ChatPage() {
   const [pendingAttachmentName, setPendingAttachmentName] = useState<string | null>(null)
   const [streamingContent, setStreamingContent] = useState('')
   const [streamingReasoning, setStreamingReasoning] = useState('')
-  const [streamingToolCalls, setStreamingToolCalls] = useState<string[]>([])
+  const [streamingActions, setStreamingActions] = useState<ActionProgress[]>([])
   // Feedback about the last turn — a failure, or the note that a stopped reply
   // was discarded. Carries the conversation it belongs to, so it stays put
   // instead of surfacing over whichever chat the user opens next.
@@ -345,6 +347,7 @@ export function ChatPage() {
     queryKey: ['conversation', activeId],
     queryFn: () => getConversation(activeId as number),
     enabled: activeId !== null,
+    refetchInterval: (query) => query.state.data?.messages.some((message) => message.action_status === 'unconfirmed') ? 3000 : false,
   })
 
   const { createMutation } = useCrudMutations<Conversation, ConversationCreateInput>({
@@ -430,7 +433,7 @@ export function ChatPage() {
   const resetStreamingState = () => {
     setStreamingContent('')
     setStreamingReasoning('')
-    setStreamingToolCalls([])
+    setStreamingActions([])
   }
 
   const handleFileSelect = (event: ChangeEvent<HTMLInputElement>) => {
@@ -504,7 +507,9 @@ export function ChatPage() {
         {
           onToken: (chunk) => setStreamingContent((prev) => prev + chunk),
           onReasoning: (chunk) => setStreamingReasoning((prev) => prev + chunk),
-          onToolCall: (name) => setStreamingToolCalls((prev) => [...prev, name]),
+          onAction: (action) => setStreamingActions((prev) => [
+            ...prev.filter((item) => item.id !== action.id), action,
+          ].sort((a, b) => a.id - b.id)),
           onError: (message) => setNotice({ id: sendingTo, kind: 'error', message }),
           // A duplicate send the server refused, so nothing streams here. The
           // refetch in `finally` shows the message, but not necessarily a
@@ -575,6 +580,15 @@ export function ChatPage() {
       event.preventDefault()
       void handleSend()
     }
+  }
+
+  const actions: ActionProgress[] = (conversation?.messages ?? [])
+    .filter((message) => message.role === 'tool' && message.action_status && message.tool_name)
+    .map((message) => ({ id: message.id, name: message.tool_name!, status: message.action_status! }))
+  for (const action of isStreamingHere ? streamingActions : []) {
+    const index = actions.findIndex((item) => item.id === action.id)
+    if (index >= 0) actions[index] = action
+    else actions.push(action)
   }
 
   const visibleMessages = (conversation?.messages ?? []).filter(
@@ -771,6 +785,21 @@ export function ChatPage() {
           </DialogContent>
         </Dialog>
 
+        {actions.length > 0 && (
+          <details className="mb-4 max-h-48 shrink-0 overflow-y-auto rounded-lg border border-border bg-surface p-3" open>
+            <summary className="cursor-pointer text-sm font-medium focus-ring">Action activity</summary>
+            <ul className="mt-2 space-y-2" aria-live="polite">
+              {actions.map((action) => (
+                <li key={action.id} className="flex flex-wrap justify-between gap-2 text-sm">
+                  <span>{action.status === 'completed' ? toolLabel(action.name) : actionLabel(action.name)}</span>
+                  <span className={cn('font-medium', action.status === 'failed' && 'text-red-600 dark:text-red-400')}>
+                    {action.status === 'running' ? 'Running' : action.status === 'completed' ? 'Completed' : action.status === 'failed' ? 'Failed' : 'Outcome unconfirmed — check before retrying'}
+                  </span>
+                </li>
+              ))}
+            </ul>
+          </details>
+        )}
         {showWelcome ? (
           // True vertical centering reads as low — the eye weighs the page
           // (and the header above this block) as part of the frame, so a
@@ -888,12 +917,6 @@ export function ChatPage() {
                             aria-atomic="false"
                             aria-busy={isStreaming}
                           >
-                            {streamingToolCalls.map((name, i) => (
-                              <p key={i} className="mb-2 flex items-center gap-2 text-sm text-muted-foreground">
-                                <span className="inline-block h-1.5 w-1.5 animate-pulse rounded-full bg-muted-foreground" />
-                                Using <span className="font-medium text-foreground">{name}</span>
-                              </p>
-                            ))}
                             {streamingReasoning && <ThinkingBlock content={streamingReasoning} />}
                             {streamingContent ? (
                               <MessageContent content={streamingContent} />

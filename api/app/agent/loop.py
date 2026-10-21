@@ -440,24 +440,27 @@ async def _run_agent(
             db.add(assistant_msg)
             if usage:
                 db.add(_usage_log(user, conversation, usage))
-            # Deliberately *not* committed here. An assistant message carrying
-            # tool_calls is only replayable alongside the `tool` rows answering
-            # it (see _repair_orphaned_tool_calls), so the two are held pending
-            # and committed together once the loop below has built them.
-            #
-            # That makes the pair atomic for read-only tools, which is the common
-            # case. It cannot for a tool that writes: _create_task and friends
-            # commit the session this loop shares with them, and that commit
-            # flushes whatever is pending, including this message. Closing the
-            # window completely means giving tool handlers their own session —
-            # worth doing, but a wider change than this. The read path covers
-            # what remains.
+            # Persist the request before executing tools. Unanswered calls are
+            # repaired by _repair_orphaned_tool_calls when rebuilding context.
             await db.flush()
             messages.append(_message_to_api(assistant_msg))
 
             for tool_call in tool_calls:
                 tool_name = tool_call["function"]["name"]
+                # An unconfirmed receipt survives disconnects, process crashes,
+                # and a write succeeding before its response can be recorded.
+                tool_msg = Message(
+                    conversation_id=conversation.id,
+                    role=MessageRole.tool,
+                    content=json.dumps({"error": "Action outcome unconfirmed; check before retrying."}),
+                    tool_call_id=tool_call["id"],
+                    tool_name=tool_name,
+                    action_status="unconfirmed",
+                )
+                db.add(tool_msg)
+                await db.commit()
                 yield _sse_event("tool_call", {"name": tool_name})
+                yield _sse_event("action", {"id": tool_msg.id, "name": tool_name, "status": "running"})
                 try:
                     arguments = json.loads(tool_call["function"]["arguments"] or "{}")
                 except json.JSONDecodeError:
@@ -466,14 +469,11 @@ async def _run_agent(
                 logger.info("tool.call user_id=%s tool=%s", user.id, tool_name)
                 tool_result = await call_tool(tool_name, arguments, db, user)
 
-                tool_msg = Message(
-                    conversation_id=conversation.id,
-                    role=MessageRole.tool,
-                    content=tool_result,
-                    tool_call_id=tool_call["id"],
-                    tool_name=tool_call["function"]["name"],
-                )
-                db.add(tool_msg)
+                tool_msg.content = tool_result
+                result = json.loads(tool_result)
+                tool_msg.action_status = "failed" if isinstance(result, dict) and "error" in result else "completed"
+                await db.commit()
+                yield _sse_event("action", {"id": tool_msg.id, "name": tool_name, "status": tool_msg.action_status})
                 messages.append(_message_to_api(tool_msg))
 
             await db.commit()

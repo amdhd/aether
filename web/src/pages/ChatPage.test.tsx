@@ -126,6 +126,44 @@ describe('ChatPage', () => {
     await waitFor(() => expect(chatApi.streamChatMessage).toHaveBeenCalledTimes(1))
   })
 
+  it('updates one action from running to completed during a stream', async () => {
+    vi.mocked(chatApi.listConversations).mockResolvedValue(mockConversationsPage(mockConversations))
+    vi.mocked(chatApi.getConversation).mockResolvedValue(mockDetail)
+    let handlers!: chatApi.ChatStreamHandlers
+    let finish!: () => void
+    vi.mocked(chatApi.streamChatMessage).mockImplementation((_id, _content, callbacks) => {
+      handlers = callbacks
+      return new Promise(resolve => { finish = resolve })
+    })
+    renderWithProviders(<ChatPage />)
+    await screen.findByText('Hi there')
+    await userEvent.type(screen.getByLabelText('Message'), 'Create a task')
+    await userEvent.click(screen.getByRole('button', { name: /send message/i }))
+    act(() => handlers.onAction?.({ id: 10, name: 'create_task', status: 'running' }))
+    expect(await screen.findByText('Running')).toBeInTheDocument()
+    expect(screen.queryByText('Added a task')).not.toBeInTheDocument()
+    act(() => handlers.onAction?.({ id: 10, name: 'create_task', status: 'completed' }))
+    expect(await screen.findByText('Completed')).toBeInTheDocument()
+    expect(screen.queryByText('Running')).not.toBeInTheDocument()
+    expect(screen.getAllByText('Added a task')).toHaveLength(1)
+    await act(async () => finish())
+  })
+
+  it('renders saved action outcomes after loading a conversation', async () => {
+    vi.mocked(chatApi.listConversations).mockResolvedValue(mockConversationsPage(mockConversations))
+    vi.mocked(chatApi.getConversation).mockResolvedValue({ ...mockDetail, messages: [
+      ...mockDetail.messages,
+      { ...mockDetail.messages[0], id: 10, role: 'tool', tool_name: 'create_task', action_status: 'completed', content: '{}' },
+      { ...mockDetail.messages[0], id: 11, role: 'tool', tool_name: 'web_search', action_status: 'failed', content: '{}' },
+      { ...mockDetail.messages[0], id: 12, role: 'tool', tool_name: 'calendar_create_event', action_status: 'unconfirmed', content: '{}' },
+    ] })
+    renderWithProviders(<ChatPage />)
+    expect(await screen.findByText('Added a task')).toBeInTheDocument()
+    expect(screen.getByText('Completed')).toBeInTheDocument()
+    expect(screen.getByText('Failed')).toBeInTheDocument()
+    expect(screen.getByText(/Outcome unconfirmed/)).toBeInTheDocument()
+  })
+
   it('renders conversations and loads the active conversation messages', async () => {
     vi.mocked(chatApi.listConversations).mockResolvedValue(mockConversationsPage(mockConversations))
     vi.mocked(chatApi.getConversation).mockResolvedValue(mockDetail)

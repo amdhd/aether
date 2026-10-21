@@ -589,6 +589,12 @@ async def test_chat_message_with_tool_call(
     detail = await client.get(f"/api/v1/conversations/{conversation_id}", headers=auth_headers)
     roles = [m["role"] for m in detail.json()["messages"]]
     assert roles == ["user", "assistant", "tool", "assistant"]
+    receipt = next(m for m in detail.json()["messages"] if m["role"] == "tool")
+    assert receipt["action_status"] == "completed"
+    assert "event: action" in body
+    assert '"status": "running"' in body
+    assert '"status": "completed"' in body
+
 
 
 async def test_concurrent_turn_is_rejected_and_the_slot_is_reusable(
@@ -1191,3 +1197,52 @@ async def test_a_failed_claim_hands_back_the_turn_slot(
     _patch_deepseek(monkeypatch, responses=[[_content_chunk("Reply."), _usage_chunk(10, 5)]])
     # If the failed claim had kept the slot, this would be a 429.
     assert (await _send(client, conversation_id, auth_headers, key="key-after")).status_code == 200
+
+
+async def test_failed_action_receipt_survives_reload(client, auth_headers, monkeypatch):
+    _patch_deepseek(monkeypatch, responses=[
+        [_tool_call_chunk(0, "bad_call", "unknown_tool", "{}"), _usage_chunk(20, 8)],
+        [_content_chunk("That action failed."), _usage_chunk(20, 8)],
+    ])
+    created = await client.post("/api/v1/conversations", json={}, headers=auth_headers)
+    url = f"/api/v1/conversations/{created.json()['id']}"
+    response = await client.post(f"{url}/messages", data={"content": "Do the work"}, headers=auth_headers)
+    assert '"status": "failed"' in response.text
+    detail = await client.get(url, headers=auth_headers)
+    receipt = next(m for m in detail.json()["messages"] if m["role"] == "tool")
+    assert receipt["action_status"] == "failed"
+
+
+async def test_action_start_is_durable_before_execution(monkeypatch):
+    from app.agent.loop import stream_agent_response
+    from tests.conftest import TestingSessionLocal
+    from app.models.user import User
+    from app.models.conversation import Conversation
+    from app.models.message import Message
+    from sqlalchemy import select
+
+    _patch_deepseek(monkeypatch, responses=[
+        [_tool_call_chunk(0, "pending_call", "list_tasks", "{}"), _usage_chunk(20, 8)],
+    ])
+    async with TestingSessionLocal() as db:
+        user = User(email="receipt@example.com", name="Receipt", password_hash="unused")
+        db.add(user)
+        await db.commit()
+        conversation = Conversation(user_id=user.id)
+        db.add(conversation)
+        await db.commit()
+        conversation_id = conversation.id
+    stream = stream_agent_response(TestingSessionLocal, user, conversation_id, "List tasks")
+    try:
+        async for event in stream:
+            if "event: action" in event:
+                async with TestingSessionLocal() as db:
+                    receipt = await db.scalar(select(Message).where(Message.action_status == "unconfirmed"))
+                    assert receipt is not None
+                    assert receipt.tool_name == "list_tasks"
+                break
+    finally:
+        await stream.aclose()
+    async with TestingSessionLocal() as db:
+        receipt = await db.scalar(select(Message).where(Message.action_status == "unconfirmed"))
+        assert receipt is not None

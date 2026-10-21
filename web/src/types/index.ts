@@ -87,6 +87,7 @@ export interface ChatMessage {
   reasoning_content: string | null
   tool_calls: ToolCall[] | null
   tool_name: string | null
+  action_status?: 'unconfirmed' | 'completed' | 'failed' | null
   attachment_name: string | null
   created_at: string
 }
@@ -101,3 +102,9 @@ export interface ConversationCreateInput {
 }
 
 export type ConversationUpdateInput = Partial<ConversationCreateInput>
+
+export interface ActionProgress {
+  id: number
+  name: string
+  status: 'running' | 'unconfirmed' | 'completed' | 'failed'
+}

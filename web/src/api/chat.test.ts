@@ -195,3 +195,16 @@ describe('streamChatMessage idempotency', () => {
     expect(tokens).toEqual([])
   })
 })
+
+
+it('delivers action lifecycle events and ignores invalid statuses', async () => {
+  fetchMock.mockResolvedValue(new Response(
+    'event: action\ndata: {"id":7,"name":"create_task","status":"running"}\n\n' +
+    'event: action\ndata: {"id":7,"name":"create_task","status":"completed"}\n\n' +
+    'event: action\ndata: {"id":7,"name":"create_task","status":"made-up"}\n\n',
+    { status: 200, headers: { 'Content-Type': 'text/event-stream' } },
+  ))
+  const onAction = vi.fn()
+  await streamChatMessage(1, 'hi', { onAction })
+  expect(onAction.mock.calls.map(([action]) => action.status)).toEqual(['running', 'completed'])
+})

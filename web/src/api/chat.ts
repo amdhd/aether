@@ -1,6 +1,7 @@
 import { API_PREFIX, API_URL, ApiError, apiFetch, refreshAccessToken } from '@/lib/api'
 import { useAuthStore } from '@/store/auth'
 import type {
+  ActionProgress,
   Conversation,
   ConversationCreateInput,
   ConversationDetail,
@@ -54,6 +55,7 @@ export function deleteConversation(id: number) {
 }
 
 export interface ChatStreamHandlers {
+  onAction?: (action: ActionProgress) => void
   onToken?: (content: string) => void
   onReasoning?: (content: string) => void
   onToolCall?: (name: string) => void
@@ -109,6 +111,8 @@ function dispatchEvent(event: string, data: string, handlers: ChatStreamHandlers
   // A single malformed frame (truncated/garbled SSE payload) must not throw out
   // of the read loop and abort an otherwise-healthy stream — skip it instead.
   let parsed: {
+    id?: number
+    status?: string
     content?: string
     name?: string
     message?: string
@@ -128,6 +132,12 @@ function dispatchEvent(event: string, data: string, handlers: ChatStreamHandlers
       break
     case 'tool_call':
       handlers.onToolCall?.(parsed.name ?? '')
+      break
+    case 'action':
+      if (typeof parsed.id === 'number' && typeof parsed.name === 'string' &&
+          ['running', 'unconfirmed', 'completed', 'failed'].includes(parsed.status ?? '')) {
+        handlers.onAction?.({ id: parsed.id, name: parsed.name, status: parsed.status as ActionProgress['status'] })
+      }
       break
     case 'done':
       handlers.onDone?.({ conversation_title: parsed.conversation_title ?? '' })

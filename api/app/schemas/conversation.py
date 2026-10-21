@@ -36,6 +36,7 @@ class MessageRead(BaseModel):
     reasoning_content: str | None
     tool_calls: list[dict[str, Any]] | None
     tool_name: str | None
+    action_status: str | None = None
     attachment_name: str | None = None
     created_at: datetime
 

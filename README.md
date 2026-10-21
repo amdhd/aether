@@ -169,6 +169,11 @@ rather than built. For a permanent production environment, the next steps are:
   rendering and visible "thinking"/tool-call traces. A reply can be **stopped
   mid-stream**, and the composer's contents — draft *and* attachment — are held
   per conversation, so switching chats never carries one into another.
+- **Action activity** — live running/completed/failed tool states with database-backed
+  receipts that remain visible after refresh. Interrupted actions without a recorded
+  result show “Outcome unconfirmed”; check their destination before retrying. This
+  preserves action evidence; execution still follows the chat stream's lifetime.
+  Existing installations must run `alembic upgrade head` from `api/`.
 - **Personas** — switch the assistant's tone per conversation (productivity
   coach, marketing coach, research assistant, casual friend).
 - **Campaign analysis from a spreadsheet** — attach a `.csv`/`.tsv` export (ad

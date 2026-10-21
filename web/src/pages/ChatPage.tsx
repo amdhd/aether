@@ -250,11 +250,12 @@ export function ChatPage() {
   const [drafts, setDrafts] = useState<Record<number, string>>({})
   const [attachments, setAttachments] = useState<Record<number, File>>({})
   const [attachError, setAttachError] = useState<{ id: number; message: string } | null>(null)
-  // Persona highlighted on the landing screen (no active conversation yet);
-  // picking one starts a new chat with that persona.
+  // Optional style for the first conversation, created when the user sends.
   const [landingPersona, setLandingPersona] = useState<Persona>('productivity_coach')
   // The small-screen stand-in for the sidebar's chat history.
   const [historyOpen, setHistoryOpen] = useState(false)
+  const [starting, setStarting] = useState(false)
+  const startingRef = useRef(false)
   // Persona picked for a conversation but not yet confirmed by the server, so
   // the picker highlights on click instead of after the refetch round-trip.
   // Scoped to a conversation id so it can't leak onto the next chat.
@@ -292,7 +293,7 @@ export function ChatPage() {
   const [pinned, setPinned] = useState<{ id: number; atBottom: boolean } | null>(null)
 
   // Same key as the sidebar history, so the two share one request.
-  const { data: conversationsPage } = useQuery({
+  const { data: conversationsPage, isPending: conversationsLoading, isError: conversationsFailed } = useQuery({
     queryKey: ['conversations', CONVERSATIONS_PAGE_SIZE],
     queryFn: () => listConversations(CONVERSATIONS_PAGE_SIZE),
   })
@@ -308,9 +309,10 @@ export function ChatPage() {
   // A chat nobody has scrolled in yet is, by definition, at its tail.
   const pinnedToBottom = pinned?.id === activeId ? pinned.atBottom : true
 
-  // What the composer shows: this conversation's contents, never another's.
-  const draft = activeId === null ? '' : (drafts[activeId] ?? '')
-  const attachedFile = activeId === null ? null : (attachments[activeId] ?? null)
+  // Key 0 holds the first draft before a conversation exists.
+  const draftId = activeId ?? 0
+  const draft = drafts[draftId] ?? ''
+  const attachedFile = attachments[draftId] ?? null
 
   // Writes take an explicit id because they outlive the render that started
   // them — an in-flight turn must return its draft to the chat it was written
@@ -433,13 +435,11 @@ export function ChatPage() {
 
   const handleFileSelect = (event: ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0] ?? null
-    // The picker is only reachable from a conversation's composer.
-    if (activeId === null) return
     setAttachError(null)
     if (file) {
       const name = file.name.toLowerCase()
       if (!name.endsWith('.csv') && !name.endsWith('.tsv')) {
-        setAttachError({ id: activeId, message: 'Only .csv or .tsv files are supported.' })
+        setAttachError({ id: draftId, message: 'Only .csv or .tsv files are supported.' })
         event.target.value = ''
         return
       }
@@ -447,23 +447,40 @@ export function ChatPage() {
       // uploading the whole file only to be told it was too big.
       if (file.size > MAX_ATTACHMENT_BYTES) {
         setAttachError({
-          id: activeId,
+          id: draftId,
           message: `That file is too large. Attachments must be under ${ATTACHMENT_LIMIT_LABEL}.`,
         })
         event.target.value = ''
         return
       }
     }
-    setAttachmentFor(activeId, file)
+    setAttachmentFor(draftId, file)
     // Allow re-selecting the same file after removing it.
     event.target.value = ''
   }
 
   const handleSend = async () => {
     const content = draft.trim()
-    if (activeId === null || !content || isStreaming || content.length > MAX_MESSAGE_CHARS) return
+    if (!content || isStreaming || startingRef.current || createMutation.isPending || conversationsLoading || conversationsFailed || content.length > MAX_MESSAGE_CHARS) return
 
-    const sendingTo = activeId
+    let sendingTo = activeId
+    if (sendingTo === null) {
+      startingRef.current = true
+      setStarting(true)
+      setNotice(null)
+      try {
+        const created = await createMutation.mutateAsync({ persona: landingPersona })
+        sendingTo = created.id
+        setDraftFor(0, '')
+        setAttachmentFor(0, null)
+      } catch {
+        setNotice({ id: 0, kind: 'error', message: 'Could not start your conversation. Your draft is still here. Try again.' })
+        return
+      } finally {
+        startingRef.current = false
+        setStarting(false)
+      }
+    }
     const file = attachedFile
     const retry = retryKeysRef.current[sendingTo]
     const idempotencyKey =
@@ -577,7 +594,7 @@ export function ChatPage() {
   // up identical empty conversations in the history, so the button lands you in
   // the composer of the one you already have instead of creating another.
   const handleNewChat = () => {
-    if (isEmptyConversation) {
+    if (isEmptyConversation || activeId === null) {
       textareaRef.current?.focus()
       return
     }
@@ -614,7 +631,7 @@ export function ChatPage() {
                 type="button"
                 aria-label="Remove attachment"
                 className="focus-ring shrink-0 hover:text-foreground"
-                onClick={() => activeId !== null && setAttachmentFor(activeId, null)}
+                onClick={() => setAttachmentFor(draftId, null)}
               >
                 <X className="h-3 w-3" />
               </button>
@@ -624,14 +641,12 @@ export function ChatPage() {
         <textarea
           ref={textareaRef}
           value={draft}
-          onChange={(e) => activeId !== null && setDraftFor(activeId, e.target.value)}
+          onChange={(e) => setDraftFor(draftId, e.target.value)}
           onKeyDown={handleKeyDown}
-          placeholder={activeId === null ? 'Start a new conversation first' : 'Message Aether…'}
+          placeholder="What would you like Aether to get done?"
           aria-label="Message"
-          // Only the absence of a conversation makes the composer unusable. A
-          // turn in flight — here or in another chat — still lets you write the
-          // next one; it's sending that has to wait.
-          disabled={activeId === null}
+          // Keep the draft stable while creating its conversation.
+          disabled={starting || createMutation.isPending || conversationsLoading || conversationsFailed}
           rows={1}
           className="block max-h-40 min-h-[52px] w-full resize-none overflow-y-auto rounded-2xl bg-transparent py-3.5 pl-12 pr-14 text-[15px] leading-6 placeholder:text-muted-foreground focus:outline-none disabled:cursor-not-allowed disabled:opacity-60"
         />
@@ -641,7 +656,7 @@ export function ChatPage() {
           className="absolute bottom-2.5 left-2.5 h-9 w-9 rounded-lg text-muted-foreground"
           aria-label="Attach CSV file"
           onClick={() => fileInputRef.current?.click()}
-          disabled={activeId === null}
+          disabled={starting || createMutation.isPending || conversationsLoading || conversationsFailed}
         >
           <Paperclip className="h-4 w-4" />
         </Button>
@@ -661,13 +676,13 @@ export function ChatPage() {
             className="absolute bottom-2.5 right-2.5 h-9 w-9 rounded-lg"
             aria-label="Send message"
             onClick={() => void handleSend()}
-            disabled={activeId === null || !draft.trim() || isStreaming || overLimit}
+            disabled={starting || createMutation.isPending || conversationsLoading || conversationsFailed || !draft.trim() || isStreaming || overLimit}
           >
             <Send className="h-4 w-4" />
           </Button>
         )}
       </div>
-      {attachError?.id === activeId && (
+      {attachError?.id === draftId && (
         <p className="px-1 pt-1 text-xs text-red-600 dark:text-red-400">{attachError.message}</p>
       )}
       {draft.length >= COUNTER_VISIBLE_FROM && (
@@ -681,7 +696,9 @@ export function ChatPage() {
         </p>
       )}
       <p className="py-2 text-center text-xs text-muted-foreground">
-        {overLimit
+        {starting
+          ? 'Starting your conversation…'
+          : overLimit
           ? // Send is disabled; the counter just above says by how much.
             'This message is too long to send. Shorten it, or split it across two messages.'
           : isStreamingElsewhere
@@ -697,7 +714,7 @@ export function ChatPage() {
 
   // Shown only in the conversation it happened in — a failed turn in one chat
   // has nothing to say about the one the user moved on to.
-  const noticeBanner = notice?.id === activeId && (
+  const noticeBanner = notice?.id === draftId && (
     <p
       // Stopping is the user's own doing, so it stays neutral and merely polite
       // rather than interrupting as an alert.
@@ -737,7 +754,7 @@ export function ChatPage() {
               variant="outline"
               size="sm"
               onClick={handleNewChat}
-              disabled={createMutation.isPending}
+              disabled={createMutation.isPending || starting}
             >
               <Plus className="h-4 w-4" />
               <span className="hidden sm:inline">New chat</span>
@@ -763,32 +780,48 @@ export function ChatPage() {
               <div className="flex flex-col items-center text-center">
                 <div className="flex items-center gap-3">
                   <Sparkles className="h-7 w-7 shrink-0 text-foreground" aria-hidden />
-                  <h2 className="text-2xl font-semibold tracking-tight">Start chatting with Aether</h2>
+                  <h2 className="text-2xl font-semibold tracking-tight">What would you like Aether to get done?</h2>
                 </div>
                 <p className="mt-2 max-w-md text-sm text-muted-foreground">
-                  {activeId === null
-                    ? 'Choose a persona to start a new conversation — ask about your tasks, notes, campaigns, the weather, or anything else.'
-                    : 'Choose a persona, then ask about your tasks, notes, campaigns, the weather, or anything else.'}
+                  Analyze campaign data, research a topic, or turn a goal into tasks.
                 </p>
-                <div className="mt-6">
-                  {activeId === null ? (
+                <div className="mt-6 grid w-full gap-2 sm:grid-cols-3">
+                  {[
+                    ['Analyze campaign performance', 'Analyze my campaign CSV, identify what is working, and recommend next steps.'],
+                    ['Research a competitor', 'Research a competitor and prepare a brief with sources. Ask me which competitor.'],
+                    ['Plan my week', 'Review my tasks and help me prioritize this week.'],
+                  ].map(([label, prompt]) => (
+                    <Button key={label} variant="outline" className="h-auto whitespace-normal py-3"
+                      disabled={starting || createMutation.isPending || isStreaming}
+                      onClick={() => {
+                        setDraftFor(draftId, prompt)
+                        textareaRef.current?.focus()
+                      }}>
+                      {label}
+                    </Button>
+                  ))}
+                </div>
+                <details className="mt-4 text-sm text-muted-foreground">
+                  <summary className="cursor-pointer focus-ring">Assistant style</summary>
+                  <div className="mt-3">
                     <PersonaPicker
-                      value={landingPersona}
-                      disabled={createMutation.isPending}
+                      value={activeId === null ? landingPersona : activePersona}
+                      disabled={starting || createMutation.isPending}
                       onSelect={(persona) => {
-                        setLandingPersona(persona)
-                        createMutation.mutate({ persona })
+                        if (activeId === null) setLandingPersona(persona)
+                        else personaMutation.mutate({ id: activeId, persona })
                       }}
                     />
-                  ) : (
-                    <PersonaPicker
-                      value={activePersona}
-                      onSelect={(persona) => personaMutation.mutate({ id: activeId, persona })}
-                    />
-                  )}
-                </div>
+                  </div>
+                </details>
               </div>
               <div className="mt-8">{composer}</div>
+              {conversationsFailed && (
+                <div role="alert" className="mt-3 text-center text-sm">
+                  <p>Couldn’t load conversations.</p>
+                  <Button variant="outline" className="mt-2" onClick={() => void queryClient.invalidateQueries({ queryKey: ['conversations'] })}>Try again</Button>
+                </div>
+              )}
               {noticeBanner}
             </div>
           </div>

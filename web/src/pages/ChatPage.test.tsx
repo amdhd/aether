@@ -72,8 +72,58 @@ describe('ChatPage', () => {
 
     renderWithProviders(<ChatPage />)
 
-    expect(await screen.findByText(/start chatting with aether/i)).toBeInTheDocument()
-    expect(screen.getByText(/choose a persona to start a new conversation/i)).toBeInTheDocument()
+    expect(await screen.findByRole('heading', { name: /what would you like aether to get done/i })).toBeInTheDocument()
+    await waitFor(() => expect(screen.getByLabelText('Message')).toBeEnabled())
+  })
+
+  it('creates and sends the first goal with its attachment without choosing a persona', async () => {
+    vi.mocked(chatApi.listConversations).mockResolvedValue(mockConversationsPage([]))
+    vi.mocked(chatApi.createConversation).mockResolvedValue(mockConversations[0])
+    vi.mocked(chatApi.getConversation).mockResolvedValue({ ...mockDetail, messages: [] })
+    vi.mocked(chatApi.streamChatMessage).mockResolvedValue(undefined)
+    const { container } = renderWithProviders(<ChatPage />)
+    await waitFor(() => expect(screen.getByLabelText('Message')).toBeEnabled())
+    await userEvent.click(screen.getByRole('button', { name: 'Analyze campaign performance' }))
+    expect(chatApi.createConversation).not.toHaveBeenCalled()
+    const file = new File(['campaign,cost\nA,10'], 'campaign.csv', { type: 'text/csv' })
+    await userEvent.upload(container.querySelector('input[type="file"]') as HTMLInputElement, file)
+    await userEvent.click(screen.getByRole('button', { name: /send message/i }))
+    await waitFor(() => expect(chatApi.streamChatMessage).toHaveBeenCalledWith(
+      1, expect.stringContaining('Analyze my campaign CSV'), expect.any(Object), file,
+      expect.any(AbortSignal), expect.any(String),
+    ))
+    expect(chatApi.createConversation).toHaveBeenCalledTimes(1)
+    expect(chatApi.createConversation).toHaveBeenCalledWith({ persona: 'productivity_coach' })
+  })
+
+  it('preserves the first goal when creation fails and permits retry', async () => {
+    vi.mocked(chatApi.listConversations).mockResolvedValue(mockConversationsPage([]))
+    vi.mocked(chatApi.createConversation).mockRejectedValue(new Error('offline'))
+    renderWithProviders(<ChatPage />)
+    await waitFor(() => expect(screen.getByLabelText('Message')).toBeEnabled())
+    await userEvent.type(screen.getByLabelText('Message'), 'Plan my launch')
+    await userEvent.click(screen.getByRole('button', { name: /send message/i }))
+    expect(await screen.findByRole('alert')).toHaveTextContent('Could not start your conversation')
+    expect(screen.getByLabelText('Message')).toHaveValue('Plan my launch')
+    expect(chatApi.streamChatMessage).not.toHaveBeenCalled()
+    await userEvent.click(screen.getByRole('button', { name: /send message/i }))
+    await waitFor(() => expect(chatApi.createConversation).toHaveBeenCalledTimes(2))
+  })
+
+  it('blocks duplicate submissions while the first conversation is being created', async () => {
+    vi.mocked(chatApi.listConversations).mockResolvedValue(mockConversationsPage([]))
+    let finish!: (value: Conversation) => void
+    vi.mocked(chatApi.createConversation).mockImplementation(() => new Promise(resolve => { finish = resolve }))
+    vi.mocked(chatApi.getConversation).mockResolvedValue({ ...mockDetail, messages: [] })
+    vi.mocked(chatApi.streamChatMessage).mockResolvedValue(undefined)
+    renderWithProviders(<ChatPage />)
+    await waitFor(() => expect(screen.getByLabelText('Message')).toBeEnabled())
+    await userEvent.type(screen.getByLabelText('Message'), 'Plan my launch')
+    await userEvent.keyboard('{Enter}{Enter}')
+    expect(chatApi.createConversation).toHaveBeenCalledTimes(1)
+    expect(screen.getByRole('button', { name: /send message/i })).toBeDisabled()
+    await act(async () => finish(mockConversations[0]))
+    await waitFor(() => expect(chatApi.streamChatMessage).toHaveBeenCalledTimes(1))
   })
 
   it('renders conversations and loads the active conversation messages', async () => {
@@ -108,7 +158,8 @@ describe('ChatPage', () => {
 
     renderWithProviders(<ChatPage />)
 
-    await screen.findByText(/choose a persona, then ask about/i)
+    await screen.findByText(/analyze campaign data, research a topic/i)
+    await userEvent.click(screen.getByText('Assistant style'))
     // Re-query each time: the picker remounts as the conversation query settles.
     const casual = () => screen.getByRole('button', { name: /^casual$/i })
     await waitFor(() => expect(casual()).toHaveAttribute('aria-pressed', 'false'))
@@ -289,7 +340,7 @@ describe('ChatPage', () => {
     vi.mocked(chatApi.getConversation).mockResolvedValue({ ...emptyConversation, messages: [] })
 
     renderWithProviders(<ChatPage />)
-    await screen.findByText(/choose a persona, then ask about/i)
+    await screen.findByText(/analyze campaign data, research a topic/i)
 
     const newChat = screen.getByRole('button', { name: /new chat/i })
     await userEvent.click(newChat)

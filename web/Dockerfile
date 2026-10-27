@@ -1,9 +1,12 @@
 # syntax=docker/dockerfile:1
 
 # --- Builder: produce the static SPA bundle ---
-FROM node:24-alpine AS builder
+FROM node:24.22.1-alpine AS builder
 
 WORKDIR /app
+
+# Fail the build if its Node runtime predates the October 2026 security fixes.
+RUN node -e 'const [major, minor, patch] = process.versions.node.split(".").map(Number); console.log(`Frontend build Node.js: ${process.versions.node}`); if (major !== 24 || minor < 22 || (minor === 22 && patch < 1)) process.exit(1)'
 
 COPY package.json package-lock.json* ./
 RUN npm ci

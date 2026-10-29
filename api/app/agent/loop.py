@@ -7,6 +7,7 @@ from typing import Any
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from app.agent.budget import MAX_HISTORY_ROWS, ContextBudgetExceeded, bound_context
 from app.agent.client import get_deepseek_client
 from app.agent.memory import maybe_summarize_history
 from app.agent.personas import get_system_prompt
@@ -182,7 +183,10 @@ async def _build_context(db: AsyncSession, conversation: Conversation) -> list[d
     history_stmt = select(Message).where(Message.conversation_id == conversation.id).order_by(Message.id)
     if conversation.memory_summarized_until_id:
         history_stmt = history_stmt.where(Message.id > conversation.memory_summarized_until_id)
-    history = list(await db.scalars(history_stmt))
+    history_stmt = history_stmt.order_by(None).order_by(Message.id.desc()).limit(MAX_HISTORY_ROWS)
+    history = list(reversed(list(await db.scalars(history_stmt))))
+    while history and history[0].role == MessageRole.tool:
+        history.pop(0)
     budgeted = _attachments_within_budget(history)
     for message in _repair_orphaned_tool_calls(history):
         messages.append(
@@ -331,6 +335,7 @@ async def _run_agent(
         # explicit `error` event instead.
         started_at = time.monotonic()
         try:
+            messages = bound_context(messages, TOOL_SCHEMAS)
             stream = await client.chat.completions.create(
                 model=settings.DEEPSEEK_MODEL,
                 messages=messages,
@@ -383,6 +388,9 @@ async def _run_agent(
                 if tail:
                     parts.append(tail)
                     yield _sse_event(event, {"content": tail})
+        except ContextBudgetExceeded as exc:
+            yield _sse_event("error", {"message": str(exc)})
+            return
         except Exception:
             logger.exception(
                 "llm.turn.failed user_id=%s conversation_id=%s latency_ms=%d",

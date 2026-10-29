@@ -56,6 +56,9 @@ async def send_email(to: str, subject: str, body: str) -> bool:
     depend on the mail provider being up.
     """
     if not settings.SMTP_HOST:
+        if settings.ENVIRONMENT == "production":
+            logger.warning("email.delivery_unconfigured")
+            return False
         # Body included deliberately — the link is the whole point of the log
         # line in dev, and this backend is never selected once SMTP_HOST is set.
         logger.info("email.logged to=%s subject=%s\n%s", to, subject, body)
@@ -66,7 +69,7 @@ async def send_email(to: str, subject: str, body: str) -> bool:
     except Exception as exc:
         # Address deliberately omitted: this lands in CloudWatch, and the point
         # of the flow is not to disclose which addresses have accounts.
-        logger.warning("email.send_failed subject=%s error=%r", subject, exc)
+        logger.warning("email.send_failed error_type=%s", type(exc).__name__)
         return False
     logger.info("email.sent subject=%s", subject)
     return True

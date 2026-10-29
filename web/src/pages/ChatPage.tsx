@@ -47,6 +47,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/u
 import { Skeleton } from '@/components/ui/skeleton'
 import { useCrudMutations } from '@/hooks/useCrudMutations'
 import { cn } from '@/lib/utils'
+import { ActionApproval } from '@/components/chat/ActionApproval'
 import { actionLabel, toolLabel } from '@/lib/toolLabels'
 import type { ActionProgress } from '@/types'
 import type { Conversation, ConversationCreateInput, MessageRole, Persona } from '@/types'
@@ -793,8 +794,12 @@ export function ChatPage() {
                 <li key={action.id} className="flex flex-wrap justify-between gap-2 text-sm">
                   <span>{action.status === 'completed' ? toolLabel(action.name) : actionLabel(action.name)}</span>
                   <span className={cn('font-medium', action.status === 'failed' && 'text-red-600 dark:text-red-400')}>
-                    {action.status === 'running' ? 'Running' : action.status === 'completed' ? 'Completed' : action.status === 'failed' ? 'Failed' : 'Outcome unconfirmed — check before retrying'}
+                    {action.status === 'running' ? 'Running' : action.status === 'completed' ? 'Completed' : action.status === 'failed' ? 'Failed' : action.status === 'pending' ? 'Awaiting approval' : action.status === 'rejected' ? 'Rejected' : action.status === 'expired' ? 'Expired' : 'Outcome unconfirmed — check before retrying'}
                   </span>
+                  {action.status === 'pending' && conversation && (() => {
+                    const message = conversation.messages.find((item) => item.id === action.id)
+                    return message ? <ActionApproval conversationId={conversation.id} message={message} /> : <span>Review after the reply finishes.</span>
+                  })()}
                 </li>
               ))}
             </ul>

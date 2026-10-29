@@ -1,4 +1,8 @@
 from functools import lru_cache
+from typing import Literal
+from urllib.parse import urlsplit
+
+from cryptography.fernet import Fernet
 
 from pydantic import field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -7,7 +11,7 @@ INSECURE_SECRET_KEY = "dev-secret-key-change-me"
 
 
 class Settings(BaseSettings):
-    model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
+    model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore", hide_input_in_errors=True)
 
     # App
     PROJECT_NAME: str = "Aether"
@@ -15,7 +19,7 @@ class Settings(BaseSettings):
     # Set to "production" in deployed environments to enable strict checks
     # (e.g. rejecting default/missing secrets) that would otherwise break
     # local dev and CI, where these values are intentionally left unset.
-    ENVIRONMENT: str = "development"
+    ENVIRONMENT: Literal["development", "test", "staging", "production"] = "development"
 
     # Database
     DATABASE_URL: str = "sqlite+aiosqlite:///./aether.db"
@@ -45,7 +49,7 @@ class Settings(BaseSettings):
     # REFRESH_COOKIE_SAMESITE=none and REFRESH_COOKIE_SECURE=true there.
     REFRESH_COOKIE_NAME: str = "refresh_token"
     REFRESH_COOKIE_SECURE: bool = False
-    REFRESH_COOKIE_SAMESITE: str = "lax"  # "lax" for same-site dev, "none" cross-site prod
+    REFRESH_COOKIE_SAMESITE: Literal["lax", "strict", "none"] = "lax"  # "lax" for same-site dev, "none" cross-site prod
     REFRESH_COOKIE_DOMAIN: str = ""  # e.g. ".example.com" to share across subdomains
 
     # Encryption (Fernet key for OAuth tokens at rest)
@@ -189,11 +193,24 @@ class Settings(BaseSettings):
 
     @model_validator(mode="after")
     def _require_real_secrets_in_production(self) -> "Settings":
-        if self.ENVIRONMENT == "production":
-            if self.SECRET_KEY == INSECURE_SECRET_KEY:
-                raise ValueError("SECRET_KEY must be set to a real secret when ENVIRONMENT=production")
-            if not self.ENCRYPTION_KEY:
-                raise ValueError("ENCRYPTION_KEY must be set when ENVIRONMENT=production")
+        if self.REFRESH_COOKIE_SAMESITE == "none" and not self.REFRESH_COOKIE_SECURE:
+            raise ValueError("SameSite=none requires REFRESH_COOKIE_SECURE=true")
+        if self.ENVIRONMENT in {"production", "staging"}:
+            minimum = {"HS256": 32, "HS384": 48, "HS512": 64}.get(self.ALGORITHM)
+            if minimum is None:
+                raise ValueError("ALGORITHM must be HS256, HS384, or HS512")
+            if (self.SECRET_KEY != self.SECRET_KEY.strip()
+                    or len(self.SECRET_KEY.encode("utf-8")) < minimum
+                    or len(set(self.SECRET_KEY)) < 8
+                    or self.SECRET_KEY == INSECURE_SECRET_KEY
+                    or self.SECRET_KEY.lower().startswith(("change-me", "replace_me", "dev-secret"))):
+                raise ValueError("SECRET_KEY must be a randomly generated signing key of sufficient length")
+            try:
+                Fernet(self.ENCRYPTION_KEY.encode("ascii"))
+            except (ValueError, UnicodeError):
+                raise ValueError("ENCRYPTION_KEY must be a valid Fernet key") from None
+            if not self.REFRESH_COOKIE_SECURE:
+                raise ValueError("REFRESH_COOKIE_SECURE must be true in production and staging")
 
             origins = [o.strip() for o in self.FRONTEND_ORIGIN.split(",") if o.strip()]
             # app.main pairs this allowlist with allow_credentials=True, and the
@@ -213,10 +230,16 @@ class Settings(BaseSettings):
             # Mailed links are built from the first entry, so a scheme-less value
             # produces links that do not resolve.
             for origin in origins:
-                if not origin.startswith(("http://", "https://")):
-                    raise ValueError(
-                        f"FRONTEND_ORIGIN entry {origin!r} must include a scheme (https://...)"
-                    )
+                parsed = urlsplit(origin)
+                if (parsed.scheme != "https" or not parsed.hostname
+                        or parsed.username is not None or parsed.password is not None
+                        or parsed.path not in {"", "/"} or parsed.query or parsed.fragment
+                        or any(char.isspace() for char in origin) or "*" in origin
+                        or "\\" in origin):
+                    raise ValueError("FRONTEND_ORIGIN must contain HTTPS origins without credentials, paths, or wildcards")
+                # Accessing port validates malformed/out-of-range port numbers.
+                _ = parsed.port
+            self.FRONTEND_ORIGIN = ",".join(origin.rstrip("/") for origin in origins)
         return self
 
 

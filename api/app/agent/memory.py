@@ -2,6 +2,7 @@ from openai import AsyncOpenAI
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.agent.budget import MAX_HISTORY_ROWS, bound_context, clip_text
 from app.core.config import settings
 from app.models.conversation import Conversation
 from app.models.message import Message, MessageRole
@@ -66,7 +67,7 @@ async def maybe_summarize_history(db: AsyncSession, conversation: Conversation, 
     stmt = select(Message).where(Message.conversation_id == conversation.id).order_by(Message.id)
     if conversation.memory_summarized_until_id:
         stmt = stmt.where(Message.id > conversation.memory_summarized_until_id)
-    unsummarized = list(await db.scalars(stmt))
+    unsummarized = list(await db.scalars(stmt.limit(MAX_HISTORY_ROWS)))
 
     if len(unsummarized) <= KEEP_RECENT_MESSAGES:
         return
@@ -95,10 +96,10 @@ async def maybe_summarize_history(db: AsyncSession, conversation: Conversation, 
 
     response = await client.chat.completions.create(
         model=settings.DEEPSEEK_MODEL,
-        messages=[
+        messages=bound_context([
             {"role": "system", "content": SUMMARY_SYSTEM_PROMPT},
             {"role": "user", "content": user_content},
-        ],
+        ]),
         stream=False,
         extra_body={"thinking": {"type": "disabled"}},
     )
@@ -120,6 +121,6 @@ async def maybe_summarize_history(db: AsyncSession, conversation: Conversation, 
             )
         )
 
-    conversation.memory_summary = summary
+    conversation.memory_summary = clip_text(summary, 12000)
     conversation.memory_summarized_until_id = to_fold[-1].id
     await db.commit()

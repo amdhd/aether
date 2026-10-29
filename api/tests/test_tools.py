@@ -229,6 +229,7 @@ async def test_calendar_create_event_success(monkeypatch: pytest.MonkeyPatch) ->
             },
             None,
             SimpleNamespace(id=1),
+            approved=True,
         )
     )
     assert result["event"]["id"] == "evt2"
@@ -246,7 +247,7 @@ async def test_calendar_delete_event_success(monkeypatch: pytest.MonkeyPatch) ->
     )
 
     result = json.loads(
-        await call_tool("calendar_delete_event", {"event_id": "evt2"}, None, SimpleNamespace(id=1))
+        await call_tool("calendar_delete_event", {"event_id": "evt2"}, None, SimpleNamespace(id=1), approved=True)
     )
     assert result["deleted"] == "evt2"
 
@@ -466,7 +467,7 @@ async def test_a_retried_create_returns_the_existing_event(monkeypatch: pytest.M
     )
     monkeypatch.setattr("app.agent.tools.httpx.AsyncClient", lambda **kwargs: client)
 
-    result = json.loads(await call_tool("calendar_create_event", EVENT_ARGS, None, SimpleNamespace(id=1)))
+    result = json.loads(await call_tool("calendar_create_event", EVENT_ARGS, None, SimpleNamespace(id=1), approved=True))
 
     assert result["event"]["id"] == "abc"
     # One insert attempt, not two: no second event was created.
@@ -491,7 +492,7 @@ async def test_a_deleted_event_can_be_created_again(monkeypatch: pytest.MonkeyPa
     )
     monkeypatch.setattr("app.agent.tools.httpx.AsyncClient", lambda **kwargs: client)
 
-    result = json.loads(await call_tool("calendar_create_event", EVENT_ARGS, None, SimpleNamespace(id=1)))
+    result = json.loads(await call_tool("calendar_create_event", EVENT_ARGS, None, SimpleNamespace(id=1), approved=True))
 
     assert result["event"]["id"] == "server-assigned"
     # The retry drops the id and lets Google assign one.
@@ -512,7 +513,7 @@ async def test_a_cancelled_event_is_treated_as_gone(monkeypatch: pytest.MonkeyPa
     )
     monkeypatch.setattr("app.agent.tools.httpx.AsyncClient", lambda **kwargs: client)
 
-    result = json.loads(await call_tool("calendar_create_event", EVENT_ARGS, None, SimpleNamespace(id=1)))
+    result = json.loads(await call_tool("calendar_create_event", EVENT_ARGS, None, SimpleNamespace(id=1), approved=True))
 
     assert result["event"]["id"] == "fresh"
     assert len(client.post_bodies) == 2
@@ -540,7 +541,7 @@ async def test_a_moved_event_is_not_reported_as_the_new_one(monkeypatch: pytest.
     )
     monkeypatch.setattr("app.agent.tools.httpx.AsyncClient", lambda **kwargs: client)
 
-    result = json.loads(await call_tool("calendar_create_event", EVENT_ARGS, None, SimpleNamespace(id=1)))
+    result = json.loads(await call_tool("calendar_create_event", EVENT_ARGS, None, SimpleNamespace(id=1), approved=True))
 
     assert result["event"]["id"] == "server-assigned"
     assert "id" not in client.post_bodies[1]
@@ -563,7 +564,7 @@ async def test_a_renamed_event_is_not_reported_as_the_new_one(monkeypatch: pytes
     )
     monkeypatch.setattr("app.agent.tools.httpx.AsyncClient", lambda **kwargs: client)
 
-    result = json.loads(await call_tool("calendar_create_event", EVENT_ARGS, None, SimpleNamespace(id=1)))
+    result = json.loads(await call_tool("calendar_create_event", EVENT_ARGS, None, SimpleNamespace(id=1), approved=True))
 
     assert result["event"]["id"] == "fresh"
 
@@ -584,7 +585,7 @@ async def test_the_same_moment_in_another_offset_is_still_a_match(monkeypatch: p
     )
     monkeypatch.setattr("app.agent.tools.httpx.AsyncClient", lambda **kwargs: client)
 
-    result = json.loads(await call_tool("calendar_create_event", EVENT_ARGS, None, SimpleNamespace(id=1)))
+    result = json.loads(await call_tool("calendar_create_event", EVENT_ARGS, None, SimpleNamespace(id=1), approved=True))
 
     assert result["event"]["id"] == "abc"
     assert len(client.post_bodies) == 1

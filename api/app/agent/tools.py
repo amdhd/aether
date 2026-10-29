@@ -3,7 +3,7 @@ import hashlib
 import json
 import re
 import time
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from difflib import get_close_matches
 from typing import Any
 from urllib.parse import quote
@@ -12,6 +12,7 @@ import httpx
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.agent.budget import bounded_tool_result
 from app.core.config import settings
 from app.core.logging import get_logger
 from app.core.rate_limit import check_tool_rate_limit
@@ -80,6 +81,8 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
             "parameters": {
                 "type": "object",
                 "properties": {
+                    "limit": {"type": "integer", "minimum": 1, "maximum": 50},
+                    "before_id": {"type": "integer", "minimum": 1},
                     "status": {
                         "type": "string",
                         "enum": ["todo", "doing", "done"],
@@ -118,7 +121,7 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
         "type": "function",
         "function": {
             "name": "delete_task",
-            "description": "Delete a task by id.",
+            "description": "Propose deleting a task by id. Requires user approval in the UI before execution.",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -152,10 +155,13 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
         "type": "function",
         "function": {
             "name": "list_notes",
-            "description": "List all of the user's notes, most recently updated first.",
+            "description": "List a bounded page of the user's notes, newest id first. Follow next_before_id for more.",
             "parameters": {
                 "type": "object",
-                "properties": {},
+                "properties": {
+                    "limit": {"type": "integer", "minimum": 1, "maximum": 50},
+                    "before_id": {"type": "integer", "minimum": 1},
+                },
                 "required": [],
             },
         },
@@ -242,7 +248,7 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
         "type": "function",
         "function": {
             "name": "calendar_create_event",
-            "description": "Create a new event on the user's primary Google Calendar.",
+            "description": "Propose a new event on the user's primary Google Calendar. Requires user approval in the UI.",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -266,7 +272,7 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
         "type": "function",
         "function": {
             "name": "calendar_delete_event",
-            "description": "Delete an event from the user's primary Google Calendar by event id.",
+            "description": "Propose deleting a Google Calendar event by id. Requires user approval in the UI.",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -286,7 +292,7 @@ def _serialize_task(task: Task) -> dict[str, Any]:
     return {
         "id": task.id,
         "title": task.title,
-        "description": task.description,
+        "description": task.description[:2000] if task.description else task.description,
         "due_date": task.due_date.isoformat() if task.due_date else None,
         "priority": task.priority.value,
         "status": task.status.value,
@@ -297,7 +303,8 @@ def _serialize_note(note: Note) -> dict[str, Any]:
     return {
         "id": note.id,
         "title": note.title,
-        "content": note.content,
+        "content": note.content[:2000],
+        "content_truncated": len(note.content) > 2000,
         "tags": note.tags,
     }
 
@@ -317,15 +324,28 @@ async def _create_task(db: AsyncSession, user: User, args: dict[str, Any]) -> di
     return {"task": _serialize_task(task)}
 
 
+def _page_args(args: dict[str, Any]) -> tuple[int, int | None]:
+    limit = args.get("limit", 20)
+    before_id = args.get("before_id")
+    if type(limit) is not int or not 1 <= limit <= 50:
+        raise ValueError("limit must be an integer between 1 and 50")
+    if before_id is not None and (type(before_id) is not int or before_id < 1):
+        raise ValueError("before_id must be a positive integer")
+    return limit, before_id
+
+
 async def _list_tasks(db: AsyncSession, user: User, args: dict[str, Any]) -> dict[str, Any]:
     stmt = select(Task).where(Task.user_id == user.id)
     if args.get("status"):
         stmt = stmt.where(Task.status == TaskStatus(args["status"]))
     if args.get("priority"):
         stmt = stmt.where(Task.priority == TaskPriority(args["priority"]))
-    stmt = stmt.order_by(Task.created_at.desc())
-    result = await db.scalars(stmt)
-    return {"tasks": [_serialize_task(task) for task in result.all()]}
+    limit, before_id = _page_args(args)
+    if before_id is not None:
+        stmt = stmt.where(Task.id < before_id)
+    rows = list(await db.scalars(stmt.order_by(Task.id.desc()).limit(limit + 1)))
+    return {"tasks": [_serialize_task(task) for task in rows[:limit]],
+            "next_before_id": rows[limit - 1].id if len(rows) > limit else None}
 
 
 async def _update_task(db: AsyncSession, user: User, args: dict[str, Any]) -> dict[str, Any]:
@@ -390,9 +410,13 @@ async def _create_note(db: AsyncSession, user: User, args: dict[str, Any]) -> di
 
 
 async def _list_notes(db: AsyncSession, user: User, args: dict[str, Any]) -> dict[str, Any]:
-    stmt = select(Note).where(Note.user_id == user.id).order_by(Note.updated_at.desc())
-    result = await db.scalars(stmt)
-    return {"notes": [_serialize_note(note) for note in result.all()]}
+    limit, before_id = _page_args(args)
+    stmt = select(Note).where(Note.user_id == user.id)
+    if before_id is not None:
+        stmt = stmt.where(Note.id < before_id)
+    rows = list(await db.scalars(stmt.order_by(Note.id.desc()).limit(limit + 1)))
+    return {"notes": [_serialize_note(note) for note in rows[:limit]],
+            "next_before_id": rows[limit - 1].id if len(rows) > limit else None}
 
 
 async def _search_notes(db: AsyncSession, user: User, args: dict[str, Any]) -> dict[str, Any]:
@@ -784,10 +808,31 @@ def format_tool_result_block(tool_name: str, content: str) -> str:
     )
 
 
-async def call_tool(name: str, arguments: dict[str, Any], db: AsyncSession, user: User) -> str:
+APPROVAL_REQUIRED_TOOLS = frozenset({"delete_task", "calendar_delete_event", "calendar_create_event"})
+APPROVAL_TTL_SECONDS = 600
+
+
+async def call_tool(
+    name: str, arguments: dict[str, Any], db: AsyncSession, user: User, *, approved: bool = False
+) -> str:
     handler = _TOOL_HANDLERS.get(name)
     if handler is None:
         return json.dumps({"error": f"Unknown tool '{name}'."})
+
+    if not isinstance(arguments, dict):
+        return json.dumps({"error": "Tool arguments must be an object."})
+    if name in APPROVAL_REQUIRED_TOOLS and not approved:
+        # Only the authenticated approval endpoint may set approved. A model's
+        # arguments (including any claimed approval) can never bypass this gate.
+        if len(json.dumps(arguments).encode("utf-8")) > 8000:
+            return json.dumps({"error": "Action arguments are too large."})
+        return json.dumps({
+            "approval_required": True,
+            "name": name,
+            "arguments": arguments,
+            "expires_at": (datetime.now(timezone.utc) + timedelta(seconds=APPROVAL_TTL_SECONDS)).isoformat(),
+            "message": "Not executed. The user must approve this exact action in Action activity.",
+        })
 
     try:
         result = await handler(db, user, arguments)
@@ -815,4 +860,4 @@ async def call_tool(name: str, arguments: dict[str, Any], db: AsyncSession, user
         logger.exception("tool.failed tool=%s user_id=%s", name, user.id)
         return json.dumps({"error": f"The {name} tool failed unexpectedly."})
 
-    return json.dumps(result)
+    return bounded_tool_result(result)

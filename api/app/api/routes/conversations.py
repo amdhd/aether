@@ -1,3 +1,8 @@
+import json
+from datetime import datetime, timezone
+from typing import Literal
+
+from pydantic import BaseModel, ConfigDict
 from fastapi import (
     APIRouter,
     Depends,
@@ -10,9 +15,11 @@ from fastapi import (
     status,
 )
 from fastapi.responses import StreamingResponse
-from sqlalchemy import func, select
+from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from app.agent.tools import APPROVAL_REQUIRED_TOOLS, call_tool
+from app.models.message import Message, MessageRole
 from app.agent.loop import stream_agent_response, stream_replayed_turn
 from app.api.deps import get_current_user, get_owned_or_404
 from app.core.config import settings
@@ -25,6 +32,7 @@ from app.models.user import User
 from app.schemas.common import DEFAULT_PAGE_LIMIT, MAX_PAGE_LIMIT, Page
 from app.schemas.conversation import (
     MAX_MESSAGE_CHARS,
+    MessageRead,
     ConversationCreate,
     ConversationDetail,
     ConversationRead,
@@ -203,3 +211,55 @@ async def send_message(
         media_type="text/event-stream",
         headers=_SSE_HEADERS,
     )
+
+
+class ActionDecision(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    decision: Literal["approve", "reject"]
+
+
+@router.post("/{conversation_id}/actions/{message_id}", response_model=MessageRead)
+async def decide_action(
+    conversation_id: int,
+    message_id: int,
+    decision: ActionDecision,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> Message:
+    await _get_owned_conversation(conversation_id, current_user, db)
+    receipt = await db.scalar(select(Message).where(
+        Message.id == message_id, Message.conversation_id == conversation_id,
+        Message.role == MessageRole.tool,
+    ))
+    if receipt is None:
+        raise HTTPException(status_code=404, detail="Action not found")
+    if receipt.action_status != "pending":
+        raise HTTPException(status_code=409, detail="Action was already handled")
+    # Arguments and expiry are read only from the server-created receipt. The
+    # request cannot replace the target, tool, or arguments being approved.
+    proposal = json.loads(receipt.content or "{}")
+    if receipt.tool_name not in APPROVAL_REQUIRED_TOOLS or not proposal.get("approval_required"):
+        raise HTTPException(status_code=409, detail="Action is not approvable")
+    expired = datetime.now(timezone.utc) >= datetime.fromisoformat(proposal["expires_at"])
+    next_status = "expired" if expired else "rejected" if decision.decision == "reject" else "unconfirmed"
+    # Compare-and-set is portable to SQLite/Postgres and prevents duplicate
+    # execution across API replicas. Commit BEFORE invoking external effects;
+    # a crash leaves an unconfirmed receipt and must never trigger auto-retry.
+    claimed = await db.execute(update(Message).where(
+        Message.id == receipt.id, Message.action_status == "pending",
+    ).values(action_status=next_status).execution_options(synchronize_session=False))
+    await db.commit()
+    if claimed.rowcount != 1:
+        raise HTTPException(status_code=409, detail="Action was already handled")
+    await db.refresh(receipt)
+    if next_status != "unconfirmed":
+        receipt.content = json.dumps({"error": f"Action {next_status}; nothing was executed."})
+    else:
+        receipt.content = await call_tool(
+            receipt.tool_name, proposal["arguments"], db, current_user, approved=True,
+        )
+        result = json.loads(receipt.content)
+        receipt.action_status = "failed" if "error" in result else "completed"
+    await db.commit()
+    await db.refresh(receipt)
+    return receipt

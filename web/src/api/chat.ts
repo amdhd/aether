@@ -2,6 +2,7 @@ import { API_PREFIX, API_URL, ApiError, apiFetch, refreshAccessToken } from '@/l
 import { useAuthStore } from '@/store/auth'
 import type {
   ActionProgress,
+  ChatMessage,
   Conversation,
   ConversationCreateInput,
   ConversationDetail,
@@ -135,7 +136,7 @@ function dispatchEvent(event: string, data: string, handlers: ChatStreamHandlers
       break
     case 'action':
       if (typeof parsed.id === 'number' && typeof parsed.name === 'string' &&
-          ['running', 'unconfirmed', 'completed', 'failed'].includes(parsed.status ?? '')) {
+          ['running', 'pending', 'rejected', 'expired', 'unconfirmed', 'completed', 'failed'].includes(parsed.status ?? '')) {
         handlers.onAction?.({ id: parsed.id, name: parsed.name, status: parsed.status as ActionProgress['status'] })
       }
       break
@@ -242,4 +243,10 @@ export async function streamChatMessage(
       dispatchEvent(event, data, handlers)
     }
   }
+}
+
+export function decideAction(conversationId: number, messageId: number, decision: 'approve' | 'reject') {
+  return apiFetch<ChatMessage>(`${API_PREFIX}/conversations/${conversationId}/actions/${messageId}`, {
+    method: 'POST', body: { decision },
+  })
 }

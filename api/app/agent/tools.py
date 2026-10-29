@@ -3,7 +3,7 @@ import hashlib
 import json
 import re
 import time
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from difflib import get_close_matches
 from typing import Any
 from urllib.parse import quote
@@ -118,7 +118,7 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
         "type": "function",
         "function": {
             "name": "delete_task",
-            "description": "Delete a task by id.",
+            "description": "Propose deleting a task by id. Requires user approval in the UI before execution.",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -242,7 +242,7 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
         "type": "function",
         "function": {
             "name": "calendar_create_event",
-            "description": "Create a new event on the user's primary Google Calendar.",
+            "description": "Propose a new event on the user's primary Google Calendar. Requires user approval in the UI.",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -266,7 +266,7 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
         "type": "function",
         "function": {
             "name": "calendar_delete_event",
-            "description": "Delete an event from the user's primary Google Calendar by event id.",
+            "description": "Propose deleting a Google Calendar event by id. Requires user approval in the UI.",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -784,10 +784,31 @@ def format_tool_result_block(tool_name: str, content: str) -> str:
     )
 
 
-async def call_tool(name: str, arguments: dict[str, Any], db: AsyncSession, user: User) -> str:
+APPROVAL_REQUIRED_TOOLS = frozenset({"delete_task", "calendar_delete_event", "calendar_create_event"})
+APPROVAL_TTL_SECONDS = 600
+
+
+async def call_tool(
+    name: str, arguments: dict[str, Any], db: AsyncSession, user: User, *, approved: bool = False
+) -> str:
     handler = _TOOL_HANDLERS.get(name)
     if handler is None:
         return json.dumps({"error": f"Unknown tool '{name}'."})
+
+    if not isinstance(arguments, dict):
+        return json.dumps({"error": "Tool arguments must be an object."})
+    if name in APPROVAL_REQUIRED_TOOLS and not approved:
+        # Only the authenticated approval endpoint may set approved. A model's
+        # arguments (including any claimed approval) can never bypass this gate.
+        if len(json.dumps(arguments)) > 16000:
+            return json.dumps({"error": "Action arguments are too large."})
+        return json.dumps({
+            "approval_required": True,
+            "name": name,
+            "arguments": arguments,
+            "expires_at": (datetime.now(timezone.utc) + timedelta(seconds=APPROVAL_TTL_SECONDS)).isoformat(),
+            "message": "Not executed. The user must approve this exact action in Action activity.",
+        })
 
     try:
         result = await handler(db, user, arguments)

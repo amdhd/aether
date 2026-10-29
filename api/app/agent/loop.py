@@ -471,7 +471,10 @@ async def _run_agent(
 
                 tool_msg.content = tool_result
                 result = json.loads(tool_result)
-                tool_msg.action_status = "failed" if isinstance(result, dict) and "error" in result else "completed"
+                tool_msg.action_status = (
+                    "pending" if isinstance(result, dict) and result.get("approval_required")
+                    else "failed" if isinstance(result, dict) and "error" in result else "completed"
+                )
                 await db.commit()
                 yield _sse_event("action", {"id": tool_msg.id, "name": tool_name, "status": tool_msg.action_status})
                 messages.append(_message_to_api(tool_msg))

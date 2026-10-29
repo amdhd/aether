@@ -278,12 +278,11 @@ async def test_calendar_rate_limited(monkeypatch: pytest.MonkeyPatch) -> None:
 def test_untrusted_result_tools_covers_the_third_party_channels() -> None:
     """The set is what decides whether a result gets fenced, so pin it.
 
-    Web pages and calendar invites are written by someone other than the user;
-    results built from the user's own notes and tasks are not, and fencing those
-    would add noise to every turn without closing anything.
+    Web pages, calendar invites, and notes containing copied/imported text
+    are evidence rather than instructions or authorization.
     """
-    assert UNTRUSTED_RESULT_TOOLS == {"web_search", "calendar_list_events", "get_weather"}
-    assert not UNTRUSTED_RESULT_TOOLS & {"list_notes", "search_notes", "list_tasks", "create_task"}
+    assert UNTRUSTED_RESULT_TOOLS == {"web_search", "calendar_list_events", "get_weather", "search_notes", "read_note"}
+    assert not UNTRUSTED_RESULT_TOOLS & {"list_notes", "list_tasks", "create_task"}
 
 
 def test_tool_result_block_fences_content_as_data() -> None:

@@ -8,7 +8,8 @@ a case-insensitive keyword scan so the feature still returns sensible results.
 
 import re
 
-from sqlalchemy import or_, select
+from sqlalchemy import inspect, or_, select
+from sqlalchemy.orm.attributes import flag_modified
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core import cost_cap
@@ -83,8 +84,17 @@ async def _within_budget(db: AsyncSession, user_id: int) -> bool:
 
 
 async def refresh_note_embedding(db: AsyncSession, note: Note) -> None:
-    """(Re)compute and store a note's embedding. No-op when embeddings are
-    disabled or the user is over their monthly budget. Caller commits."""
+    """Replace the vector for the current text, or persist NULL on failure.
+
+    Caller commits the text and vector together. Clear before every early exit
+    so changed content can never retain the preceding version's embedding.
+    """
+    note.embedding = None
+    if inspect(note).persistent:
+        # Force NULL into the UPDATE even if this session originally read NULL.
+        # Another writer may have embedded the previous text since that read;
+        # omitting this column would preserve that other writer's stale vector.
+        flag_modified(note, "embedding")
     if not embeddings.embeddings_enabled():
         return
     if not await _within_budget(db, note.user_id):

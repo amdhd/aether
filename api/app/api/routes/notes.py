@@ -69,9 +69,14 @@ async def update_note(
 ) -> Note:
     note = await _get_owned_note(note_id, current_user, db)
     fields = note_in.model_dump(exclude_unset=True)
+    text_changed = any(field in fields and fields[field] != getattr(note, field)
+                       for field in ("title", "content"))
+    text_supplied = "title" in fields or "content" in fields
     for field, value in fields.items():
         setattr(note, field, value)
-    if "title" in fields or "content" in fields:
+    # Keep a valid vector for no-op edits. Re-saving text with a missing vector
+    # deliberately retries a prior failed/skipped embedding without a backfill.
+    if text_changed or (text_supplied and note.embedding is None):
         await refresh_note_embedding(db, note)
     await db.commit()
     await db.refresh(note)

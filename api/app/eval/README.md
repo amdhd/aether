@@ -186,3 +186,16 @@ python -m app.eval.run
 
 Tests live in `api/tests/test_eval_metrics.py` (formula math, no LLM) and
 `api/tests/test_eval_harness.py` (end-to-end smoke on the offline backend).
+
+### Evidence parity
+
+Evaluation uses the same query-length cap, query-relevant passages, source offsets,
+and aggregate search-result byte budget as the production `search_notes` tool.
+Generation and judging receive only delivered passages; retrieval recall counts
+only notes that survived that budget. Reports record the evidence version and
+budget so scores from older full-note evaluations are distinguishable.
+
+This measures the first search result, not the full multi-turn agent. Follow-up
+`read_note` calls, historical conversation context, and action decisions require
+separate agent-level tests. The offline generator remains a deterministic
+extractive approximation; it does not measure live model answer quality.

@@ -63,3 +63,41 @@ async def test_search_tool_and_read_pages_preserve_tail_and_ownership(monkeypatc
 async def test_read_note_rejects_invalid_ids_before_database_access():
     result = json.loads(await call_tool("read_note", {"note_id": True}, None, SimpleNamespace(id=1)))
     assert "error" in result
+
+
+async def test_evaluation_uses_the_exact_production_search_payload(monkeypatch):
+    from app.agent import tools
+    from app.eval.pipeline import delivered_evidence
+    from app.services.note_passages import build_search_payload
+
+    notes = [Note(id=i + 1, title=f"Plan {i}", content="背景" * 2000 + " launch budget RM 42000 " + "追加" * 2000)
+             for i in range(5)]
+
+    async def retrieve(*args, **kwargs):
+        return notes
+
+    monkeypatch.setattr(tools, "search_notes", retrieve)
+    production = json.loads(await tools.call_tool("search_notes", {"query": "launch budget"}, None, SimpleNamespace(id=1)))
+    contexts, titles = delivered_evidence(notes, "launch budget")
+    assert [json.loads(context) for context in contexts] == production["notes"]
+    assert titles == [record["title"] for record in production["notes"]]
+    assert production == build_search_payload(notes, "launch budget")
+    assert len(contexts) < len(notes), "wide multibyte evidence must exercise aggregate truncation"
+    assert "RM 42000" in contexts[0]
+    assert "背景" * 2000 not in contexts[0]
+
+
+def test_budgeted_evidence_survives_production_prompt_framing():
+    from app.agent.budget import bound_context
+    from app.agent.tools import TOOL_SCHEMAS, format_tool_result_block
+    from app.services.note_passages import SEARCH_EVIDENCE_BYTES, build_search_payload
+
+    notes = [Note(id=i, title="Plan", content="launch budget " + "🌏" * 5000) for i in range(1, 6)]
+    payload = build_search_payload(notes, "launch budget")
+    encoded = json.dumps(payload, ensure_ascii=False)
+    assert len(encoded.encode()) <= SEARCH_EVIDENCE_BYTES
+    framed = format_tool_result_block("search_notes", encoded)
+    messages = [{"role": "user", "content": "launch budget"},
+                {"role": "assistant", "content": None, "tool_calls": [{"id": "x", "type": "function", "function": {"name": "search_notes", "arguments": "{}"}}]},
+                {"role": "tool", "tool_call_id": "x", "content": framed}]
+    assert bound_context(messages, TOOL_SCHEMAS)[-1]["content"] == framed

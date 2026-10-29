@@ -37,6 +37,7 @@ import math
 import re
 from typing import Protocol
 
+from app.agent.budget import bound_context
 from app.core import usage
 from app.core.config import settings
 from app.core.logging import get_logger
@@ -118,6 +119,14 @@ class OfflineBackend:
         q = set(_tokens(question))
         scored: list[tuple[int, str]] = []
         for context in contexts:
+            try:
+                record = json.loads(context)
+            except (ValueError, TypeError):
+                record = None
+            if isinstance(record, dict) and "passages" in record:
+                context = str(record.get("title", "")) + "\n" + "\n".join(
+                    passage["text"] for passage in record["passages"]
+                )
             for sentence in _split_sentences(context):
                 overlap = len(q & set(_tokens(sentence)))
                 if overlap:
@@ -254,10 +263,10 @@ class LLMBackend:
         context = "\n\n---\n\n".join(contexts) if contexts else "(no notes found)"
         content = await self._chat(
             self.generation_model,
-            [
+            bound_context([
                 {"role": "system", "content": _GENERATE_PROMPT_SYSTEM.format(context=context)},
                 {"role": "user", "content": question},
-            ],
+            ]),
         )
         return content.strip()
 

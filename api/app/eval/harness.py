@@ -40,7 +40,7 @@ from app.eval import metrics
 from app.eval.backend import EvalBackend, ThrottledBackend
 from app.eval.config import EvalConfig
 from app.eval.dataset import CORPUS, GOLDEN, EvalSample
-from app.eval.pipeline import note_text, retrieve, seed_corpus
+from app.eval.pipeline import delivered_evidence, retrieve, seed_corpus
 
 # Corpus titles are unique, so title -> slug recovers which note was retrieved
 # without threading a slug column through the ORM model.
@@ -211,12 +211,13 @@ async def _retrieve_all(session_factory: async_sessionmaker, config: EvalConfig)
             started = time.perf_counter()
             with meter(into=usage):
                 notes = await retrieve(db, user, sample.question, limit=config.retrieval_k)
+            contexts, titles = delivered_evidence(notes, sample.question)
             retrieval_ms = (time.perf_counter() - started) * 1000
             items.append(
                 _Retrieved(
                     sample=sample,
-                    contexts=[note_text(n) for n in notes],
-                    retrieved_slugs=[_TITLE_TO_SLUG.get(n.title, n.title) for n in notes],
+                    contexts=contexts,
+                    retrieved_slugs=[_TITLE_TO_SLUG.get(title, title) for title in titles],
                     usage=usage,
                     retrieval_ms=retrieval_ms,
                 )

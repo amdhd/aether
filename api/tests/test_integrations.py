@@ -4,7 +4,6 @@ import pytest
 from httpx import AsyncClient
 
 from app.core.config import settings
-from app.core.security import create_oauth_state_token
 from app.models.user import User
 from app.services import google_oauth
 from tests.conftest import TestingSessionLocal
@@ -69,12 +68,8 @@ async def test_google_callback_success_stores_credential(
     me = await client.get("/api/v1/conversations", headers=auth_headers)
     assert me.status_code == 200
 
-    # Decode the user id from the access token used in auth_headers.
-    from app.core.security import decode_token
-
-    token = auth_headers["Authorization"].split(" ", 1)[1]
-    user_id = int(decode_token(token)["sub"])
-    state = create_oauth_state_token(user_id)
+    connect = await client.get("/api/v1/integrations/google/connect", headers=auth_headers)
+    state = parse_qs(urlparse(connect.json()["authorization_url"]).query)["state"][0]
 
     async def fake_exchange_code(code: str) -> dict:
         assert code == "auth-code"
@@ -102,11 +97,8 @@ async def test_google_callback_success_stores_credential(
 async def test_google_disconnect(
     client: AsyncClient, auth_headers: dict[str, str], monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    from app.core.security import decode_token
-
-    token = auth_headers["Authorization"].split(" ", 1)[1]
-    user_id = int(decode_token(token)["sub"])
-    state = create_oauth_state_token(user_id)
+    connect = await client.get("/api/v1/integrations/google/connect", headers=auth_headers)
+    state = parse_qs(urlparse(connect.json()["authorization_url"]).query)["state"][0]
 
     async def fake_exchange_code(code: str) -> dict:
         return {
@@ -133,11 +125,8 @@ async def test_google_disconnect(
 async def test_google_disconnect_revokes_grant_at_google(
     client: AsyncClient, auth_headers: dict[str, str], monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    from app.core.security import decode_token
-
-    token = auth_headers["Authorization"].split(" ", 1)[1]
-    user_id = int(decode_token(token)["sub"])
-    state = create_oauth_state_token(user_id)
+    connect = await client.get("/api/v1/integrations/google/connect", headers=auth_headers)
+    state = parse_qs(urlparse(connect.json()["authorization_url"]).query)["state"][0]
 
     async def fake_exchange_code(code: str) -> dict:
         return {
@@ -194,11 +183,8 @@ async def test_google_disconnect_when_google_revoke_fails_still_disconnects(
 ) -> None:
     import httpx
 
-    from app.core.security import decode_token
-
-    token = auth_headers["Authorization"].split(" ", 1)[1]
-    user_id = int(decode_token(token)["sub"])
-    state = create_oauth_state_token(user_id)
+    connect = await client.get("/api/v1/integrations/google/connect", headers=auth_headers)
+    state = parse_qs(urlparse(connect.json()["authorization_url"]).query)["state"][0]
 
     async def fake_exchange_code(code: str) -> dict:
         return {
@@ -249,7 +235,8 @@ async def test_get_valid_access_token_refreshes_when_expired(
 
     token = auth_headers["Authorization"].split(" ", 1)[1]
     user_id = int(decode_token(token)["sub"])
-    state = create_oauth_state_token(user_id)
+    connect = await client.get("/api/v1/integrations/google/connect", headers=auth_headers)
+    state = parse_qs(urlparse(connect.json()["authorization_url"]).query)["state"][0]
 
     async def fake_exchange_code(code: str) -> dict:
         return {
@@ -339,3 +326,36 @@ async def test_a_concurrent_oauth_callback_does_not_500(monkeypatch: pytest.Monk
         assert credential.user_id == user_id
         # The winner's row, recovered — not a second row, and not a 500.
         assert credential.id == winner_id
+
+
+async def test_forwarded_oauth_link_is_rejected_before_exchange(
+    client: AsyncClient, auth_headers: dict[str, str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    connect = await client.get("/api/v1/integrations/google/connect", headers=auth_headers)
+    state = parse_qs(urlparse(connect.json()["authorization_url"]).query)["state"][0]
+
+    async def unexpected_exchange(code: str) -> dict:
+        pytest.fail("A forwarded flow must never exchange a Google code")
+
+    monkeypatch.setattr(google_oauth, "exchange_code", unexpected_exchange)
+    client.cookies.clear()
+    response = await client.get(
+        "/api/v1/integrations/google/callback",
+        params={"code": "victim-code", "state": state}, follow_redirects=False,
+    )
+    assert "google=error" in response.headers["location"]
+
+
+async def test_new_oauth_flow_invalidates_previous_browser_state(
+    client: AsyncClient, auth_headers: dict[str, str]
+) -> None:
+    first = await client.get("/api/v1/integrations/google/connect", headers=auth_headers)
+    old_state = parse_qs(urlparse(first.json()["authorization_url"]).query)["state"][0]
+    second = await client.get("/api/v1/integrations/google/connect", headers=auth_headers)
+    new_state = parse_qs(urlparse(second.json()["authorization_url"]).query)["state"][0]
+    assert old_state != new_state
+    response = await client.get(
+        "/api/v1/integrations/google/callback",
+        params={"code": "code", "state": old_state}, follow_redirects=False,
+    )
+    assert "google=error" in response.headers["location"]

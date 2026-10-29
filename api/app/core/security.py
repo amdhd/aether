@@ -1,6 +1,8 @@
 from datetime import datetime, timedelta, timezone
 from typing import Any, Literal
 
+import secrets
+
 import bcrypt
 import jwt
 
@@ -94,13 +96,14 @@ def decode_token(token: str) -> dict[str, Any]:
 
 def create_oauth_state_token(user_id: int) -> str:
     """Short-lived, signed token used as the OAuth `state` param. Binds the
-    callback (an unauthenticated browser redirect) back to the user who
-    initiated the flow and protects against CSRF, since it can't be forged
-    without SECRET_KEY."""
+    callback back to the initiating account. The callback must also match
+    this token against the initiating browser's HttpOnly cookie: a signature
+    alone does not prevent an attacker forwarding their authorization URL."""
     now = datetime.now(timezone.utc)
     to_encode: dict[str, Any] = {
         "sub": str(user_id),
         "type": "oauth_state",
+        "jti": secrets.token_urlsafe(32),
         "iat": now,
         "exp": now + timedelta(minutes=settings.OAUTH_STATE_EXPIRE_MINUTES),
     }

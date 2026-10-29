@@ -32,3 +32,14 @@ docker-compose.override.yml
 # Claude Code (local tooling — not part of the project)
 .claude/
 CLAUDE.md
+
+# Local secrets and infrastructure state (examples remain versioned)
+.env.*
+!.env.example
+!.env.*.example
+*.pem
+*.key
+*.tfstate
+*.tfstate.*
+*.tfplan
+.terraform/

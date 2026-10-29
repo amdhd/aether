@@ -89,3 +89,32 @@ def test_the_two_tls_modes_are_mutually_exclusive() -> None:
 def test_smtp_settings_accept_each_tls_mode_on_its_own() -> None:
     assert Settings(_env_file=None, SMTP_HOST="s", SMTP_STARTTLS=True, SMTP_USE_TLS=False)
     assert Settings(_env_file=None, SMTP_HOST="s", SMTP_STARTTLS=False, SMTP_USE_TLS=True)
+
+
+async def test_production_without_smtp_never_logs_reset_token(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    monkeypatch.setattr(settings, "ENVIRONMENT", "production")
+    monkeypatch.setattr(settings, "SMTP_HOST", "")
+    monkeypatch.setattr(logging.getLogger("app"), "propagate", True)
+    with caplog.at_level("INFO", logger="app.services.email"):
+        sent = await email.send_password_reset("private@example.com", "Private", "secret-reset-token")
+    assert sent is False
+    assert "secret-reset-token" not in caplog.text
+    assert "private@example.com" not in caplog.text
+
+
+async def test_smtp_exception_content_is_not_logged(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    monkeypatch.setattr(settings, "SMTP_HOST", "smtp.example.com")
+    monkeypatch.setattr(logging.getLogger("app"), "propagate", True)
+
+    async def fail(_message: object) -> None:
+        raise OSError("private@example.com secret-reset-token")
+
+    monkeypatch.setattr(email, "_send_smtp", fail)
+    with caplog.at_level("WARNING", logger="app.services.email"):
+        assert await email.send_email("private@example.com", "Reset", "secret-reset-token") is False
+    assert "private@example.com" not in caplog.text
+    assert "secret-reset-token" not in caplog.text

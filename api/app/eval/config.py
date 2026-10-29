@@ -25,6 +25,7 @@ from dataclasses import dataclass
 
 from app.core.config import settings
 from app.eval.pipeline import RETRIEVAL_K
+from app.services.note_passages import EVIDENCE_VERSION, SEARCH_EVIDENCE_BYTES
 
 # Concurrent in-flight LLM requests. Bounded rather than unbounded because the
 # fan-out is large — one generation plus roughly a dozen judge calls per sample,
@@ -47,8 +48,8 @@ class EvalConfig:
     concurrency: int = DEFAULT_CONCURRENCY
 
     def __post_init__(self) -> None:
-        if self.retrieval_k < 1:
-            raise ValueError("retrieval_k must be >= 1")
+        if not 1 <= self.retrieval_k <= 50:
+            raise ValueError("retrieval_k must be between 1 and 50")
         if self.relevancy_questions < 1:
             raise ValueError("relevancy_questions must be >= 1")
         if self.concurrency < 1:
@@ -64,6 +65,9 @@ class EvalConfig:
         """
         return {
             "retrieval_k": self.retrieval_k,
+            "evidence_version": EVIDENCE_VERSION,
+            "search_evidence_bytes": SEARCH_EVIDENCE_BYTES,
+            "evaluation_scope": "first-search evidence; excludes follow-up read_note calls",
             "relevancy_questions": self.relevancy_questions,
             "concurrency": self.concurrency,
             "note_search_max_distance": settings.NOTE_SEARCH_MAX_DISTANCE,

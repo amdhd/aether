@@ -6,7 +6,10 @@ vector, and semantic search falls back to a keyword scan. This keeps local dev
 and CI (which run on SQLite without a key) fully functional.
 """
 
+import asyncio
 from functools import lru_cache
+
+import httpx
 
 from openai import AsyncOpenAI
 
@@ -21,9 +24,17 @@ def embeddings_enabled() -> bool:
     return bool(settings.OPENAI_API_KEY)
 
 
+EMBEDDING_DEADLINE_SECONDS = 12.0
+EMBEDDING_MAX_RETRIES = 1
+
+
 @lru_cache
 def _client() -> AsyncOpenAI:
-    return AsyncOpenAI(api_key=settings.OPENAI_API_KEY)
+    return AsyncOpenAI(
+        api_key=settings.OPENAI_API_KEY,
+        timeout=httpx.Timeout(5.0, connect=2.0, pool=2.0),
+        max_retries=EMBEDDING_MAX_RETRIES,
+    )
 
 
 # The embedding model rejects input past its context window outright, and
@@ -58,16 +69,19 @@ async def embed_text_with_usage(text: str) -> tuple[list[float] | None, int]:
         )
         text = text[:MAX_EMBEDDING_INPUT_CHARS]
     try:
-        resp = await _client().embeddings.create(
-            model=settings.EMBEDDING_MODEL,
-            input=text,
-            dimensions=settings.EMBEDDING_DIMENSIONS,
-        )
+        # Bounds the entire operation, including retries and backoff, rather
+        # than just each socket read. Timeout cancels the pending provider call.
+        async with asyncio.timeout(EMBEDDING_DEADLINE_SECONDS):
+            resp = await _client().embeddings.create(
+                model=settings.EMBEDDING_MODEL,
+                input=text,
+                dimensions=settings.EMBEDDING_DIMENSIONS,
+            )
     except Exception as exc:
         # Degrade gracefully (search falls back to keyword scan), but leave a
         # trace: without this, a bad/expired OPENAI_API_KEY silently disables
         # semantic search indefinitely with no signal that anything is wrong.
-        logger.warning("embedding.failed error=%r", exc)
+        logger.warning("embedding.failed error_type=%s", type(exc).__name__)
         return None, 0
     tokens = getattr(resp.usage, "total_tokens", 0) or 0
     # No-op unless a caller opened a usage meter. This is the only place query

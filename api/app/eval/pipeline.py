@@ -19,10 +19,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from sqlalchemy import delete, select
 
-from app.eval.dataset import CORPUS, CorpusNote
+from app.eval.dataset import CORPUS
 from app.models.note import Note
 from app.models.user import User
 from app.services import note_search
+from app.services.note_passages import SEARCH_QUERY_CHARS, build_search_payload, evidence_contexts
 
 # Top-K notes handed to the generator — matches the agent's search_notes tool.
 RETRIEVAL_K = 5
@@ -32,11 +33,10 @@ RETRIEVAL_K = 5
 EVAL_USER_EMAIL = "eval@aether.local"
 
 
-def note_text(note: Note | CorpusNote) -> str:
-    """Render a note the way it is fed to the model as context."""
-    title = (note.title or "").strip()
-    content = (note.content or "").strip()
-    return f"{title}\n{content}".strip()
+def delivered_evidence(notes: list[Note], question: str) -> tuple[list[str], list[str]]:
+    """Contexts and titles from exactly the records delivered by search_notes."""
+    payload = build_search_payload(notes, question)
+    return evidence_contexts(payload), [record["title"] for record in payload["notes"]]
 
 
 async def seed_corpus(db: AsyncSession) -> User:
@@ -75,4 +75,4 @@ async def seed_corpus(db: AsyncSession) -> User:
 
 
 async def retrieve(db: AsyncSession, user: User, question: str, limit: int = RETRIEVAL_K) -> list[Note]:
-    return await note_search.search_notes(db, user, question, limit=limit)
+    return await note_search.search_notes(db, user, question[:SEARCH_QUERY_CHARS], limit=limit)

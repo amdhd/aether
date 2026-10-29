@@ -25,7 +25,7 @@ from app.schemas.note import (
     MAX_NOTE_TAGS,
     MAX_NOTE_TITLE_CHARS,
 )
-from app.services.note_passages import READ_CHARS, search_evidence
+from app.services.note_passages import READ_CHARS, SEARCH_QUERY_CHARS, build_search_payload
 from app.services import google_oauth
 from app.services.note_search import refresh_note_embedding, search_notes
 
@@ -438,9 +438,9 @@ async def _list_notes(db: AsyncSession, user: User, args: dict[str, Any]) -> dic
 
 
 async def _search_notes(db: AsyncSession, user: User, args: dict[str, Any]) -> dict[str, Any]:
-    query = args["query"][:200]
+    query = args["query"][:SEARCH_QUERY_CHARS]
     notes = await search_notes(db, user, query, limit=5)
-    return {"notes": [search_evidence(note, query) for note in notes]}
+    return build_search_payload(notes, query)
 
 
 async def _read_note(db: AsyncSession, user: User, args: dict[str, Any]) -> dict[str, Any]:

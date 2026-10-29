@@ -1,9 +1,11 @@
 """Bounded, source-addressable evidence from retrieved notes."""
+import json
 import re
 from bisect import bisect_left
 from collections import defaultdict
 from typing import Any
 
+from app.agent.budget import MAX_TOOL_RESULT_BYTES
 from app.models.note import Note
 
 PASSAGE_CHARS = 900
@@ -50,3 +52,30 @@ def search_evidence(note: Note, query: str) -> dict[str, Any]:
         "content_truncated": sum(len(p["text"]) for p in passages) < len(text),
         "read_more": "Use read_note with note_id and offset to inspect omitted text. Offsets are character positions.",
     }
+
+
+# Leave room for the untrusted-tool wrapper and prompt framing under the
+# per-message context ceiling. Drop whole records rather than malformed JSON.
+SEARCH_EVIDENCE_BYTES = MAX_TOOL_RESULT_BYTES - 2000
+SEARCH_QUERY_CHARS = 200
+EVIDENCE_VERSION = "passages-v1"
+
+
+def build_search_payload(notes: list[Note], query: str) -> dict[str, Any]:
+    query = query[:SEARCH_QUERY_CHARS]
+    result: dict[str, Any] = {"notes": [search_evidence(note, query) for note in notes]}
+    while len(json.dumps(result, ensure_ascii=False).encode("utf-8")) > SEARCH_EVIDENCE_BYTES:
+        if not result["notes"]:
+            return {"notes": [], "truncated": True}
+        result["notes"].pop()
+        result["truncated"] = True
+    return result
+
+
+def evidence_contexts(payload: dict[str, Any]) -> list[str]:
+    """One context per delivered note, preserving source IDs and offsets.
+
+    Eval judges receive only records that survived the same payload budget as
+    production. Neither answer generation nor recall may see discarded notes.
+    """
+    return [json.dumps(record, ensure_ascii=False) for record in payload["notes"]]

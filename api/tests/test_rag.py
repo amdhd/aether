@@ -266,3 +266,36 @@ async def test_a_failed_embedding_bills_nothing(monkeypatch: pytest.MonkeyPatch)
     vector, tokens = await embeddings.embed_text_with_usage("hello")
     assert vector is None
     assert tokens == 0
+
+
+async def test_embedding_deadline_cancels_provider_and_degrades(monkeypatch):
+    import asyncio
+
+    monkeypatch.setattr(embeddings.settings, "OPENAI_API_KEY", "dummy")
+    monkeypatch.setattr(embeddings, "EMBEDDING_DEADLINE_SECONDS", 0.01)
+    cancelled = []
+
+    class HangingEmbeddings:
+        async def create(self, **kwargs):
+            try:
+                await asyncio.sleep(10)
+            finally:
+                cancelled.append(True)
+
+    monkeypatch.setattr(embeddings, "_client", lambda: SimpleNamespace(embeddings=HangingEmbeddings()))
+    assert await asyncio.wait_for(embeddings.embed_text_with_usage("dummy"), timeout=1) == (None, 0)
+    assert cancelled == [True]
+
+
+def test_embedding_client_has_explicit_timeouts_and_bounded_retries(monkeypatch):
+    captured = {}
+    monkeypatch.setattr(embeddings.settings, "OPENAI_API_KEY", "dummy")
+    monkeypatch.setattr(embeddings, "AsyncOpenAI", lambda **kwargs: captured.update(kwargs))
+    embeddings._client.cache_clear()
+    try:
+        embeddings._client()
+        assert captured["max_retries"] == 1
+        assert captured["timeout"].connect == 2.0
+        assert captured["timeout"].read == 5.0
+    finally:
+        embeddings._client.cache_clear()

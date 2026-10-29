@@ -8,7 +8,7 @@ a case-insensitive keyword scan so the feature still returns sensible results.
 
 import re
 
-from sqlalchemy import inspect, or_, select
+from sqlalchemy import case, inspect, or_, select
 from sqlalchemy.orm.attributes import flag_modified
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -121,13 +121,20 @@ async def _keyword_search(db: AsyncSession, user: User, query: str, limit: int) 
         select(Note)
         .where(Note.user_id == user.id)
         .where(or_(*conditions))
-        .order_by(Note.updated_at.desc())
+        .order_by(sum(case((condition, 1), else_=0) for condition in conditions).desc(),
+                  Note.updated_at.desc(), Note.id.desc())
         .limit(limit)
     )
     return list((await db.scalars(stmt)).all())
 
 
 async def search_notes(db: AsyncSession, user: User, query: str, limit: int = 5) -> list[Note]:
+    if not 1 <= limit <= 50:
+        raise ValueError("limit must be between 1 and 50")
+    if not query.strip():
+        return []
+    candidate_limit = min(3 * limit, 50)
+    semantic: list[Note] = []
     if _is_postgres(db) and embeddings.embeddings_enabled():
         query_vector, tokens = await embeddings.embed_text_with_usage(query)
         # Embedding the query is billed too. Small next to a note body, but the
@@ -142,10 +149,22 @@ async def search_notes(db: AsyncSession, user: User, query: str, limit: int = 5)
                 select(Note)
                 .where(Note.user_id == user.id, Note.embedding.is_not(None))
                 .where(distance <= settings.NOTE_SEARCH_MAX_DISTANCE)
-                .order_by(distance)
-                .limit(limit)
+                .order_by(distance, Note.id)
+                .limit(candidate_limit)
             )
-            results = list((await db.scalars(stmt)).all())
-            if results:
-                return results
-    return await _keyword_search(db, user, query, limit)
+            semantic = list((await db.scalars(stmt)).all())
+    lexical = await _keyword_search(db, user, query, candidate_limit)
+    # Reciprocal-rank fusion combines differently scaled lexical/vector ranks.
+    # A lexical-only note remains eligible even when semantic matches exist.
+    # Lexical rank wins ties, retaining exact keyword matches at small top-k.
+    scores: dict[int, float] = {}
+    notes: dict[int, Note] = {}
+    lexical_ranks = {note.id: rank for rank, note in enumerate(lexical)}
+    for candidates in (semantic, lexical):
+        for rank, note in enumerate(candidates, start=1):
+            notes[note.id] = note
+            scores[note.id] = scores.get(note.id, 0.0) + 1.0 / (60 + rank)
+    ordered = sorted(notes, key=lambda note_id: (
+        -scores[note_id], lexical_ranks.get(note_id, candidate_limit), note_id,
+    ))
+    return [notes[note_id] for note_id in ordered[:limit]]

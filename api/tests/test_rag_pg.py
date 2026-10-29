@@ -102,3 +102,25 @@ def _async(value):
         return value
 
     return _coro()
+
+
+async def test_hybrid_search_includes_unembedded_exact_match_and_scopes_both_branches(monkeypatch):
+    user = await _make_user("hybrid@example.com")
+    other = await _make_user("hybrid-other@example.com")
+    async with TestingSessionLocal() as db:
+        semantic = Note(user_id=user.id, title="Related", content="Related wording", embedding=_vec(1.0))
+        lexical = Note(user_id=user.id, title="Launch budget", content="launch budget is 42000", embedding=None)
+        private = Note(user_id=other.id, title="Launch budget", content="PRIVATE", embedding=_vec(1.0))
+        db.add_all([semantic, lexical, private])
+        await db.commit()
+        monkeypatch.setattr(note_search.embeddings, "embeddings_enabled", lambda: True)
+        monkeypatch.setattr(note_search.embeddings, "embed_text_with_usage", lambda _: _async((_vec(1.0), 4)))
+        results = await note_search.search_notes(db, user, "launch budget", limit=2)
+        assert {note.id for note in results} == {semantic.id, lexical.id}
+        assert (await note_search.search_notes(db, user, "launch budget", limit=1))[0].id == lexical.id
+        # A note found by both branches is returned only once.
+        lexical.embedding = _vec(1.0)
+        await db.commit()
+        results = await note_search.search_notes(db, user, "launch budget", limit=5)
+        assert len(results) == 2
+        assert results[0].id == lexical.id

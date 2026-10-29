@@ -25,6 +25,7 @@ from app.schemas.note import (
     MAX_NOTE_TAGS,
     MAX_NOTE_TITLE_CHARS,
 )
+from app.services.note_passages import READ_CHARS, search_evidence
 from app.services import google_oauth
 from app.services.note_search import refresh_note_embedding, search_notes
 
@@ -288,6 +289,23 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
 ]
 
 
+TOOL_SCHEMAS.append({
+    "type": "function",
+    "function": {
+        "name": "read_note",
+        "description": "Read a bounded page of a retrieved note by id. Use this when search passages omit evidence, including semantic matches with different wording. Follow next_offset until the relevant text is found.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "note_id": {"type": "integer", "minimum": 1},
+                "offset": {"type": "integer", "minimum": 0, "description": "Character offset; defaults to 0."},
+            },
+            "required": ["note_id"],
+        },
+    },
+})
+
+
 def _serialize_task(task: Task) -> dict[str, Any]:
     return {
         "id": task.id,
@@ -422,7 +440,21 @@ async def _list_notes(db: AsyncSession, user: User, args: dict[str, Any]) -> dic
 async def _search_notes(db: AsyncSession, user: User, args: dict[str, Any]) -> dict[str, Any]:
     query = args["query"][:200]
     notes = await search_notes(db, user, query, limit=5)
-    return {"notes": [_serialize_note(note) for note in notes]}
+    return {"notes": [search_evidence(note, query) for note in notes]}
+
+
+async def _read_note(db: AsyncSession, user: User, args: dict[str, Any]) -> dict[str, Any]:
+    note_id, offset = args.get("note_id"), args.get("offset", 0)
+    if type(note_id) is not int or note_id < 1 or type(offset) is not int or offset < 0:
+        raise ValueError("note_id must be positive and offset must be a nonnegative integer")
+    note = await db.scalar(select(Note).where(Note.id == note_id, Note.user_id == user.id))
+    if note is None:
+        return {"error": "Note not found."}
+    start = min(offset, len(note.content))
+    end = min(start + READ_CHARS, len(note.content))
+    return {"note": {"id": note.id, "title": note.title, "content": note.content[start:end],
+                     "start": start, "end": end, "content_length": len(note.content),
+                     "next_offset": end if end < len(note.content) else None}}
 
 
 _weather_cache: dict[str, Any] = {"data": None, "fetched_at": 0.0}
@@ -756,6 +788,7 @@ _TOOL_HANDLERS = {
     "create_note": _create_note,
     "list_notes": _list_notes,
     "search_notes": _search_notes,
+    "read_note": _read_note,
     "get_weather": _get_weather,
     "web_search": _web_search,
     "calendar_list_events": _calendar_list_events,
@@ -774,10 +807,9 @@ _TOOL_HANDLERS = {
 # it as data. This is that marker — the same treatment uploaded files already get
 # in app.services.attachments, applied to the other two untrusted channels.
 #
-# Results made of the user's *own* records (their notes, their tasks) are not
-# fenced: the user is the principal here, so their own text carries no
-# escalation and fencing it would only add noise to every turn.
-UNTRUSTED_RESULT_TOOLS = frozenset({"web_search", "calendar_list_events", "get_weather"})
+# Retrieved notes may contain copied or imported instructions. Both search
+# passages and explicit note reads are untrusted evidence, not authorization.
+UNTRUSTED_RESULT_TOOLS = frozenset({"web_search", "calendar_list_events", "get_weather", "search_notes", "read_note"})
 
 _TOOL_RESULT_OPEN = '<tool_result name="{name}">'
 _TOOL_RESULT_CLOSE = "</tool_result>"

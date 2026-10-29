@@ -9,6 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.api.deps import get_current_user, require_csrf_header
 from app.core.config import settings
 from app.core import login_backoff
+from app.core.password_work import run_password_work
 from app.core.rate_limit import enforce_auth_rate_limit
 from app.core.security import fake_verify_password, hash_password, verify_password
 from app.db.session import get_db
@@ -77,7 +78,7 @@ async def register(
     user = User(
         email=user_in.email,
         name=user_in.name,
-        password_hash=hash_password(user_in.password),
+        password_hash=await run_password_work(hash_password, user_in.password),
     )
     db.add(user)
     try:
@@ -126,10 +127,10 @@ async def login(
     # Run a bcrypt comparison on both branches so a missing account and a wrong
     # password are indistinguishable by timing (prevents email enumeration).
     if user is None:
-        fake_verify_password()
+        await run_password_work(fake_verify_password)
         password_ok = False
     else:
-        password_ok = verify_password(form_data.password, user.password_hash)
+        password_ok = await run_password_work(verify_password, form_data.password, user.password_hash)
     if user is None or not password_ok:
         # Counted for unknown addresses too. A counter that only applied to real
         # accounts would answer "does this address exist?" through the lockout —
@@ -216,12 +217,12 @@ async def change_password(
     evict someone — while reissuing here means the person doing it isn't
     logged out of the tab they're standing in.
     """
-    if not verify_password(payload.current_password, current_user.password_hash):
+    if not await run_password_work(verify_password, payload.current_password, current_user.password_hash):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST, detail="Current password is incorrect"
         )
 
-    current_user.password_hash = hash_password(payload.new_password)
+    current_user.password_hash = await run_password_work(hash_password, payload.new_password)
     await refresh_tokens.revoke_all_for_user(db, current_user)
     tokens = await refresh_tokens.issue_token_pair(db, current_user)
     return _token_response(response, tokens)
@@ -280,7 +281,7 @@ async def reset_password(
             detail="That reset link is invalid or has expired. Request a new one.",
         )
 
-    user.password_hash = hash_password(payload.new_password)
+    user.password_hash = await run_password_work(hash_password, payload.new_password)
     # Proving control of the inbox is exactly what verification asks for, so a
     # completed reset settles it too and saves the user a second round trip.
     if user.email_verified_at is None:

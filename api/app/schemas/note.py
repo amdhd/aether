@@ -1,7 +1,7 @@
 from datetime import datetime
 from typing import Annotated
 
-from pydantic import BaseModel, ConfigDict, Field, StringConstraints
+from pydantic import BaseModel, ConfigDict, Field, field_validator, StringConstraints
 
 # Upper bound on a note body. Every write embeds the note, so an unbounded
 # field made the request body limit (1 MB) the only ceiling on what one call
@@ -36,6 +36,16 @@ class NoteUpdate(BaseModel):
     title: str | None = Field(default=None, min_length=1, max_length=MAX_NOTE_TITLE_CHARS)
     content: str | None = Field(default=None, max_length=MAX_NOTE_CONTENT_CHARS)
     tags: list[NoteTag] | None = Field(default=None, max_length=MAX_NOTE_TAGS)
+
+
+    @field_validator('title', 'content', 'tags', mode="before")
+    @classmethod
+    def reject_explicit_null(cls, value):
+        # Validators run for supplied fields; omitted defaults stay excluded
+        # from model_dump(exclude_unset=True).
+        if value is None:
+            raise ValueError("This field cannot be null")
+        return value
 
 
 class NoteRead(BaseModel):

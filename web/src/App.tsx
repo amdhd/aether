@@ -1,5 +1,5 @@
 import { useEffect } from 'react'
-import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
+import { SessionQueryProvider } from '@/components/SessionQueryProvider'
 import { RouterProvider } from 'react-router-dom'
 
 import { getMe } from '@/api/auth'
@@ -7,15 +7,6 @@ import { Toaster } from '@/components/ui/sonner'
 import { bootstrapAuth } from '@/lib/api'
 import { router } from '@/router'
 import { useAuthStore } from '@/store/auth'
-
-const queryClient = new QueryClient({
-  defaultOptions: {
-    queries: {
-      retry: 1,
-      refetchOnWindowFocus: false,
-    },
-  },
-})
 
 function App() {
   // On load, try to exchange the HttpOnly refresh cookie for an access token
@@ -37,10 +28,10 @@ function App() {
   }, [])
 
   return (
-    <QueryClientProvider client={queryClient}>
+    <SessionQueryProvider>
       <RouterProvider router={router} />
       <Toaster />
-    </QueryClientProvider>
+    </SessionQueryProvider>
   )
 }
 

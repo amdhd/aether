@@ -34,20 +34,27 @@ export async function refreshAccessToken(): Promise<string | null> {
   if (!refreshPromise) {
     refreshPromise = (async () => {
       try {
-        const res = await fetch(`${API_URL}${API_PREFIX}/auth/refresh`, {
-          method: 'POST',
-          credentials: 'include',
-          headers: CSRF_HEADERS,
+        const request = () => fetch(`${API_URL}${API_PREFIX}/auth/refresh`, {
+          method: 'POST', credentials: 'include', headers: CSRF_HEADERS,
         })
+        let res = await request()
+        // A 429 is rejected before token rotation, so one short retry is safe.
+        // Network/5xx responses may hide a committed rotation: never replay
+        // those automatically with an uncertain single-use refresh cookie.
+        const retryAfter = Number(res.headers.get('Retry-After') ?? '1')
+        if (res.status === 429 && Number.isFinite(retryAfter) && retryAfter >= 0 && retryAfter <= 1) {
+          await new Promise((resolve) => setTimeout(resolve, Math.max(100, retryAfter * 1000)))
+          res = await request()
+        }
         if (!res.ok) {
-          logout()
+          if (res.status === 401) logout()
           return null
         }
         const data: AccessToken = await res.json()
         setAccessToken(data.access_token)
         return data.access_token
       } catch {
-        logout()
+        // Keep existing identity/cache state during recoverable outages.
         return null
       } finally {
         refreshPromise = null

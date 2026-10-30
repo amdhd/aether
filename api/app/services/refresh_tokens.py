@@ -64,12 +64,6 @@ async def issue_token_pair(db: AsyncSession, user: User, family_id: str | None =
     return tokens
 
 
-async def _revoke_family(db: AsyncSession, family_id: str) -> None:
-    await db.execute(
-        update(RefreshToken).where(RefreshToken.family_id == family_id).values(revoked=True)
-    )
-
-
 async def rotate_refresh_token(db: AsyncSession, raw_token: str) -> IssuedTokens:
     """Validate and rotate a refresh token, returning a fresh token pair.
     Raises RefreshError on any problem (and revokes the family on replay)."""
@@ -84,13 +78,16 @@ async def rotate_refresh_token(db: AsyncSession, raw_token: str) -> IssuedTokens
     except (JWTError, KeyError, ValueError, TypeError) as exc:
         raise RefreshError("Invalid refresh token") from exc
 
+    # Lock the principal before refresh rows, matching logout/password-change
+    # ordering. Fresh state prevents an obsolete replay from evicting a new login.
+    user = await db.get(User, user_id, with_for_update=True, populate_existing=True)
+    if user is None or user.token_version != token_version:
+        raise RefreshError("Refresh token no longer valid")
     record = await db.scalar(select(RefreshToken).where(RefreshToken.jti == jti))
-
-    # Unknown jti, or a known-but-already-revoked one: treat as replay of a
-    # rotated/leaked token and burn the whole family.
-    if record is None or record.revoked:
-        await _revoke_family(db, family_id)
-        await db.commit()
+    if record is None or record.user_id != user_id or record.family_id != family_id:
+        raise RefreshError("Unknown refresh token")
+    if record.revoked:
+        await revoke_all_for_user(db, user)
         raise RefreshError("Refresh token reuse detected")
 
     expires_at = record.expires_at
@@ -98,10 +95,6 @@ async def rotate_refresh_token(db: AsyncSession, raw_token: str) -> IssuedTokens
         expires_at = expires_at.replace(tzinfo=timezone.utc)
     if expires_at < datetime.now(timezone.utc):
         raise RefreshError("Refresh token expired")
-
-    user = await db.get(User, user_id)
-    if user is None or user.token_version != token_version:
-        raise RefreshError("Refresh token no longer valid")
 
     # Claim the token by revoking it *conditionally on it still being unrevoked*.
     # Assigning `record.revoked = True` would leave a window between the check
@@ -117,8 +110,7 @@ async def rotate_refresh_token(db: AsyncSession, raw_token: str) -> IssuedTokens
         .values(revoked=True)
     )
     if claimed.rowcount == 0:
-        await _revoke_family(db, family_id)
-        await db.commit()
+        await revoke_all_for_user(db, user)
         raise RefreshError("Refresh token reuse detected")
 
     # The revoke and its successor commit together. Committing the revoke first

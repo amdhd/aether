@@ -1,7 +1,7 @@
 from datetime import datetime
 from typing import Any
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from app.models.conversation import Persona
 from app.models.message import MessageRole
@@ -15,6 +15,16 @@ class ConversationCreate(BaseModel):
 class ConversationUpdate(BaseModel):
     title: str | None = Field(default=None, min_length=1, max_length=255)
     persona: Persona | None = None
+
+
+    @field_validator('title', 'persona', mode="before")
+    @classmethod
+    def reject_explicit_null(cls, value):
+        # Validators run for supplied fields; omitted defaults stay excluded
+        # from model_dump(exclude_unset=True).
+        if value is None:
+            raise ValueError("This field cannot be null")
+        return value
 
 
 class ConversationRead(BaseModel):

@@ -36,3 +36,27 @@ async def test_uncommitted_revocation_and_password_change_roll_back_together():
         user = await db.get(User, user_id)
         assert user.token_version == original_version
         assert user.password_hash == "original"
+
+
+async def test_replay_invalidates_access_and_cannot_revoke_a_subsequent_login(client):
+    import pytest
+    from app.services.refresh_tokens import RefreshError
+
+    async with TestingSessionLocal() as db:
+        user = User(email="replay-version@example.com", name="Replay", password_hash="dummy")
+        db.add(user)
+        await db.commit()
+        original = await refresh_tokens.issue_token_pair(db, user)
+        rotated = await refresh_tokens.rotate_refresh_token(db, original.refresh_token)
+        with pytest.raises(RefreshError):
+            await refresh_tokens.rotate_refresh_token(db, original.refresh_token)
+        denied = await client.get('/api/v1/auth/me', headers={'Authorization': f'Bearer {rotated.access_token}'})
+        assert denied.status_code == 401
+        await db.refresh(user)
+        fresh = await refresh_tokens.issue_token_pair(db, user)
+        # A replay from the preceding token version must not keep evicting
+        # sessions established after detection.
+        with pytest.raises(RefreshError):
+            await refresh_tokens.rotate_refresh_token(db, original.refresh_token)
+        accepted = await client.get('/api/v1/auth/me', headers={'Authorization': f'Bearer {fresh.access_token}'})
+        assert accepted.status_code == 200

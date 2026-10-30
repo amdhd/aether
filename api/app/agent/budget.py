@@ -29,13 +29,13 @@ def input_token_upper_bound(messages: list[dict[str, Any]], tools: list | None =
     return len(payload.encode("utf-8")) + 64 * len(messages) + 1024
 
 
-def bound_context(messages: list[dict[str, Any]], tools: list | None = None) -> list[dict[str, Any]]:
+def bound_context(messages: list[dict[str, Any]], tools: list | None = None, *, content_byte_limit: int = 12_000) -> list[dict[str, Any]]:
     # Copy rather than changing persisted history. Retain tool-call structures
     # verbatim: truncating argument JSON or dropping one result corrupts a call.
     bounded = []
     for message in messages:
         item = dict(message)
-        for field, limit in (("content", 12_000), ("reasoning_content", 4_000)):
+        for field, limit in (("content", content_byte_limit), ("reasoning_content", 4_000)):
             if isinstance(item.get(field), str):
                 item[field] = clip_text(item[field], limit)
         bounded.append(item)

@@ -228,3 +228,21 @@ async def test_summary_keeps_the_fact_of_an_upload_without_its_payload() -> None
     )
     assert "sales.csv" in line
     assert "1,2" not in line
+
+
+async def test_summary_marker_advances_only_through_complete_delivered_messages():
+    conversation_id = await _seed_conversation(reasoning_len=13000)
+    client = _fake_client(_summary_response("Summary"))
+    async with TestingSessionLocal() as db:
+        conversation = await db.get(Conversation, conversation_id)
+        rows = list(await db.scalars(select(Message).where(Message.conversation_id == conversation_id).order_by(Message.id)))
+        rows[0].content = "a" * 30000 + "FIRST_END"
+        rows[1].content = "b" * 30000 + "SECOND_END"
+        await db.commit()
+        await memory.maybe_summarize_history(db, conversation, client)
+        sent = client.chat.completions.calls[0]['messages'][1]['content']
+        assert "FIRST_END" in sent
+        assert "SECOND_END" not in sent
+        assert conversation.memory_summarized_until_id == rows[0].id
+        # The next pass still has the omitted message available.
+        assert rows[1].id > conversation.memory_summarized_until_id

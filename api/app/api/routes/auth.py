@@ -223,7 +223,7 @@ async def change_password(
         )
 
     current_user.password_hash = await run_password_work(hash_password, payload.new_password)
-    await refresh_tokens.revoke_all_for_user(db, current_user)
+    await refresh_tokens.revoke_all_for_user(db, current_user, commit=False)
     tokens = await refresh_tokens.issue_token_pair(db, current_user)
     return _token_response(response, tokens)
 

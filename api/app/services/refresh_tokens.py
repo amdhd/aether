@@ -15,6 +15,7 @@ from datetime import datetime, timedelta, timezone
 from jwt import InvalidTokenError as JWTError
 from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm.attributes import set_committed_value
 
 from app.core.config import settings
 from app.core.security import create_access_token, create_refresh_token, decode_token
@@ -134,12 +135,21 @@ async def rotate_refresh_token(db: AsyncSession, raw_token: str) -> IssuedTokens
     return tokens
 
 
-async def revoke_all_for_user(db: AsyncSession, user: User) -> None:
+async def revoke_all_for_user(db: AsyncSession, user: User, *, commit: bool = True) -> None:
     """Revoke every outstanding refresh token for a user (used on logout) and
     bump token_version so existing access tokens stop validating too."""
+    # Serialize revocations on the user row before locking refresh rows. SQL
+    # arithmetic cannot lose increments from stale concurrent ORM snapshots.
+    with db.no_autoflush:
+        version = (await db.execute(
+            update(User).where(User.id == user.id)
+            .values(token_version=User.token_version + 1)
+            .returning(User.token_version)
+            .execution_options(synchronize_session=False)
+        )).scalar_one()
+    set_committed_value(user, "token_version", version)
     await db.execute(
         update(RefreshToken).where(RefreshToken.user_id == user.id).values(revoked=True)
     )
-    user.token_version += 1
-    db.add(user)
-    await db.commit()
+    if commit:
+        await db.commit()

@@ -89,17 +89,32 @@ async def maybe_summarize_history(db: AsyncSession, conversation: Conversation, 
     if sum(_message_char_len(m) for m in to_fold) < SUMMARIZE_CHAR_THRESHOLD:
         return
 
-    transcript = "\n".join(_format_message_for_summary(m) for m in to_fold)
-    user_content = (
+    prefix = (
         f"Existing summary:\n{conversation.memory_summary}\n\n" if conversation.memory_summary else ""
-    ) + f"Conversation excerpt to fold into the summary:\n{transcript}"
+    ) + "Conversation excerpt to fold into the summary:\n"
+    # Select a complete prefix that fits; never mark unseen text summarized.
+    # Boundaries cannot leave tool results without their assistant call.
+    selected: list[Message] = []
+    user_content = prefix
+    for index, message in enumerate(to_fold):
+        candidate = user_content + ("\n" if selected else "") + _format_message_for_summary(message)
+        if len(candidate.encode("utf-8")) > 48_000:
+            break
+        user_content = candidate
+        selected.append(message)
+    while selected and len(selected) < len(unsummarized) and unsummarized[len(selected)].role == MessageRole.tool:
+        selected.pop()
+    if not selected:
+        return  # Keep the marker unchanged when a complete group cannot fit.
+    to_fold = selected
+    user_content = prefix + "\n".join(_format_message_for_summary(m) for m in to_fold)
 
     response = await client.chat.completions.create(
         model=settings.DEEPSEEK_MODEL,
         messages=bound_context([
             {"role": "system", "content": SUMMARY_SYSTEM_PROMPT},
             {"role": "user", "content": user_content},
-        ]),
+        ], content_byte_limit=48_000),
         stream=False,
         extra_body={"thinking": {"type": "disabled"}},
     )

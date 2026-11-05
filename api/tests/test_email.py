@@ -91,10 +91,11 @@ def test_smtp_settings_accept_each_tls_mode_on_its_own() -> None:
     assert Settings(_env_file=None, SMTP_HOST="s", SMTP_STARTTLS=False, SMTP_USE_TLS=True)
 
 
-async def test_production_without_smtp_never_logs_reset_token(
-    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+@pytest.mark.parametrize("environment", ["production", "staging"])
+async def test_deployed_environment_without_smtp_never_logs_reset_token(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture, environment: str
 ) -> None:
-    monkeypatch.setattr(settings, "ENVIRONMENT", "production")
+    monkeypatch.setattr(settings, "ENVIRONMENT", environment)
     monkeypatch.setattr(settings, "SMTP_HOST", "")
     monkeypatch.setattr(logging.getLogger("app"), "propagate", True)
     with caplog.at_level("INFO", logger="app.services.email"):

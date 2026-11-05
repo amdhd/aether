@@ -211,6 +211,14 @@ class Settings(BaseSettings):
                 raise ValueError("ENCRYPTION_KEY must be a valid Fernet key") from None
             if not self.REFRESH_COOKIE_SECURE:
                 raise ValueError("REFRESH_COOKIE_SECURE must be true in production and staging")
+            # Without a mail transport, password reset and address verification
+            # silently stop working — and the only fallback, logging the message,
+            # would put live reset links in CloudWatch. Refuse to boot instead.
+            if not self.SMTP_HOST.strip() or not self.SMTP_FROM.strip():
+                raise ValueError(
+                    "SMTP_HOST and SMTP_FROM must be set in production and staging; "
+                    "reset and verification links are never logged outside development"
+                )
 
             origins = [o.strip() for o in self.FRONTEND_ORIGIN.split(",") if o.strip()]
             # app.main pairs this allowlist with allow_credentials=True, and the

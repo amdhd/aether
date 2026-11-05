@@ -305,8 +305,9 @@ resource "aws_secretsmanager_secret_version" "app" {
     GOOGLE_CLIENT_SECRET = ""
     GOOGLE_REDIRECT_URI  = ""
     # Outbound mail for password reset / address verification. Provider-agnostic
-    # SMTP, so the ECS task role needs no AWS permissions and stays empty. Leave
-    # SMTP_HOST blank and the app logs mail instead of sending it.
+    # SMTP, so the ECS task role needs no AWS permissions and stays empty.
+    # Required: the production task refuses to boot without SMTP_HOST and
+    # SMTP_FROM, because reset links are never logged outside development.
     SMTP_HOST     = ""
     SMTP_USERNAME = ""
     SMTP_PASSWORD = ""

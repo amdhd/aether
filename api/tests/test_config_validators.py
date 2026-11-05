@@ -16,6 +16,8 @@ PRODUCTION = {
     "SECRET_KEY": "test-only-8ea457c5e27c40a3a8bd1df40a1a9ba0",
     "REFRESH_COOKIE_SECURE": True,
     "ENCRYPTION_KEY": "jNi4_f4xMY-2e7ddrk7jghfP_pblo7NtEYsp3X065Jk=",
+    "SMTP_HOST": "smtp.example.com",
+    "SMTP_FROM": "Aether <no-reply@example.com>",
 }
 
 
@@ -96,3 +98,16 @@ def test_same_site_none_requires_secure_even_in_development():
 def test_origin_trailing_slash_is_normalized_for_cors():
     settings = Settings(**PRODUCTION, FRONTEND_ORIGIN="https://app.example.com/")
     assert settings.FRONTEND_ORIGIN == "https://app.example.com"
+
+
+@pytest.mark.parametrize("environment", ["production", "staging"])
+@pytest.mark.parametrize("missing", ["SMTP_HOST", "SMTP_FROM"])
+def test_deployed_environments_refuse_to_boot_without_mail(environment, missing):
+    config = {**PRODUCTION, "ENVIRONMENT": environment,
+              "FRONTEND_ORIGIN": "https://aether.example.com", missing: "  "}
+    with pytest.raises(ValidationError, match="SMTP_HOST and SMTP_FROM"):
+        Settings(**config)
+
+
+def test_deployed_environment_with_mail_configured_boots():
+    assert Settings(**PRODUCTION, FRONTEND_ORIGIN="https://aether.example.com")

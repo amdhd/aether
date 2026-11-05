@@ -103,7 +103,11 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
         "type": "function",
         "function": {
             "name": "update_task",
-            "description": "Update an existing task by id. Only provided fields are changed.",
+            "description": (
+                "Update an existing task by id. Only provided fields are changed. Changing status, "
+                "priority or due date applies immediately; replacing an existing title or description "
+                "is proposed and requires user approval in the UI."
+            ),
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -366,17 +370,16 @@ async def _list_tasks(db: AsyncSession, user: User, args: dict[str, Any]) -> dic
             "next_before_id": rows[limit - 1].id if len(rows) > limit else None}
 
 
-async def _update_task(db: AsyncSession, user: User, args: dict[str, Any]) -> dict[str, Any]:
-    task = await db.get(Task, args["task_id"])
-    if task is None or task.user_id != user.id:
-        return {"error": f"Task {args['task_id']} not found."}
+def _parse_task_updates(args: dict[str, Any]) -> dict[str, Any]:
+    """Parse every supplied field before any is assigned.
 
-    # Parse every supplied field before assigning any of them. These values come
-    # from the model as free-form JSON, so a bad date or enum raises partway
-    # through — and assigning as we go would leave the ORM object dirty with the
-    # fields that already landed. Nothing rolls that back: the caller returns the
-    # error as a tool result and the agent loop's next commit flushes the partial
-    # mutation anyway. Validating first makes the update all-or-nothing.
+    These values come from the model as free-form JSON, so a bad date or enum
+    raises partway through — and assigning as we go would leave the ORM object
+    dirty with the fields that already landed. Nothing rolls that back: the
+    caller returns the error as a tool result and the agent loop's next commit
+    flushes the partial mutation anyway. Validating first makes the update
+    all-or-nothing, and lets the approval gate refuse a bad proposal up front.
+    """
     updates: dict[str, Any] = {}
     if "title" in args:
         updates["title"] = args["title"]
@@ -388,8 +391,32 @@ async def _update_task(db: AsyncSession, user: User, args: dict[str, Any]) -> di
         updates["priority"] = TaskPriority(args["priority"])
     if "status" in args:
         updates["status"] = TaskStatus(args["status"])
+    return updates
 
-    for field, value in updates.items():
+
+def _overwritten_task_text(task: Task, updates: dict[str, Any]) -> list[str]:
+    """Fields whose existing text this update would replace or erase.
+
+    Status, priority and due date are one click to put back, so they apply
+    straight away. A title or description is free text the user wrote: once
+    overwritten it is gone, and text injected through a web result or a
+    calendar invite could otherwise blank every task in a single turn. Filling
+    in a description that was empty loses nothing, so it is not counted.
+    """
+    fields = []
+    if "title" in updates and updates["title"] != task.title:
+        fields.append("title")
+    if "description" in updates and task.description and updates["description"] != task.description:
+        fields.append("description")
+    return fields
+
+
+async def _update_task(db: AsyncSession, user: User, args: dict[str, Any]) -> dict[str, Any]:
+    task = await db.get(Task, args["task_id"])
+    if task is None or task.user_id != user.id:
+        return {"error": f"Task {args['task_id']} not found."}
+
+    for field, value in _parse_task_updates(args).items():
         setattr(task, field, value)
 
     await db.commit()
@@ -840,8 +867,28 @@ def format_tool_result_block(tool_name: str, content: str) -> str:
     )
 
 
+# Always proposed, never executed directly by the model.
 APPROVAL_REQUIRED_TOOLS = frozenset({"delete_task", "calendar_delete_event", "calendar_create_event"})
+# Proposed only when the specific call is destructive (see _needs_approval).
+CONDITIONAL_APPROVAL_TOOLS = frozenset({"update_task"})
+# Everything the approval endpoint may execute.
+APPROVABLE_TOOLS = APPROVAL_REQUIRED_TOOLS | CONDITIONAL_APPROVAL_TOOLS
 APPROVAL_TTL_SECONDS = 600
+
+
+async def _needs_approval(name: str, arguments: dict[str, Any], db: AsyncSession, user: User) -> bool:
+    """Whether this exact call must wait for the user. Raises ValueError/KeyError
+    for arguments the handler would reject anyway, so nothing unexecutable is
+    ever put in front of the user to approve."""
+    if name in APPROVAL_REQUIRED_TOOLS:
+        return True
+    if name == "update_task":
+        updates = _parse_task_updates(arguments)
+        task = await db.get(Task, arguments["task_id"])
+        if task is None or task.user_id != user.id:
+            return False  # the handler reports "not found"; nothing to protect
+        return bool(_overwritten_task_text(task, updates))
+    return False
 
 
 async def call_tool(
@@ -853,7 +900,16 @@ async def call_tool(
 
     if not isinstance(arguments, dict):
         return json.dumps({"error": "Tool arguments must be an object."})
-    if name in APPROVAL_REQUIRED_TOOLS and not approved:
+    try:
+        # Only the authenticated approval endpoint may pass approved=True; the
+        # decision never comes from the model's arguments.
+        needs_approval = not approved and await _needs_approval(name, arguments, db, user)
+    except (ValueError, KeyError, TypeError) as exc:
+        return json.dumps({"error": str(exc)})
+    except Exception:
+        logger.exception("tool.approval_check_failed tool=%s user_id=%s", name, user.id)
+        return json.dumps({"error": f"The {name} tool failed unexpectedly."})
+    if needs_approval:
         # Only the authenticated approval endpoint may set approved. A model's
         # arguments (including any claimed approval) can never bypass this gate.
         if len(json.dumps(arguments).encode("utf-8")) > 8000:

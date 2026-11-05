@@ -18,7 +18,7 @@ from fastapi.responses import StreamingResponse
 from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from app.agent.tools import APPROVAL_REQUIRED_TOOLS, call_tool
+from app.agent.tools import APPROVABLE_TOOLS, call_tool
 from app.models.message import Message, MessageRole
 from app.agent.loop import stream_agent_response, stream_replayed_turn
 from app.api.deps import get_current_user, get_owned_or_404
@@ -238,7 +238,7 @@ async def decide_action(
     # Arguments and expiry are read only from the server-created receipt. The
     # request cannot replace the target, tool, or arguments being approved.
     proposal = json.loads(receipt.content or "{}")
-    if receipt.tool_name not in APPROVAL_REQUIRED_TOOLS or not proposal.get("approval_required"):
+    if receipt.tool_name not in APPROVABLE_TOOLS or not proposal.get("approval_required"):
         raise HTTPException(status_code=409, detail="Action is not approvable")
     expired = datetime.now(timezone.utc) >= datetime.fromisoformat(proposal["expires_at"])
     next_status = "expired" if expired else "rejected" if decision.decision == "reject" else "unconfirmed"

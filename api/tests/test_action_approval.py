@@ -71,3 +71,81 @@ async def test_another_user_cannot_approve_action(client, auth_headers):
     async with TestingSessionLocal() as db:
         assert await db.get(Task, task_id) is not None
         assert (await db.scalar(select(Message).where(Message.id == receipt_id))).action_status == "pending"
+
+
+# --- update_task: overwriting user-written text needs approval ---------------
+
+
+async def _task_for(auth_headers, **fields):
+    user_id = int(decode_token(auth_headers["Authorization"].split()[1])["sub"])
+    async with TestingSessionLocal() as db:
+        task = Task(user_id=user_id, **fields)
+        conversation = Conversation(user_id=user_id, title="Update approval")
+        db.add_all([task, conversation])
+        await db.commit()
+        return user_id, conversation.id, task.id
+
+
+@pytest.mark.parametrize("arguments", [
+    {"title": "Hijacked", "approved": True},
+    {"description": ""},
+    {"description": "Replaced"},
+])
+async def test_update_task_overwriting_text_is_only_proposed(client, auth_headers, arguments):
+    user_id, _, task_id = await _task_for(auth_headers, title="Original", description="Written by the user")
+    async with TestingSessionLocal() as db:
+        result = json.loads(await call_tool("update_task", {"task_id": task_id, **arguments},
+                                            db, SimpleNamespace(id=user_id)))
+    assert result["approval_required"] is True
+    async with TestingSessionLocal() as db:
+        task = await db.get(Task, task_id)
+        assert (task.title, task.description) == ("Original", "Written by the user")
+
+
+@pytest.mark.parametrize("arguments,field,value", [
+    ({"status": "done"}, "status", "done"),
+    ({"priority": "high"}, "priority", "high"),
+    ({"title": "Original"}, "title", "Original"),  # unchanged text loses nothing
+    ({"description": "Added later"}, "description", "Added later"),  # was empty
+])
+async def test_update_task_reversible_changes_apply_immediately(client, auth_headers, arguments, field, value):
+    user_id, _, task_id = await _task_for(auth_headers, title="Original")
+    async with TestingSessionLocal() as db:
+        result = json.loads(await call_tool("update_task", {"task_id": task_id, **arguments},
+                                            db, SimpleNamespace(id=user_id)))
+    assert "approval_required" not in result
+    stored = result["task"][field]
+    assert stored == value
+
+
+async def test_update_task_invalid_proposal_is_refused_not_proposed(client, auth_headers):
+    user_id, _, task_id = await _task_for(auth_headers, title="Original")
+    async with TestingSessionLocal() as db:
+        result = json.loads(await call_tool("update_task", {"task_id": task_id, "title": "New", "due_date": 7},
+                                            db, SimpleNamespace(id=user_id)))
+    assert "error" in result and "approval_required" not in result
+
+
+async def test_update_task_on_another_users_task_is_not_proposed(client, auth_headers):
+    _, _, task_id = await _task_for(auth_headers, title="Original")
+    async with TestingSessionLocal() as db:
+        result = json.loads(await call_tool("update_task", {"task_id": task_id, "title": "Mine now"},
+                                            db, SimpleNamespace(id=10_000)))
+    assert "not found" in result["error"]
+
+
+async def test_approved_update_task_applies_the_stored_arguments(client, auth_headers):
+    user_id, conversation_id, task_id = await _task_for(auth_headers, title="Original")
+    async with TestingSessionLocal() as db:
+        content = await call_tool("update_task", {"task_id": task_id, "title": "Renamed"},
+                                  db, SimpleNamespace(id=user_id))
+        receipt = Message(conversation_id=conversation_id, role=MessageRole.tool,
+                          tool_name="update_task", content=content, action_status="pending")
+        db.add(receipt)
+        await db.commit()
+    response = await client.post(f"/api/v1/conversations/{conversation_id}/actions/{receipt.id}",
+                                 headers=auth_headers, json={"decision": "approve"})
+    assert response.status_code == 200
+    assert response.json()["action_status"] == "completed"
+    async with TestingSessionLocal() as db:
+        assert (await db.get(Task, task_id)).title == "Renamed"

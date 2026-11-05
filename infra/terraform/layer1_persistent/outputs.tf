@@ -26,3 +26,8 @@ output "app_secret_arn" {
   description = "ARN of the app secrets container (consumed by layer2)."
   value       = aws_secretsmanager_secret.app.arn
 }
+
+output "github_deploy_role_arn" {
+  description = "Set as the repo variable AWS_DEPLOY_ROLE_ARN. Null unless github_repository is set."
+  value       = local.github_deploy_enabled ? aws_iam_role.github_deploy[0].arn : null
+}

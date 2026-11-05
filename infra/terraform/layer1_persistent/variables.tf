@@ -67,3 +67,25 @@ variable "api_origin" {
     error_message = "api_origin must be a bare scheme+host with no trailing path, e.g. https://api.example.com."
   }
 }
+
+variable "github_repository" {
+  description = "GitHub repository (owner/name) whose deploy workflow may assume the deploy role, e.g. amdhd/aether. Empty = no deploy role is created."
+  type        = string
+  default     = ""
+  validation {
+    condition     = var.github_repository == "" || can(regex("^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$", var.github_repository))
+    error_message = "github_repository must be owner/name."
+  }
+}
+
+variable "github_deploy_environment" {
+  description = "GitHub environment the deploy jobs run in. Only OIDC tokens minted for it can assume the deploy role."
+  type        = string
+  default     = "production"
+}
+
+variable "create_github_oidc_provider" {
+  description = "Create the account's GitHub OIDC provider. Set false if the account already has one."
+  type        = bool
+  default     = true
+}

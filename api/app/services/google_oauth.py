@@ -20,6 +20,28 @@ REVOKE_URL = "https://oauth2.googleapis.com/revoke"
 # mid-request.
 TOKEN_EXPIRY_LEEWAY_SECONDS = 60
 
+# A broader grant that already covers a narrower requested scope.
+_COVERING_SCOPES = {
+    "https://www.googleapis.com/auth/calendar.events": {"https://www.googleapis.com/auth/calendar"},
+}
+
+
+def missing_scopes(granted: str | None) -> set[str]:
+    """Requested scopes the grant does not cover.
+
+    Google's consent screen lets the user untick individual permissions, and
+    the token response then lists only what was actually granted. Storing such
+    a credential would report "connected" while every calendar call fails, so
+    the callback checks this first. A response with no scope at all is treated
+    as granting nothing.
+    """
+    have = set((granted or "").split())
+    return {
+        scope
+        for scope in settings.GOOGLE_OAUTH_SCOPES.split()
+        if scope not in have and not (_COVERING_SCOPES.get(scope, set()) & have)
+    }
+
 
 def build_authorization_url(state: str) -> str:
     params = {
@@ -79,6 +101,8 @@ async def upsert_credential(db: AsyncSession, user: User, token_data: dict[str, 
     expires_in = token_data.get("expires_in", 3600)
     expiry = datetime.now(timezone.utc) + timedelta(seconds=expires_in)
     refresh_token = token_data.get("refresh_token")
+    if missing := missing_scopes(token_data.get("scope")):
+        raise ValueError(f"Google did not grant the required scopes: {' '.join(sorted(missing))}")
 
     credential = await get_credential(db, user)
     if credential is None:
@@ -89,7 +113,7 @@ async def upsert_credential(db: AsyncSession, user: User, token_data: dict[str, 
             access_token_encrypted=encrypt_token(token_data["access_token"]),
             refresh_token_encrypted=encrypt_token(refresh_token),
             token_expiry=expiry,
-            scope=token_data.get("scope", settings.GOOGLE_OAUTH_SCOPES),
+            scope=token_data["scope"],
         )
         db.add(credential)
     else:

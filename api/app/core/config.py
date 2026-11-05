@@ -188,7 +188,11 @@ class Settings(BaseSettings):
     GOOGLE_CLIENT_ID: str = ""
     GOOGLE_CLIENT_SECRET: str = ""
     GOOGLE_REDIRECT_URI: str = ""
-    GOOGLE_OAUTH_SCOPES: str = "https://www.googleapis.com/auth/calendar"
+    # Least privilege: the agent's calendar tools only list, create, read and
+    # delete events on the primary calendar. The broader .../auth/calendar scope
+    # would also let a stolen token change sharing settings or delete whole
+    # calendars. Space-separated; every scope listed must be granted.
+    GOOGLE_OAUTH_SCOPES: str = "https://www.googleapis.com/auth/calendar.events"
     OAUTH_STATE_EXPIRE_MINUTES: int = 5
 
     @model_validator(mode="after")

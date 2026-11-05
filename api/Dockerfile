@@ -17,8 +17,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 WORKDIR /build
 
 # Production dependencies only — no ruff/pytest/aiosqlite from requirements-dev.
+# requirements.txt is the hashed lock (see `make lock`): every package,
+# transitive ones included, must match a recorded hash or the build fails.
 COPY requirements.txt ./
-RUN pip wheel --wheel-dir /wheels -r requirements.txt
+RUN pip wheel --require-hashes --wheel-dir /wheels -r requirements.txt
 
 
 # --- Runtime: slim image with just the app + prebuilt wheels ---
@@ -47,9 +49,10 @@ RUN apt-get update \
 RUN useradd --create-home --uid 10001 app
 WORKDIR /app
 
+# The builder already verified these against the lock's hashes; install exactly
+# that set, offline, without letting pip resolve anything new.
 COPY --from=builder /wheels /wheels
-COPY requirements.txt ./
-RUN pip install --no-cache-dir --no-index --find-links=/wheels -r requirements.txt \
+RUN pip install --no-cache-dir --no-index --no-deps /wheels/*.whl \
     && rm -rf /wheels
 
 COPY --chown=app:app . .

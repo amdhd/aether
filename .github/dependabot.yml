@@ -22,6 +22,13 @@ updates:
       default-days: 7
     open-pull-requests-limit: 10
 
+  - package-ecosystem: pip
+    directory: /.github
+    schedule:
+      interval: monthly
+    cooldown:
+      default-days: 7
+
   - package-ecosystem: npm
     directory: /web
     schedule:

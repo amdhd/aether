@@ -18,7 +18,7 @@ from fastapi.responses import StreamingResponse
 from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from app.agent.tools import APPROVABLE_TOOLS, call_tool
+from app.agent.tools import APPROVABLE_TOOLS, ActionTargetError, call_tool, describe_action_target
 from app.models.message import Message, MessageRole
 from app.agent.loop import stream_agent_response, stream_replayed_turn
 from app.api.deps import get_current_user, get_owned_or_404
@@ -213,6 +213,22 @@ async def send_message(
     )
 
 
+async def _target_changed(tool_name: str, proposal: dict, db: AsyncSession, user: User) -> str | None:
+    """Why the approved action must not run, or None if its target is unchanged.
+
+    The user approved the item the proposal described. If that item has since
+    been edited, deleted, or its id now names something else, the approval is
+    for a different thing than would be acted on, so nothing is executed.
+    """
+    try:
+        current = await describe_action_target(tool_name, proposal["arguments"], db, user)
+    except (ActionTargetError, ValueError, KeyError, TypeError) as exc:
+        return f"Nothing was executed: {exc}"
+    if current != proposal.get("target"):
+        return "Nothing was executed: the item changed after this action was proposed. Ask again for a fresh proposal."
+    return None
+
+
 class ActionDecision(BaseModel):
     model_config = ConfigDict(extra="forbid")
     decision: Literal["approve", "reject"]
@@ -254,6 +270,9 @@ async def decide_action(
     await db.refresh(receipt)
     if next_status != "unconfirmed":
         receipt.content = json.dumps({"error": f"Action {next_status}; nothing was executed."})
+    elif (changed := await _target_changed(receipt.tool_name, proposal, db, current_user)) is not None:
+        receipt.content = json.dumps({"error": changed})
+        receipt.action_status = "failed"
     else:
         receipt.content = await call_tool(
             receipt.tool_name, proposal["arguments"], db, current_user, approved=True,

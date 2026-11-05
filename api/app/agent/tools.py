@@ -876,6 +876,73 @@ APPROVABLE_TOOLS = APPROVAL_REQUIRED_TOOLS | CONDITIONAL_APPROVAL_TOOLS
 APPROVAL_TTL_SECONDS = 600
 
 
+class ActionTargetError(Exception):
+    """The item an action would affect cannot be resolved for this user."""
+
+
+_TARGET_TEXT_CHARS = 500
+
+
+async def describe_action_target(
+    name: str, arguments: dict[str, Any], db: AsyncSession, user: User
+) -> dict[str, Any] | None:
+    """What an approvable action would act on, read by the server, not the model.
+
+    A delete proposal otherwise shows only an id, and the model's own prose is
+    the only description of what that id is — prose that injected text can
+    steer. Resolving the target here puts the real title or event in front of
+    the user, and refuses to propose against an id this user does not own.
+
+    Computed again at approval time; if the result differs, the item changed
+    after the user saw it and the action is not executed. Returns None for
+    actions whose arguments already are the whole change (creating an event).
+    Raises ActionTargetError when the target cannot be resolved.
+    """
+    if name in {"delete_task", "update_task"}:
+        task_id = arguments["task_id"]
+        if type(task_id) is not int:
+            raise ValueError("task_id must be an integer")
+        task = await db.get(Task, task_id)
+        if task is None or task.user_id != user.id:
+            raise ActionTargetError(f"Task {task_id} not found.")
+        return {
+            "kind": "task",
+            "title": task.title,
+            "description": _truncate(task.description, _TARGET_TEXT_CHARS),
+            "status": task.status.value,
+            "due_date": task.due_date.isoformat() if task.due_date else None,
+        }
+
+    if name == "calendar_delete_event":
+        event_id = str(arguments["event_id"])
+        access_token, error = await _calendar_guard(db, user)
+        if error:
+            raise ActionTargetError(error["error"])
+        try:
+            async with httpx.AsyncClient(timeout=10.0) as client:
+                event = await _get_calendar_event(client, access_token, event_id)
+        except httpx.HTTPError as exc:
+            raise ActionTargetError(
+                f"Could not look up that calendar event: {_google_error_message(exc)}"
+            ) from exc
+        if event is None:
+            raise ActionTargetError("That event is not on your calendar.")
+
+        def _when(value: dict[str, Any] | None) -> str | None:
+            value = value or {}
+            return value.get("dateTime") or value.get("date")
+
+        return {
+            "kind": "calendar_event",
+            "summary": _truncate(event.get("summary"), _TARGET_TEXT_CHARS),
+            "start": _when(event.get("start")),
+            "end": _when(event.get("end")),
+            "location": _truncate(event.get("location"), _TARGET_TEXT_CHARS),
+        }
+
+    return None
+
+
 async def _needs_approval(name: str, arguments: dict[str, Any], db: AsyncSession, user: User) -> bool:
     """Whether this exact call must wait for the user. Raises ValueError/KeyError
     for arguments the handler would reject anyway, so nothing unexecutable is
@@ -914,10 +981,15 @@ async def call_tool(
         # arguments (including any claimed approval) can never bypass this gate.
         if len(json.dumps(arguments).encode("utf-8")) > 8000:
             return json.dumps({"error": "Action arguments are too large."})
+        try:
+            target = await describe_action_target(name, arguments, db, user)
+        except (ActionTargetError, ValueError, KeyError, TypeError) as exc:
+            return json.dumps({"error": str(exc)})
         return json.dumps({
             "approval_required": True,
             "name": name,
             "arguments": arguments,
+            "target": target,
             "expires_at": (datetime.now(timezone.utc) + timedelta(seconds=APPROVAL_TTL_SECONDS)).isoformat(),
             "message": "Not executed. The user must approve this exact action in Action activity.",
         })

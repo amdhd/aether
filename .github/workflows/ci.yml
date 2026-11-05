@@ -6,6 +6,11 @@ on:
   pull_request:
     branches: [main]
 
+# Read-only token: these jobs build and test untrusted PR code and need no
+# write access. Without this block the token inherits the repository default.
+permissions:
+  contents: read
+
 jobs:
   backend:
     name: Backend (lint + tests)
@@ -30,10 +35,10 @@ jobs:
           --health-timeout 5s
           --health-retries 10
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Set up Python
-        uses: actions/setup-python@v7
+        uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         with:
           python-version: "3.12"
           cache: "pip"
@@ -70,10 +75,10 @@ jobs:
       run:
         working-directory: api
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Set up Python
-        uses: actions/setup-python@v7
+        uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         with:
           python-version: "3.12"
           cache: "pip"
@@ -97,10 +102,10 @@ jobs:
       run:
         working-directory: web
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Set up Node
-        uses: actions/setup-node@v7
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version-file: web/.nvmrc
           cache: "npm"
@@ -123,6 +128,6 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Build with fresh base images and verify Node runtime
         run: docker build --pull --no-cache --progress=plain -t aether-web:ci web

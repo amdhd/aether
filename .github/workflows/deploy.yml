@@ -11,7 +11,16 @@ name: Deploy
 #
 # Required repo settings before this works:
 #   vars.AWS_DEPLOY_ROLE_ARN   IAM role trusting this repo's GitHub OIDC provider
+#                              (layer1_persistent output `github_deploy_role_arn`)
+#   environment `production`   restricted to the main branch, ideally with
+#                              required reviewers. The deploy role trusts only
+#                              tokens minted for this environment, so nothing a
+#                              pull request runs can assume it.
 #   secrets.INFRACOST_API_KEY  from `infracost auth login` / Infracost Cloud
+#
+# Third-party actions are pinned to full commit SHAs (version in the trailing
+# comment): a tag can be moved to new code by whoever controls the action's repo,
+# a SHA cannot. Dependabot proposes the bumps.
 on:
   pull_request:
     branches: [main]
@@ -21,11 +30,11 @@ on:
     paths: ["api/**", "web/**", "infra/**", ".github/workflows/deploy.yml"]
   workflow_dispatch:
 
+# Least privilege by default; each job asks for only what it uses. In
+# particular, `id-token: write` (OIDC → AWS) is granted only to the two jobs that
+# run in the `production` environment, never to a job that builds PR code.
 permissions:
-  id-token: write # OIDC → AWS, no long-lived keys
   contents: read
-  pull-requests: write # Infracost PR comment
-  security-events: write # Checkov SARIF → Security tab
 
 env:
   AWS_REGION: ap-southeast-1
@@ -37,15 +46,18 @@ jobs:
   iac-security:
     name: Gate · IaC (Checkov)
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      security-events: write # Checkov SARIF → Security tab
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       # Enforcing IaC gate. Every accepted exception is documented with a reason
       # in infra/terraform/.checkov.yaml; anything NOT fixed or listed there fails
       # the build. Findings are also uploaded to the Security tab (SARIF).
       - name: Checkov
         id: checkov
-        uses: bridgecrewio/checkov-action@v12
+        uses: bridgecrewio/checkov-action@45edc9d8856b664db2ec251f5f8632361f0a67aa # v12.3139.0
         with:
           directory: infra/terraform
           config_file: infra/terraform/.checkov.yaml
@@ -55,7 +67,7 @@ jobs:
 
       - name: Upload Checkov SARIF
         if: always()
-        uses: github/codeql-action/upload-sarif@v4
+        uses: github/codeql-action/upload-sarif@33d7b85da1a04171e211befe2c739303b9a4c066 # v4.39.3
         with:
           sarif_file: checkov.sarif
           category: checkov
@@ -64,6 +76,9 @@ jobs:
   cost:
     name: Gate · Cost (Infracost)
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write # Infracost PR comment
     # Inert until INFRACOST_API_KEY is configured — the steps skip (job stays
     # green) rather than failing the PR when the key is absent.
     env:
@@ -71,7 +86,7 @@ jobs:
       # Fail the PR if it raises estimated monthly cost by more than this (USD).
       COST_INCREASE_LIMIT_USD: "10"
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
 
@@ -89,14 +104,14 @@ jobs:
         id: infracost_setup
         if: env.INFRACOST_API_KEY != ''
         continue-on-error: true
-        uses: infracost/actions/setup@v3
+        uses: infracost/actions/setup@e9d6e6cd65e168e76b0de50ff9957d2fe8bb1832 # v3.0.1
         with:
           api-key: ${{ secrets.INFRACOST_API_KEY }}
           version: "0.10.45"
 
       - name: Setup Infracost (retry)
         if: env.INFRACOST_API_KEY != '' && steps.infracost_setup.outcome == 'failure'
-        uses: infracost/actions/setup@v3
+        uses: infracost/actions/setup@e9d6e6cd65e168e76b0de50ff9957d2fe8bb1832 # v3.0.1
         with:
           api-key: ${{ secrets.INFRACOST_API_KEY }}
           version: "0.10.45"
@@ -134,29 +149,41 @@ jobs:
         if: env.INFRACOST_API_KEY != '' && github.event_name != 'pull_request'
         run: infracost breakdown --config-file infra/infracost.yml
 
-  # --- Gate 3: build image + container CVE scan (Trivy). Push on main only. ---
+  # --- Gate 3: build image + container CVE scan (Trivy). No cloud credentials. ---
   build-scan:
-    name: Gate · Image (Trivy) + push
+    name: Gate · Image (Trivy)
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     outputs:
       image_tag: ${{ github.sha }}
+    env:
+      # Bump deliberately: update both values from the release's checksums file.
+      TRIVY_VERSION: "0.76.1"
+      TRIVY_SHA256: c7cbe3137fb8a48a17574bede3dd6beb16742d1e9772929940fc90082c39d9c0
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       # arm64 image (Fargate runs Graviton) built on an amd64 runner needs QEMU.
-      - uses: docker/setup-qemu-action@v3
-      - uses: docker/setup-buildx-action@v3
+      - uses: docker/setup-qemu-action@c7c53464625b32c7a7e944ae62b3e17d2b600130 # v3.7.0
+      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3.12.0
 
       - name: Build image (load locally for scanning)
         run: |
           docker buildx build --platform linux/arm64 \
             -t aether-api:${{ github.sha }} --load ./api
 
-      # Install the Trivy binary directly (deterministic — no action-tag drift).
-      - name: Install Trivy
+      # A pinned release verified against a pinned digest. Piping install.sh from
+      # the project's main branch ran whatever that branch held at the time, in
+      # the job that produces the image we ship.
+      - name: Install Trivy (pinned, checksum-verified)
         run: |
-          curl -sfL https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/install.sh \
-            | sh -s -- -b /usr/local/bin
+          archive="trivy_${TRIVY_VERSION}_Linux-64bit.tar.gz"
+          curl -fsSLo "$RUNNER_TEMP/$archive" \
+            "https://github.com/aquasecurity/trivy/releases/download/v${TRIVY_VERSION}/${archive}"
+          echo "${TRIVY_SHA256}  $RUNNER_TEMP/$archive" | sha256sum --check --strict
+          sudo tar -xzf "$RUNNER_TEMP/$archive" -C /usr/local/bin trivy
+          trivy --version
 
       - name: Trivy scan (blocks on HIGH/CRITICAL)
         run: |
@@ -164,18 +191,47 @@ jobs:
             --ignore-unfixed --exit-code 1 --no-progress \
             aether-api:${{ github.sha }}
 
-      # Publish the SHA-tagged image only after it passes the scan, on the deploy
-      # path (not PRs), and only once the OIDC deploy role is configured — so the
-      # workflow stays green on main until AWS_DEPLOY_ROLE_ARN is set.
-      - name: Configure AWS credentials (OIDC)
+      # Hand the exact scanned image to the publish job instead of rebuilding it
+      # there, so what ships is byte-for-byte what passed the scan.
+      - name: Export scanned image
         if: github.event_name != 'pull_request' && vars.AWS_DEPLOY_ROLE_ARN != ''
-        uses: aws-actions/configure-aws-credentials@v6
+        run: docker save aether-api:${{ github.sha }} | gzip > "$RUNNER_TEMP/aether-api.tar.gz"
+
+      - name: Upload scanned image
+        if: github.event_name != 'pull_request' && vars.AWS_DEPLOY_ROLE_ARN != ''
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: aether-api-image
+          path: ${{ runner.temp }}/aether-api.tar.gz
+          retention-days: 1
+
+  # --- Publish: push the scanned image to ECR (main only, production env) ---
+  publish:
+    name: Publish image to ECR
+    runs-on: ubuntu-latest
+    needs: [build-scan]
+    if: github.event_name != 'pull_request' && vars.AWS_DEPLOY_ROLE_ARN != ''
+    environment: production
+    permissions:
+      contents: read
+      id-token: write # OIDC → AWS, no long-lived keys
+    steps:
+      - name: Download scanned image
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: aether-api-image
+          path: ${{ runner.temp }}
+
+      - name: Load scanned image
+        run: gunzip -c "$RUNNER_TEMP/aether-api.tar.gz" | docker load
+
+      - name: Configure AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6.3.0
         with:
           role-to-assume: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
           aws-region: ${{ env.AWS_REGION }}
 
       - name: Push to ECR
-        if: github.event_name != 'pull_request' && vars.AWS_DEPLOY_ROLE_ARN != ''
         run: |
           registry=$(aws ecr describe-repositories --repository-names "$ECR_REPOSITORY" \
             --query 'repositories[0].repositoryUri' --output text)
@@ -188,12 +244,16 @@ jobs:
   deploy:
     name: Deploy to ECS
     runs-on: ubuntu-latest
-    needs: [iac-security, cost, build-scan]
+    needs: [iac-security, cost, build-scan, publish]
     # Skips (stays green) until the OIDC deploy role is configured.
     if: github.event_name != 'pull_request' && vars.AWS_DEPLOY_ROLE_ARN != ''
+    environment: production
+    permissions:
+      contents: read
+      id-token: write # OIDC → AWS, no long-lived keys
     steps:
       - name: Configure AWS credentials (OIDC)
-        uses: aws-actions/configure-aws-credentials@v6
+        uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6.3.0
         with:
           role-to-assume: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
           aws-region: ${{ env.AWS_REGION }}

@@ -23,7 +23,7 @@ RUN npm run build
 # NOTE: the primary production path serves web/dist from S3 + CloudFront (see
 # infra/terraform). This image is the fallback for running the frontend as a
 # container (e.g. ECS/local) — it is NOT the Vite dev server.
-FROM nginx:1.30.5-alpine AS runtime
+FROM nginx:1.31.7-alpine AS runtime
 
 # SPA history fallback: unknown routes return index.html so client-side routing
 # works on refresh/deep-link.

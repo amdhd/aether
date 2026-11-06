@@ -22,6 +22,17 @@ describe('ActionApproval', () => {
     await userEvent.click(screen.getByRole('button', { name: 'Approve action' }))
     await waitFor(() => expect(decideAction).toHaveBeenCalledWith(3, 9, 'approve'))
   })
+  it('shows the server-resolved item the action affects', () => {
+    const withTarget = JSON.stringify({
+      arguments: { task_id: 42 }, expires_at: '2099-01-01T00:00:00Z',
+      target: { kind: 'task', title: 'Quarterly report', description: null, status: 'todo', due_date: null },
+    })
+    renderWithProviders(<ActionApproval conversationId={3} message={{ ...message, content: withTarget }} />)
+    const affected = screen.getByRole('region', { name: 'Affected item' })
+    expect(affected).toHaveTextContent('Quarterly report')
+    expect(affected).not.toHaveTextContent('kind')
+    expect(screen.getByRole('region', { name: 'Requested change' })).toHaveTextContent('42')
+  })
   it('disables approval for expired proposals', () => {
     renderWithProviders(<ActionApproval conversationId={3} message={{ ...message, content: JSON.stringify({ arguments: { task_id: 42 }, expires_at: '2000-01-01T00:00:00Z' }) }} />)
     expect(screen.getByRole('button', { name: 'Approve action' })).toBeDisabled()

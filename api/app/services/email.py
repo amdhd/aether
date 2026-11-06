@@ -5,9 +5,11 @@ Two backends behind one call, mirroring how `app.core.rate_limit` degrades:
 * **SMTP** — used when ``SMTP_HOST`` is set. Any provider (SES SMTP, Postmark,
   Mailgun) works, so nothing here is tied to a vendor and the ECS task role
   stays empty.
-* **Logging** — the default. Writes the message, link included, to the
-  application log so password reset and verification are exercisable in local
-  dev and CI with no mail server and no credentials.
+* **Logging** — the default in development and test only. Writes the message,
+  link included, to the application log so password reset and verification are
+  exercisable locally and in CI with no mail server and no credentials. Any
+  other environment refuses to boot without SMTP (see app.core.config), and
+  this module never logs a link there even if that check were bypassed.
 
 Sending is best-effort by design. A provider outage must not turn "reset my
 password" into a 500 that also tells the caller whether the account existed, so
@@ -20,6 +22,11 @@ from app.core.config import settings
 from app.core.logging import get_logger
 
 logger = get_logger(__name__)
+
+# The only environments where a message — reset link included — may be written
+# to the log instead of sent. An allowlist, so a new or misspelled environment
+# name fails closed rather than leaking links.
+_LOG_ONLY_ENVIRONMENTS = frozenset({"development", "test"})
 
 
 def _build(to: str, subject: str, body: str) -> EmailMessage:
@@ -56,7 +63,7 @@ async def send_email(to: str, subject: str, body: str) -> bool:
     depend on the mail provider being up.
     """
     if not settings.SMTP_HOST:
-        if settings.ENVIRONMENT == "production":
+        if settings.ENVIRONMENT not in _LOG_ONLY_ENVIRONMENTS:
             logger.warning("email.delivery_unconfigured")
             return False
         # Body included deliberately — the link is the whole point of the log

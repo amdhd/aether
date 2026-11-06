@@ -1,0 +1,50 @@
+# Automated dependency update PRs. Actions are pinned to commit SHAs in the
+# workflows, so Dependabot is what keeps those pins (and their version comments)
+# moving. The cooldown holds back brand-new releases for a few days, which is
+# when hijacked or broken versions tend to be caught and yanked.
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    cooldown:
+      default-days: 7
+    groups:
+      actions:
+        patterns: ["*"]
+
+  - package-ecosystem: pip
+    directory: /api
+    schedule:
+      interval: weekly
+    cooldown:
+      default-days: 7
+    open-pull-requests-limit: 10
+
+  - package-ecosystem: pip
+    directory: /.github
+    schedule:
+      interval: monthly
+    cooldown:
+      default-days: 7
+
+  - package-ecosystem: npm
+    directory: /web
+    schedule:
+      interval: weekly
+    cooldown:
+      default-days: 7
+    open-pull-requests-limit: 10
+
+  - package-ecosystem: docker
+    directories: ["/api", "/web"]
+    schedule:
+      interval: weekly
+
+  - package-ecosystem: terraform
+    directories:
+      - /infra/terraform/layer1_persistent
+      - /infra/terraform/layer2_ephemeral
+    schedule:
+      interval: monthly

@@ -1,0 +1,7 @@
+-r requirements.in
+pytest==9.1.1
+pytest-asyncio==1.4.0
+aiosqlite==0.22.1
+ruff==0.17.0
+pyyaml==6.0.3
+fakeredis==2.39.0

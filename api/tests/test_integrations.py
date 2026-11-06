@@ -359,3 +359,53 @@ async def test_new_oauth_flow_invalidates_previous_browser_state(
         params={"code": "code", "state": old_state}, follow_redirects=False,
     )
     assert "google=error" in response.headers["location"]
+
+
+def test_default_scope_is_events_only() -> None:
+    assert settings.GOOGLE_OAUTH_SCOPES == "https://www.googleapis.com/auth/calendar.events"
+
+
+@pytest.mark.parametrize("granted", [
+    None,
+    "",
+    "openid email",
+    "https://www.googleapis.com/auth/calendar.readonly",
+])
+async def test_callback_with_partial_consent_stores_nothing(
+    client: AsyncClient, auth_headers: dict[str, str], monkeypatch: pytest.MonkeyPatch, granted: str | None
+) -> None:
+    connect = await client.get("/api/v1/integrations/google/connect", headers=auth_headers)
+    state = parse_qs(urlparse(connect.json()["authorization_url"]).query)["state"][0]
+
+    async def fake_exchange_code(code: str) -> dict:
+        data = {"access_token": "access-123", "refresh_token": "refresh-456", "expires_in": 3600}
+        if granted is not None:
+            data["scope"] = granted
+        return data
+
+    monkeypatch.setattr(google_oauth, "exchange_code", fake_exchange_code)
+    resp = await client.get(
+        "/api/v1/integrations/google/callback",
+        params={"code": "auth-code", "state": state},
+        follow_redirects=False,
+    )
+    assert "google=error" in resp.headers["location"]
+    status_resp = await client.get("/api/v1/integrations/google/status", headers=auth_headers)
+    assert status_resp.json() == {"connected": False}
+
+
+@pytest.mark.parametrize("granted", [
+    "https://www.googleapis.com/auth/calendar.events",
+    "openid https://www.googleapis.com/auth/calendar.events",
+    "https://www.googleapis.com/auth/calendar",  # a broader earlier grant covers it
+])
+def test_sufficient_grants_are_accepted(granted: str) -> None:
+    assert google_oauth.missing_scopes(granted) == set()
+
+
+async def test_authorization_url_requests_only_configured_scope(
+    client: AsyncClient, auth_headers: dict[str, str]
+) -> None:
+    connect = await client.get("/api/v1/integrations/google/connect", headers=auth_headers)
+    query = parse_qs(urlparse(connect.json()["authorization_url"]).query)
+    assert query["scope"] == ["https://www.googleapis.com/auth/calendar.events"]

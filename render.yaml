@@ -64,3 +64,13 @@ services:
         sync: false
       - key: GOOGLE_REDIRECT_URI
         sync: false
+      # Required: production refuses to boot without a mail transport, because
+      # reset and verification links are never logged outside development.
+      - key: SMTP_HOST
+        sync: false
+      - key: SMTP_FROM
+        sync: false
+      - key: SMTP_USERNAME
+        sync: false
+      - key: SMTP_PASSWORD
+        sync: false

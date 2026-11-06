@@ -17,10 +17,11 @@ CF_DOMAIN    = $(shell cd $(L1) && $(TF) output -raw cloudfront_domain_name 2>/d
 FRONTEND_URL = $(shell cd $(L1) && $(TF) output -raw frontend_url 2>/dev/null)
 ALB_URL      = $(shell cd $(L2) && $(TF) output -raw api_alb_url 2>/dev/null)
 
-.PHONY: help fmt validate init base-up image web up migrate down verify-clean destroy-all eval
+.PHONY: help fmt validate init base-up image web up migrate down verify-clean destroy-all eval lock
 
 help:
 	@echo "eval          run the RAG eval harness (RAGAS-equivalent metrics)"
+	@echo "lock          re-pin api/requirements*.txt (with hashes) from the .in files"
 	@echo "base-up       apply layer1 (persistent: ECR, S3, CloudFront, secrets)"
 	@echo "image         build+push the ARM64 API image to ECR"
 	@echo "web           build the SPA and sync to S3 + invalidate CloudFront"
@@ -39,6 +40,17 @@ TFVARS = $(if $(HA),-var 'high_availability=$(HA)',) -var 'image_tag=$(IMAGE_TAG
 # Postgres + pgvector via EVAL_DATABASE_URL for true semantic retrieval.
 eval:
 	cd api && python -m app.eval.run
+
+# --- Python dependency lock ---
+# requirements*.in list what we depend on; requirements*.txt are generated from
+# them with every transitive package pinned and hashed, so pip installs exactly
+# what was locked or refuses. Resolved for Linux/macOS on Python 3.12 (the image
+# and CI) regardless of the machine this runs on. Needs uv.
+LOCK = uv pip compile --universal --python-version 3.12 --generate-hashes --quiet --custom-compile-command "make lock"
+
+lock:
+	cd api && $(LOCK) requirements.in -o requirements.txt
+	cd api && $(LOCK) requirements-dev.in -c requirements.txt -o requirements-dev.txt
 
 fmt:
 	$(TF) -chdir=infra/terraform fmt -recursive

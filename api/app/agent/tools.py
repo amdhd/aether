@@ -103,7 +103,11 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
         "type": "function",
         "function": {
             "name": "update_task",
-            "description": "Update an existing task by id. Only provided fields are changed.",
+            "description": (
+                "Update an existing task by id. Only provided fields are changed. Changing status, "
+                "priority or due date applies immediately; replacing an existing title or description "
+                "is proposed and requires user approval in the UI."
+            ),
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -366,17 +370,16 @@ async def _list_tasks(db: AsyncSession, user: User, args: dict[str, Any]) -> dic
             "next_before_id": rows[limit - 1].id if len(rows) > limit else None}
 
 
-async def _update_task(db: AsyncSession, user: User, args: dict[str, Any]) -> dict[str, Any]:
-    task = await db.get(Task, args["task_id"])
-    if task is None or task.user_id != user.id:
-        return {"error": f"Task {args['task_id']} not found."}
+def _parse_task_updates(args: dict[str, Any]) -> dict[str, Any]:
+    """Parse every supplied field before any is assigned.
 
-    # Parse every supplied field before assigning any of them. These values come
-    # from the model as free-form JSON, so a bad date or enum raises partway
-    # through — and assigning as we go would leave the ORM object dirty with the
-    # fields that already landed. Nothing rolls that back: the caller returns the
-    # error as a tool result and the agent loop's next commit flushes the partial
-    # mutation anyway. Validating first makes the update all-or-nothing.
+    These values come from the model as free-form JSON, so a bad date or enum
+    raises partway through — and assigning as we go would leave the ORM object
+    dirty with the fields that already landed. Nothing rolls that back: the
+    caller returns the error as a tool result and the agent loop's next commit
+    flushes the partial mutation anyway. Validating first makes the update
+    all-or-nothing, and lets the approval gate refuse a bad proposal up front.
+    """
     updates: dict[str, Any] = {}
     if "title" in args:
         updates["title"] = args["title"]
@@ -388,8 +391,32 @@ async def _update_task(db: AsyncSession, user: User, args: dict[str, Any]) -> di
         updates["priority"] = TaskPriority(args["priority"])
     if "status" in args:
         updates["status"] = TaskStatus(args["status"])
+    return updates
 
-    for field, value in updates.items():
+
+def _overwritten_task_text(task: Task, updates: dict[str, Any]) -> list[str]:
+    """Fields whose existing text this update would replace or erase.
+
+    Status, priority and due date are one click to put back, so they apply
+    straight away. A title or description is free text the user wrote: once
+    overwritten it is gone, and text injected through a web result or a
+    calendar invite could otherwise blank every task in a single turn. Filling
+    in a description that was empty loses nothing, so it is not counted.
+    """
+    fields = []
+    if "title" in updates and updates["title"] != task.title:
+        fields.append("title")
+    if "description" in updates and task.description and updates["description"] != task.description:
+        fields.append("description")
+    return fields
+
+
+async def _update_task(db: AsyncSession, user: User, args: dict[str, Any]) -> dict[str, Any]:
+    task = await db.get(Task, args["task_id"])
+    if task is None or task.user_id != user.id:
+        return {"error": f"Task {args['task_id']} not found."}
+
+    for field, value in _parse_task_updates(args).items():
         setattr(task, field, value)
 
     await db.commit()
@@ -840,8 +867,95 @@ def format_tool_result_block(tool_name: str, content: str) -> str:
     )
 
 
+# Always proposed, never executed directly by the model.
 APPROVAL_REQUIRED_TOOLS = frozenset({"delete_task", "calendar_delete_event", "calendar_create_event"})
+# Proposed only when the specific call is destructive (see _needs_approval).
+CONDITIONAL_APPROVAL_TOOLS = frozenset({"update_task"})
+# Everything the approval endpoint may execute.
+APPROVABLE_TOOLS = APPROVAL_REQUIRED_TOOLS | CONDITIONAL_APPROVAL_TOOLS
 APPROVAL_TTL_SECONDS = 600
+
+
+class ActionTargetError(Exception):
+    """The item an action would affect cannot be resolved for this user."""
+
+
+_TARGET_TEXT_CHARS = 500
+
+
+async def describe_action_target(
+    name: str, arguments: dict[str, Any], db: AsyncSession, user: User
+) -> dict[str, Any] | None:
+    """What an approvable action would act on, read by the server, not the model.
+
+    A delete proposal otherwise shows only an id, and the model's own prose is
+    the only description of what that id is — prose that injected text can
+    steer. Resolving the target here puts the real title or event in front of
+    the user, and refuses to propose against an id this user does not own.
+
+    Computed again at approval time; if the result differs, the item changed
+    after the user saw it and the action is not executed. Returns None for
+    actions whose arguments already are the whole change (creating an event).
+    Raises ActionTargetError when the target cannot be resolved.
+    """
+    if name in {"delete_task", "update_task"}:
+        task_id = arguments["task_id"]
+        if type(task_id) is not int:
+            raise ValueError("task_id must be an integer")
+        task = await db.get(Task, task_id)
+        if task is None or task.user_id != user.id:
+            raise ActionTargetError(f"Task {task_id} not found.")
+        return {
+            "kind": "task",
+            "title": task.title,
+            "description": _truncate(task.description, _TARGET_TEXT_CHARS),
+            "status": task.status.value,
+            "due_date": task.due_date.isoformat() if task.due_date else None,
+        }
+
+    if name == "calendar_delete_event":
+        event_id = str(arguments["event_id"])
+        access_token, error = await _calendar_guard(db, user)
+        if error:
+            raise ActionTargetError(error["error"])
+        try:
+            async with httpx.AsyncClient(timeout=10.0) as client:
+                event = await _get_calendar_event(client, access_token, event_id)
+        except httpx.HTTPError as exc:
+            raise ActionTargetError(
+                f"Could not look up that calendar event: {_google_error_message(exc)}"
+            ) from exc
+        if event is None:
+            raise ActionTargetError("That event is not on your calendar.")
+
+        def _when(value: dict[str, Any] | None) -> str | None:
+            value = value or {}
+            return value.get("dateTime") or value.get("date")
+
+        return {
+            "kind": "calendar_event",
+            "summary": _truncate(event.get("summary"), _TARGET_TEXT_CHARS),
+            "start": _when(event.get("start")),
+            "end": _when(event.get("end")),
+            "location": _truncate(event.get("location"), _TARGET_TEXT_CHARS),
+        }
+
+    return None
+
+
+async def _needs_approval(name: str, arguments: dict[str, Any], db: AsyncSession, user: User) -> bool:
+    """Whether this exact call must wait for the user. Raises ValueError/KeyError
+    for arguments the handler would reject anyway, so nothing unexecutable is
+    ever put in front of the user to approve."""
+    if name in APPROVAL_REQUIRED_TOOLS:
+        return True
+    if name == "update_task":
+        updates = _parse_task_updates(arguments)
+        task = await db.get(Task, arguments["task_id"])
+        if task is None or task.user_id != user.id:
+            return False  # the handler reports "not found"; nothing to protect
+        return bool(_overwritten_task_text(task, updates))
+    return False
 
 
 async def call_tool(
@@ -853,15 +967,29 @@ async def call_tool(
 
     if not isinstance(arguments, dict):
         return json.dumps({"error": "Tool arguments must be an object."})
-    if name in APPROVAL_REQUIRED_TOOLS and not approved:
+    try:
+        # Only the authenticated approval endpoint may pass approved=True; the
+        # decision never comes from the model's arguments.
+        needs_approval = not approved and await _needs_approval(name, arguments, db, user)
+    except (ValueError, KeyError, TypeError) as exc:
+        return json.dumps({"error": str(exc)})
+    except Exception:
+        logger.exception("tool.approval_check_failed tool=%s user_id=%s", name, user.id)
+        return json.dumps({"error": f"The {name} tool failed unexpectedly."})
+    if needs_approval:
         # Only the authenticated approval endpoint may set approved. A model's
         # arguments (including any claimed approval) can never bypass this gate.
         if len(json.dumps(arguments).encode("utf-8")) > 8000:
             return json.dumps({"error": "Action arguments are too large."})
+        try:
+            target = await describe_action_target(name, arguments, db, user)
+        except (ActionTargetError, ValueError, KeyError, TypeError) as exc:
+            return json.dumps({"error": str(exc)})
         return json.dumps({
             "approval_required": True,
             "name": name,
             "arguments": arguments,
+            "target": target,
             "expires_at": (datetime.now(timezone.utc) + timedelta(seconds=APPROVAL_TTL_SECONDS)).isoformat(),
             "message": "Not executed. The user must approve this exact action in Action activity.",
         })

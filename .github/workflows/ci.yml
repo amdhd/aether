@@ -6,6 +6,11 @@ on:
   pull_request:
     branches: [main]
 
+# Read-only token: these jobs build and test untrusted PR code and need no
+# write access. Without this block the token inherits the repository default.
+permissions:
+  contents: read
+
 jobs:
   backend:
     name: Backend (lint + tests)
@@ -30,17 +35,17 @@ jobs:
           --health-timeout 5s
           --health-retries 10
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Set up Python
-        uses: actions/setup-python@v7
+        uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         with:
           python-version: "3.12"
           cache: "pip"
           cache-dependency-path: api/requirements-dev.txt
 
       - name: Install dependencies
-        run: pip install -r requirements-dev.txt
+        run: pip install --require-hashes -r requirements-dev.txt
 
       # Generate a throwaway Fernet key per run instead of committing one to the
       # repo. Exported to $GITHUB_ENV so both test legs below inherit it.
@@ -63,6 +68,36 @@ jobs:
           TEST_DATABASE_URL: postgresql+asyncpg://postgres:postgres@localhost:5432/aether_test
         run: pytest -q
 
+  # Known-vulnerable dependencies fail the build. Its own job, so the audit
+  # tool's dependencies never mix with the environment the tests run in.
+  dependency-audit:
+    name: Dependency audit
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up Python
+        uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: "3.12"
+
+      - name: Set up Node
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version-file: web/.nvmrc
+
+      # Audits the hashed lock — exactly what the image installs, transitive
+      # packages included — without installing it.
+      - name: Audit Python dependencies (pip-audit)
+        run: |
+          pip install --require-hashes -r .github/requirements-audit.txt
+          pip-audit --strict --disable-pip -r api/requirements.txt -r api/requirements-dev.txt
+
+      # Shipped (production) frontend dependencies: no high/critical advisories.
+      - name: Audit npm dependencies
+        working-directory: web
+        run: npm audit --omit=dev --audit-level=high
+
   eval-gate:
     name: RAG eval gate
     runs-on: ubuntu-latest
@@ -70,17 +105,17 @@ jobs:
       run:
         working-directory: api
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Set up Python
-        uses: actions/setup-python@v7
+        uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         with:
           python-version: "3.12"
           cache: "pip"
           cache-dependency-path: api/requirements-dev.txt
 
       - name: Install dependencies
-        run: pip install -r requirements-dev.txt
+        run: pip install --require-hashes -r requirements-dev.txt
 
       # Runs the RAG eval harness on the deterministic offline backend and fails
       # the build if any aggregate (faithfulness / context precision / answer
@@ -97,10 +132,10 @@ jobs:
       run:
         working-directory: web
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Set up Node
-        uses: actions/setup-node@v7
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version-file: web/.nvmrc
           cache: "npm"
@@ -123,6 +158,6 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Build with fresh base images and verify Node runtime
         run: docker build --pull --no-cache --progress=plain -t aether-web:ci web

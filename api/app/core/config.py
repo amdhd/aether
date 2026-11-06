@@ -188,7 +188,11 @@ class Settings(BaseSettings):
     GOOGLE_CLIENT_ID: str = ""
     GOOGLE_CLIENT_SECRET: str = ""
     GOOGLE_REDIRECT_URI: str = ""
-    GOOGLE_OAUTH_SCOPES: str = "https://www.googleapis.com/auth/calendar"
+    # Least privilege: the agent's calendar tools only list, create, read and
+    # delete events on the primary calendar. The broader .../auth/calendar scope
+    # would also let a stolen token change sharing settings or delete whole
+    # calendars. Space-separated; every scope listed must be granted.
+    GOOGLE_OAUTH_SCOPES: str = "https://www.googleapis.com/auth/calendar.events"
     OAUTH_STATE_EXPIRE_MINUTES: int = 5
 
     @model_validator(mode="after")
@@ -211,6 +215,14 @@ class Settings(BaseSettings):
                 raise ValueError("ENCRYPTION_KEY must be a valid Fernet key") from None
             if not self.REFRESH_COOKIE_SECURE:
                 raise ValueError("REFRESH_COOKIE_SECURE must be true in production and staging")
+            # Without a mail transport, password reset and address verification
+            # silently stop working — and the only fallback, logging the message,
+            # would put live reset links in CloudWatch. Refuse to boot instead.
+            if not self.SMTP_HOST.strip() or not self.SMTP_FROM.strip():
+                raise ValueError(
+                    "SMTP_HOST and SMTP_FROM must be set in production and staging; "
+                    "reset and verification links are never logged outside development"
+                )
 
             origins = [o.strip() for o in self.FRONTEND_ORIGIN.split(",") if o.strip()]
             # app.main pairs this allowlist with allow_credentials=True, and the

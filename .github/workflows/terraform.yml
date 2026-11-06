@@ -8,14 +8,19 @@ on:
     branches: [main]
     paths: ["infra/terraform/**", ".github/workflows/terraform.yml"]
 
+# Read-only token: these jobs build and test untrusted PR code and need no
+# write access. Without this block the token inherits the repository default.
+permissions:
+  contents: read
+
 jobs:
   validate:
     name: fmt · validate · lint
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      - uses: hashicorp/setup-terraform@v3
+      - uses: hashicorp/setup-terraform@b9cd54a3c349d3f38e8881555d616ced269862dd # v3.1.2
         with:
           terraform_version: "1.16.6"
 
@@ -32,9 +37,9 @@ jobs:
           done
 
       - name: Setup TFLint
-        uses: terraform-linters/setup-tflint@v4
+        uses: terraform-linters/setup-tflint@90f302c255ef959cbfb4bd10581afecdb7ece3e6 # v4.1.1
         with:
-          tflint_version: latest
+          tflint_version: v0.65.0
 
       - name: TFLint
         run: |
@@ -53,12 +58,12 @@ jobs:
   #     id-token: write
   #     contents: read
   #   steps:
-  #     - uses: actions/checkout@v7
-  #     - uses: aws-actions/configure-aws-credentials@v6
+  #     - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+  #     - uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6.3.0
   #       with:
   #         role-to-assume: ${{ vars.AWS_PLAN_ROLE_ARN }}
   #         aws-region: ap-southeast-1
-  #     - uses: hashicorp/setup-terraform@v3
+  #     - uses: hashicorp/setup-terraform@b9cd54a3c349d3f38e8881555d616ced269862dd # v3.1.2
   #     - run: |
   #         cd infra/terraform/layer2_ephemeral
   #         terraform init -backend-config="bucket=${{ vars.TF_STATE_BUCKET }}" \

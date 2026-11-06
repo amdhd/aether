@@ -11,3 +11,8 @@
 # the user's data somewhere else. Unset, connect-src has to fall back to allowing
 # any HTTPS host, so set it.
 # api_origin = "https://api.ahmadhadi.info"
+
+# GitHub Actions deploy role (OIDC). Set to this repo to create it, then copy the
+# github_deploy_role_arn output into the repo variable AWS_DEPLOY_ROLE_ARN.
+# github_repository           = "owner/name"
+# create_github_oidc_provider = false # if the account already has one

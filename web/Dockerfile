@@ -1,7 +1,7 @@
 # syntax=docker/dockerfile:1
 
 # --- Builder: produce the static SPA bundle ---
-FROM node:24.22.1-alpine AS builder
+FROM node:26.12.1-alpine AS builder
 
 WORKDIR /app
 

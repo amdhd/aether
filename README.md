@@ -143,7 +143,13 @@ Redis**; ⑥ outbound LLM/tool calls egress via **NAT**; ⑦ logs and alarms flo
   single `high_availability` toggle, and org tagging via `default_tags`.
 - **CI/CD** — GitHub Actions with **OIDC (no static keys)** and three gates:
   **Infracost** (cost), **Checkov** (IaC), **Trivy** (container CVEs); rolling
-  deploy with auto-rollback.
+  deploy with auto-rollback. The deploy role is defined in Terraform and trusts
+  only the `production` GitHub environment, so no pull-request job can assume
+  it. Actions are pinned to commit SHAs, Trivy is checksum-verified, and each job
+  gets only the token permissions it needs.
+- **Supply chain** — Python dependencies are locked with hashes (transitive ones
+  included) and installed with `--require-hashes`; a CI job runs `pip-audit` and
+  `npm audit`; Dependabot proposes updates.
 - **Cost & ops** — CloudWatch alarms → SNS, a **CloudWatch dashboard**
   (ALB · ECS · RDS, plus **LLM token/cost/latency**), an **AWS Budgets** alert, a
   **runaway-LLM-cost alarm**, and an ephemeral `apply → demo → destroy` model
@@ -186,6 +192,11 @@ rather than built. For a permanent production environment, the next steps are:
 - **Tools** the assistant can call on your behalf: create/update/delete/list
   tasks, create/list/search notes, get the weather (data.gov.my), web search
   (Tavily), and read/create/delete Google Calendar events.
+- **Server-enforced approval** for destructive or external actions — deleting a
+  task or calendar event, creating an event, or overwriting a task's title or
+  description. The model can only *propose* them. The card shows the item as the
+  server read it from your data (not the model's description of it), and
+  approving re-checks it: if the item changed in the meantime, nothing runs.
 - **Memory** — long conversations are automatically summarized so context
   doesn't grow unbounded, folding older turns at a safe boundary that never
   splits a tool call from its result.
@@ -251,8 +262,9 @@ rather than built. For a permanent production environment, the next steps are:
   for observability and cost. Split into a persistent base layer and an ephemeral
   stack layer, so a full demo is `make up` / `make down` with idle cost ~$0.
 - **CI/CD**: **GitHub Actions** with **OIDC** (no static keys) — app lint + tests
-  (SQLite *and* Postgres + pgvector legs), and **Infracost** (cost), **Checkov**
-  (IaC), and **Trivy** (container CVE) gates on the infrastructure.
+  (SQLite *and* Postgres + pgvector legs), a dependency audit (`pip-audit`,
+  `npm audit`), and **Infracost** (cost), **Checkov** (IaC), and **Trivy**
+  (container CVE) gates on the infrastructure.
 
 See [Cloud architecture (AWS)](#cloud-architecture-aws) for the full topology,
 and [`infra/terraform/`](infra/terraform/) for the modules.
@@ -310,6 +322,11 @@ external API keys — `DEEPSEEK_API_KEY`, `TAVILY_API_KEY`, and the
 `GOOGLE_CLIENT_*` Google Calendar credentials only need to be set to use the
 chat assistant, web search tool, and calendar integration respectively.
 
+Email (password reset, address verification) is written to the API log in
+development, so no mail server is needed locally. Staging and production refuse
+to start without `SMTP_HOST` and `SMTP_FROM`, so reset links are never logged
+there.
+
 For `SECRET_KEY` and `ENCRYPTION_KEY`, generate real values rather than using
 the placeholders:
 
@@ -355,10 +372,15 @@ Backend:
 
 ```sh
 cd api
-pip install -r requirements-dev.txt
+pip install --require-hashes -r requirements-dev.txt
 ruff check .
 pytest
 ```
+
+Dependencies are declared in `api/requirements.in` / `requirements-dev.in`. The
+`.txt` files are generated locks (every package pinned and hashed) — after
+editing an `.in` file, run `make lock` (needs [uv](https://docs.astral.sh/uv/))
+and commit both.
 
 Frontend:
 
@@ -393,6 +415,24 @@ make down      # destroy the ephemeral layer → hourly billing stops
 
 Flip `make up HA=true` for the production-grade shape (Multi-AZ RDS, autoscaling,
 Redis).
+
+Before the first deploy, set real values in the `aether/app` secret in Secrets
+Manager — including `SMTP_HOST` and `SMTP_FROM`, which production requires (the
+API task will not start without them).
+
+**Deploying from GitHub Actions.** `deploy.yml` builds, scans, pushes and rolls
+the service on every push to `main` once a deploy role is configured:
+1. Set `github_repository = "<owner>/<repo>"` in
+   `layer1_persistent/terraform.tfvars` (and `create_github_oidc_provider =
+   false` if the AWS account already has a GitHub OIDC provider), then
+   `make base-up`.
+2. Save the `github_deploy_role_arn` output as the repository variable
+   `AWS_DEPLOY_ROLE_ARN`.
+3. Under *Settings → Environments*, create `production`, restrict it to the
+   `main` branch, and add required reviewers. The role trusts only tokens issued
+   to this environment.
+
+Until `AWS_DEPLOY_ROLE_ARN` is set, the publish and deploy jobs skip.
 
 > **A custom domain is required for a working end-to-end browser demo.** Without
 > one, the API is served over plaintext HTTP on the ALB — which the HTTPS SPA
@@ -434,6 +474,11 @@ redirect URI points at `localhost`. To make it work on a deployed domain:
 
 The same applies to any other origins (`localhost:5173`) referenced in the
 consent screen's *Authorized JavaScript origins*.
+
+The app requests only the `https://www.googleapis.com/auth/calendar.events`
+scope (events on the user's calendars, not sharing settings or whole
+calendars); add that scope to the consent screen. If a user unticks it on
+Google's consent page, the connection is refused rather than saved half-working.
 
 ## License
 

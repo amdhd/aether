@@ -4,7 +4,7 @@ uvicorn[standard]==0.54.0
 sqlalchemy==2.0.54
 asyncpg==0.32.0
 alembic==1.20.0
-pydantic==2.14.1
+pydantic==2.14.2
 pydantic-settings==2.15.0
 bcrypt==5.0.0
 PyJWT[crypto]==2.15.1

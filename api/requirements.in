@@ -1,7 +1,7 @@
 fastapi==0.143.0
 uvicorn[standard]==0.54.0
 # OpenTelemetry SQLAlchemy instrumentation currently requires SQLAlchemy < 2.1.
-sqlalchemy==2.0.54
+sqlalchemy==2.1.6
 asyncpg==0.32.0
 alembic==1.20.0
 pydantic==2.14.1

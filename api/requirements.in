@@ -18,7 +18,7 @@ cryptography==50.0.2
 email-validator==2.3.0
 greenlet==3.5.6
 # OpenAI 3 uses httpx2, which is not covered by our HTTPX tracing instrumentation.
-openai==2.54.0
+openai==3.41.0
 pgvector==0.5.1
 
 # Rate-limit shared store (used when REDIS_URL is set; HA multi-instance).

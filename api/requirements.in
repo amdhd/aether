@@ -1,4 +1,4 @@
-fastapi==0.143.0
+fastapi==0.162.0
 uvicorn[standard]==0.54.0
 # OpenTelemetry SQLAlchemy instrumentation currently requires SQLAlchemy < 2.1.
 sqlalchemy==2.0.54

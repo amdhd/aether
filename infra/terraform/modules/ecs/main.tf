@@ -358,3 +358,69 @@ resource "aws_appautoscaling_policy" "cpu" {
     scale_out_cooldown = 60
   }
 }
+
+# CPU alone barely moves for this workload: a chat turn spends its time waiting
+# on the LLM with an SSE stream held open, so a task can be saturated with
+# concurrent streams at low CPU. This tracks concurrent connections per healthy
+# task instead (ALB ActiveConnectionCount / HealthyHostCount), which open chat
+# streams drive directly. Both policies stay: target tracking scales out when
+# either is over target and scales in only when both are under.
+resource "aws_appautoscaling_policy" "connections" {
+  count              = var.high_availability ? 1 : 0
+  name               = "${var.name_prefix}-connections-target"
+  policy_type        = "TargetTrackingScaling"
+  resource_id        = aws_appautoscaling_target.api[0].resource_id
+  scalable_dimension = aws_appautoscaling_target.api[0].scalable_dimension
+  service_namespace  = aws_appautoscaling_target.api[0].service_namespace
+
+  target_tracking_scaling_policy_configuration {
+    target_value       = var.connections_per_task_target
+    scale_in_cooldown  = 300
+    scale_out_cooldown = 60
+
+    customized_metric_specification {
+      metrics {
+        id          = "connections"
+        return_data = false
+        metric_stat {
+          stat = "Sum"
+          metric {
+            namespace   = "AWS/ApplicationELB"
+            metric_name = "ActiveConnectionCount"
+            dimensions {
+              name  = "LoadBalancer"
+              value = aws_lb.api.arn_suffix
+            }
+          }
+        }
+      }
+
+      metrics {
+        id          = "tasks"
+        return_data = false
+        metric_stat {
+          stat = "Average"
+          metric {
+            namespace   = "AWS/ApplicationELB"
+            metric_name = "HealthyHostCount"
+            dimensions {
+              name  = "LoadBalancer"
+              value = aws_lb.api.arn_suffix
+            }
+            dimensions {
+              name  = "TargetGroup"
+              value = aws_lb_target_group.api.arn_suffix
+            }
+          }
+        }
+      }
+
+      metrics {
+        id          = "per_task"
+        label       = "Active connections per healthy task"
+        expression  = "connections / IF(tasks < 1, 1, tasks)"
+        return_data = true
+      }
+    }
+  }
+}

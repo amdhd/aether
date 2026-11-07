@@ -155,3 +155,9 @@ variable "enable_vpc_endpoints" {
   type        = bool
   default     = true
 }
+
+variable "connections_per_task_target" {
+  description = "HA autoscaling: target concurrent ALB connections per healthy API task (open chat streams hold one each)."
+  type        = number
+  default     = 50
+}

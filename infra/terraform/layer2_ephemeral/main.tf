@@ -192,8 +192,9 @@ module "ecs" {
   enable_https    = local.custom_domain
   certificate_arn = local.custom_domain ? aws_acm_certificate_validation.api[0].certificate_arn : ""
 
-  high_availability = var.high_availability
-  enable_tracing    = var.enable_tracing
+  high_availability           = var.high_availability
+  enable_tracing              = var.enable_tracing
+  connections_per_task_target = var.connections_per_task_target
 }
 
 # --- Custom domain + TLS (only when api_domain_name is set) ---

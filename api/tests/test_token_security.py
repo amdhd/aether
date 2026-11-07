@@ -9,7 +9,7 @@ from app.core.security import create_access_token, decode_token, verify_oauth_st
 
 
 def test_access_token_round_trip():
-    payload = decode_token(create_access_token("42", 3), "access")
+    payload = decode_token(create_access_token("42", 3, "fam-1"), "access")
     assert payload["sub"] == "42"
     assert payload["ver"] == 3
     assert payload["type"] == "access"
@@ -39,7 +39,7 @@ def test_wrong_signature_is_rejected():
 
 def test_access_token_cannot_be_used_as_oauth_state():
     with pytest.raises(ValueError, match="Invalid state token type"):
-        verify_oauth_state_token(create_access_token("42", 0))
+        verify_oauth_state_token(create_access_token("42", 0, "fam-1"))
 
 
 # --- purpose, issuer and required claims --------------------------------------
@@ -80,7 +80,7 @@ def test_a_refresh_token_is_not_an_access_token():
 
 def test_an_access_token_is_not_a_refresh_token():
     with pytest.raises(jwt.InvalidAudienceError):
-        decode_token(create_access_token("42", 0), "refresh")
+        decode_token(create_access_token("42", 0, "fam-1"), "refresh")
 
 
 def test_oauth_state_is_not_a_session_token():

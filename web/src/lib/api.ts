@@ -24,7 +24,54 @@ export class ApiError extends Error {
   }
 }
 
+/**
+ * The server's own explanation of a failed request, fit to show a user, or null
+ * when there is none (a network failure, an empty or unexpected body).
+ *
+ * FastAPI answers an HTTPException with `detail` as a string ("You're saving
+ * notes too quickly…") and a validation failure with `detail` as a list of
+ * `{loc, msg}` — the first of which names the field and the rule it broke.
+ */
+export function apiErrorDetail(error: unknown): string | null {
+  if (!(error instanceof ApiError)) return null
+  const detail = (error.body as { detail?: unknown } | null)?.detail
+  if (typeof detail === 'string' && detail.trim()) return detail.trim()
+  if (Array.isArray(detail) && detail.length > 0) {
+    const first = detail[0] as { loc?: unknown[]; msg?: unknown }
+    if (typeof first?.msg === 'string') {
+      const field = Array.isArray(first.loc) ? first.loc[first.loc.length - 1] : undefined
+      return typeof field === 'string' && field !== 'body'
+        ? `${field.replaceAll('_', ' ')}: ${first.msg}`
+        : first.msg
+    }
+  }
+  return null
+}
+
+/** Whether trying the same request again could succeed. */
+export function isRetryable(error: unknown): boolean {
+  return !(error instanceof ApiError) || error.status === 429 || error.status >= 500
+}
+
 let refreshPromise: Promise<string | null> | null = null
+
+// Refresh tokens are single-use: the server rotates the cookie on every refresh
+// and treats a second use of the old one as theft, revoking every session the
+// user has. `refreshPromise` stops one tab refreshing twice, but two tabs share
+// the cookie and not that variable — so when both tabs' access tokens expire
+// together (back from a break, or a second tab opening), both sent the same
+// cookie and the loser signed the user out everywhere.
+//
+// A Web Lock is shared by every tab of this origin, so refreshes now run one at
+// a time across tabs. The tab that waited sends the cookie the first tab's
+// refresh just replaced, which is a valid, unused token. Browsers without the
+// Locks API fall back to the per-tab guard alone.
+export const REFRESH_LOCK = 'aether-auth-refresh'
+
+function acrossTabs<T>(work: () => Promise<T>): Promise<T> {
+  const locks = typeof navigator !== 'undefined' ? navigator.locks : undefined
+  return locks?.request ? locks.request(REFRESH_LOCK, work) : work()
+}
 
 export async function refreshAccessToken(): Promise<string | null> {
   const { setAccessToken, logout } = useAuthStore.getState()
@@ -32,7 +79,7 @@ export async function refreshAccessToken(): Promise<string | null> {
   // The refresh token rides along as an HttpOnly cookie (credentials:'include'),
   // so there is nothing to read from the store or send in the body.
   if (!refreshPromise) {
-    refreshPromise = (async () => {
+    refreshPromise = acrossTabs(async () => {
       try {
         const request = () => fetch(`${API_URL}${API_PREFIX}/auth/refresh`, {
           method: 'POST', credentials: 'include', headers: CSRF_HEADERS,
@@ -59,7 +106,7 @@ export async function refreshAccessToken(): Promise<string | null> {
       } finally {
         refreshPromise = null
       }
-    })()
+    })
   }
 
   return refreshPromise

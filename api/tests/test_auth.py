@@ -538,3 +538,80 @@ async def test_a_concurrent_duplicate_registration_is_a_400_not_a_500(
     second = await client.post("/api/v1/auth/register", json=creds)
     assert second.status_code == 400
     assert second.json()["detail"] == "Email already registered"
+
+
+# --- logout ends one session; logout-all ends every session -------------------
+
+
+async def _sign_in(email: str = "multi@example.com") -> tuple[AsyncClient, str]:
+    """A separate client (own cookie jar) per device."""
+    from httpx import ASGITransport
+
+    from app.main import app
+
+    device = AsyncClient(transport=ASGITransport(app=app), base_url="http://test")
+    resp = await device.post("/api/v1/auth/login", data={"username": email, "password": "supersecret123"})
+    assert resp.status_code == 200
+    return device, resp.json()["access_token"]
+
+
+async def _register(client: AsyncClient, email: str = "multi@example.com") -> None:
+    await client.post("/api/v1/auth/register",
+                      json={"email": email, "name": "Multi", "password": "supersecret123"})
+
+
+async def test_logout_ends_only_this_device(client: AsyncClient) -> None:
+    await _register(client)
+    laptop, laptop_token = await _sign_in()
+    phone, phone_token = await _sign_in()
+    try:
+        assert (await laptop.post("/api/v1/auth/logout",
+                                  headers={"Authorization": f"Bearer {laptop_token}"})).status_code == 204
+
+        # This device: access token and refresh cookie both end now.
+        assert (await laptop.get("/api/v1/auth/me", headers={"Authorization": f"Bearer {laptop_token}"})).status_code == 401
+        assert (await laptop.post("/api/v1/auth/refresh", headers=CSRF)).status_code == 401
+
+        # The other device keeps working, and can still refresh.
+        assert (await phone.get("/api/v1/auth/me", headers={"Authorization": f"Bearer {phone_token}"})).status_code == 200
+        assert (await phone.post("/api/v1/auth/refresh", headers=CSRF)).status_code == 200
+    finally:
+        await laptop.aclose()
+        await phone.aclose()
+
+
+async def test_logout_all_ends_every_device(client: AsyncClient) -> None:
+    await _register(client)
+    laptop, laptop_token = await _sign_in()
+    phone, phone_token = await _sign_in()
+    try:
+        assert (await laptop.post("/api/v1/auth/logout-all",
+                                  headers={"Authorization": f"Bearer {laptop_token}"})).status_code == 204
+        for device, token in [(laptop, laptop_token), (phone, phone_token)]:
+            assert (await device.get("/api/v1/auth/me", headers={"Authorization": f"Bearer {token}"})).status_code == 401
+            assert (await device.post("/api/v1/auth/refresh", headers=CSRF)).status_code == 401
+    finally:
+        await laptop.aclose()
+        await phone.aclose()
+
+
+async def test_an_access_token_without_a_session_is_rejected(client: AsyncClient) -> None:
+    from datetime import datetime, timedelta, timezone
+
+    import jwt
+
+    from app.core.config import settings
+    from app.core.security import TOKEN_ISSUER
+
+    await _register(client)
+    now = datetime.now(timezone.utc)
+    claims = {"sub": "1", "ver": 0, "type": "access", "aud": "aether:access", "iss": TOKEN_ISSUER,
+              "iat": now, "exp": now + timedelta(minutes=5)}
+    for extra in [{}, {"fam": "never-issued"}]:
+        token = jwt.encode({**claims, **extra}, settings.SECRET_KEY, algorithm=settings.ALGORITHM)
+        assert (await client.get("/api/v1/auth/me", headers={"Authorization": f"Bearer {token}"})).status_code == 401
+
+
+async def test_logout_requires_authentication(client: AsyncClient) -> None:
+    assert (await client.post("/api/v1/auth/logout")).status_code == 401
+    assert (await client.post("/api/v1/auth/logout-all")).status_code == 401

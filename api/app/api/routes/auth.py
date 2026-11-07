@@ -1,6 +1,6 @@
 from datetime import datetime, timezone
 
-from fastapi import APIRouter, BackgroundTasks, Cookie, Depends, HTTPException, Response, status
+from fastapi import APIRouter, BackgroundTasks, Cookie, Depends, HTTPException, Request, Response, status
 from fastapi.security import OAuth2PasswordRequestForm
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
@@ -182,10 +182,31 @@ async def refresh(
 
 @router.post("/logout", status_code=status.HTTP_204_NO_CONTENT)
 async def logout(
+    request: Request,
     response: Response,
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> None:
+    """Sign out this browser only.
+
+    Revoking every session here meant signing out of a shared laptop also
+    signed the user out of their phone. The session is the refresh-token family
+    named by the access token, so only it ends — its refresh cookie and, through
+    get_current_user's live-family check, its outstanding access tokens.
+    """
+    await refresh_tokens.revoke_family(db, current_user, request.state.session_family)
+    _clear_refresh_cookie(response)
+
+
+@router.post("/logout-all", status_code=status.HTTP_204_NO_CONTENT)
+async def logout_everywhere(
+    response: Response,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> None:
+    """Sign out every device: revoke all sessions and invalidate every access
+    token (token_version bump). The way to evict someone without changing the
+    password."""
     await refresh_tokens.revoke_all_for_user(db, current_user)
     _clear_refresh_cookie(response)
 

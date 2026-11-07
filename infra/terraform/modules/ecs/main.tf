@@ -82,12 +82,21 @@ locals {
         "awslogs-stream-prefix" = "api"
       }
     }
+    # Readiness, not liveness: a task that cannot reach the database (wrong
+    # credentials, the app role not created yet, a security-group mistake) is
+    # marked unhealthy, so ECS replaces it and the deployment circuit breaker
+    # rolls a bad release back instead of leaving it serving 500s.
+    #
+    # The ALB target group still checks /health, so routing does not flap on a
+    # brief database blip. Retries are generous for the same reason: a task is
+    # only replaced after ~2.5 minutes of failed checks, past a 60s start period
+    # that covers image pull, boot, and a migration finishing on first deploy.
     healthCheck = {
-      command     = ["CMD-SHELL", "curl -fsS http://localhost:${var.api_port}/health || exit 1"]
+      command     = ["CMD-SHELL", "curl -fsS http://localhost:${var.api_port}/health/ready || exit 1"]
       interval    = 30
       timeout     = 5
-      retries     = 3
-      startPeriod = 20
+      retries     = 5
+      startPeriod = 60
     }
   }
 

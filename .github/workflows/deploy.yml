@@ -237,6 +237,13 @@ jobs:
             --query 'repositories[0].repositoryUri' --output text)
           aws ecr get-login-password --region "$AWS_REGION" \
             | docker login --username AWS --password-stdin "${registry%/*}"
+          # Tags are immutable. A re-run of this commit finds its image already
+          # published (same source, already scanned) and reuses it.
+          if aws ecr describe-images --repository-name "$ECR_REPOSITORY" \
+               --image-ids imageTag="${{ github.sha }}" >/dev/null 2>&1; then
+            echo "Image ${{ github.sha }} already in ECR; reusing it."
+            exit 0
+          fi
           docker tag aether-api:${{ github.sha }} "$registry:${{ github.sha }}"
           docker push "$registry:${{ github.sha }}"
 

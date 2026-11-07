@@ -2,7 +2,7 @@
 # stack can read layer1's outputs (ECR repo, secret ARN, CloudFront domain).
 
 layer1_state_bucket = "CHANGE_ME-terraform-state"
-image_tag           = "latest"
+# image_tag is passed by `make up` (the current commit); "latest" is refused.
 
 # Cost/scale knobs (defaults are the cheap single-AZ demo). Flip one boolean for
 # the full production-grade shape (Multi-AZ RDS + autoscaling + Redis):

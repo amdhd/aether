@@ -7,7 +7,11 @@ PREFIX      ?= aether
 L1          := infra/terraform/layer1_persistent
 L2          := infra/terraform/layer2_ephemeral
 TF          := terraform
-IMAGE_TAG   ?= latest
+# Images are tagged by commit (ECR tags are immutable). A dirty tree gets a
+# -dirty suffix so an uncommitted build can never take a clean commit's tag;
+# being immutable, a second dirty push of the same commit is refused — commit,
+# or set IMAGE_TAG explicitly.
+IMAGE_TAG   ?= $(shell git rev-parse --short=12 HEAD)$(shell git diff --quiet HEAD -- api || echo -dirty)
 
 # Pull values out of layer1 state so the other targets don't hardcode them.
 ECR_URL      = $(shell cd $(L1) && $(TF) output -raw ecr_repository_url 2>/dev/null)
@@ -98,6 +102,10 @@ web:
 # (CI registers its own revisions), so without this step an apply that changes
 # secrets, env or the image would not reach the running tasks.
 up:
+	@aws ecr describe-images --repository-name $(PREFIX)-api --region $(REGION) \
+	   --image-ids imageTag=$(IMAGE_TAG) >/dev/null 2>&1 || { \
+	   echo "ERROR: no image tagged $(IMAGE_TAG) in ECR — run 'make image' first"; \
+	   echo "       (or pass IMAGE_TAG=<an existing commit tag>)."; exit 1; }
 	cd $(L2) && $(TF) init -backend-config=backend.hcl && $(TF) apply $(TFVARS)
 	$(MAKE) migrate
 	$(MAKE) roll

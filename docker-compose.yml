@@ -35,7 +35,11 @@ services:
     command: ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--reload"]
 
   web:
-    build: ./web
+    # The Vite dev server needs Node. web/Dockerfile's final stage is the nginx
+    # runtime (no npm), so build only the Node `builder` stage here.
+    build:
+      context: ./web
+      target: builder
     restart: unless-stopped
     environment:
       VITE_API_URL: http://localhost:8000

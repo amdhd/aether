@@ -1,4 +1,8 @@
-# Aether — AWS Deployment Plan (ECS Fargate, ephemeral demo)
+# Aether — AWS Deployment (ECS Fargate, ephemeral demo)
+
+> Started as the pre-build plan; sections 2–6 now describe what
+> [`infra/terraform/`](../infra/terraform/) actually does. The runbook (commands,
+> one-time setup) is [`infra/terraform/README.md`](../infra/terraform/README.md).
 
 ## Context
 
@@ -10,8 +14,8 @@ The app naturally partitions into distinct AWS resources:
 |-----------|-----------|--------------|
 | Frontend | React 19 + Vite SPA, static `dist/` | **S3 + CloudFront** |
 | API | FastAPI (uvicorn, port 8000) | **ECS Fargate** service behind an **ALB** |
-| Database | Postgres 16 + **pgvector** | **RDS PostgreSQL** (t4g.micro) |
-| Migrations | `alembic upgrade head` | **One-off ECS task** (run once) |
+| Database | Postgres 16 + **pgvector** | **RDS PostgreSQL** (t4g.small default) |
+| Migrations | `alembic upgrade head` | **One-off ECS task** (its own task definition; the only holder of the DB owner login) |
 | Secrets | JWT/Fernet keys, LLM/API keys | **Secrets Manager** (injected via ECS `valueFrom`) |
 | Images | API container | **ECR** |
 | Egress to DeepSeek/OpenAI/Tavily/Google | outbound HTTPS | **NAT Gateway** (single) |
@@ -94,31 +98,38 @@ sequenceDiagram
     API-->>U: streamed answer (Set-Cookie refresh token)
 ```
 
-**Startup order (Terraform + deploy):**
-1. `terraform apply` → VPC, subnets, NAT, RDS, ALB, ECR, ECS cluster, Secrets Manager, CloudFront, S3.
-2. Build & push API image to ECR; build SPA (`VITE_API_URL=/api/v1`) and sync `dist/` to S3.
-3. Run the **one-off migration ECS task** (`alembic upgrade head`) — creates tables + `CREATE EXTENSION vector`.
-4. ECS Fargate service starts, health check `GET /health`, registers in ALB target group.
-5. Demo. Then `terraform destroy` → everything gone.
+**Startup order (`make` targets):**
+1. `make base-up` (once) → layer1: ECR, S3 + CloudFront, Secrets Manager. Put real values in the `aether/app` secret, including `SMTP_HOST` and `SMTP_FROM` (production refuses to start without them).
+2. `make image` → build the ARM64 API image and push it to ECR tagged with the current commit (tags are immutable; `latest` is not used).
+3. `make up` → checks that image exists, applies layer2 (VPC, NAT, RDS, ALB, ECS, Redis in HA), then:
+   - runs the **migration task** (`alembic upgrade head`: tables, `CREATE EXTENSION vector`, and the DML-only app role) and **waits** for exit code 0;
+   - **rolls** the service onto the task definition Terraform registered and waits until it is stable.
+4. Tasks pass the container health check only once `GET /health/ready` (database reachable) succeeds; the ALB routes on `GET /health`.
+5. `make web` → build the SPA against the live API URL and sync `dist/` to S3.
+6. Demo. Then `make down` → layer2 destroyed, `verify-clean` checks for orphans.
+
+From GitHub Actions, `deploy.yml` does steps 2–4 on every push to `main` once `AWS_DEPLOY_ROLE_ARN` is set (see the README).
 
 ---
 
 ## 3. The container(s)
 
-**API container (needs a small change from the current dev Dockerfile):**
-- Current `api/Dockerfile` installs `requirements-dev.txt` and runs `--reload`. For the demo, either reuse it as-is (fine, just heavier) or add a lean prod stage: install `requirements.txt` only, run `uvicorn app.main:app --host 0.0.0.0 --port 8000` (no `--reload`).
-- Secrets injected by ECS via `valueFrom` (Secrets Manager ARNs): `DATABASE_URL`, `SECRET_KEY`, `ENCRYPTION_KEY`, `DEEPSEEK_API_KEY`, `OPENAI_API_KEY` (optional), `TAVILY_API_KEY`, `GOOGLE_CLIENT_ID/SECRET`. Plain env for non-secrets: `ENVIRONMENT=production`, `TRUST_PROXY_HEADERS=true` (behind ALB), `FRONTEND_ORIGIN`, cookie settings (`REFRESH_COOKIE_SECURE=true`, `REFRESH_COOKIE_SAMESITE=none`).
-- Migration task = **same image**, command overridden to `alembic upgrade head`.
+**API container** (`api/Dockerfile`): a slim, multi-stage production image. Base images are pinned by digest; Python dependencies are installed from the hashed lock (`--require-hashes`, production deps only); it runs `uvicorn app.main:app` as a non-root user, with no `--reload`. It ships the Amazon RDS CA bundle (`PGSSLROOTCERT`), and the database URL uses `ssl=verify-full`.
+- Secrets injected by ECS via `valueFrom` (Secrets Manager ARNs): `DATABASE_URL` (the DML-only **app role**, not the master user), `SECRET_KEY`, `ENCRYPTION_KEY`, `DEEPSEEK_API_KEY`, `OPENAI_API_KEY` (optional), `TAVILY_API_KEY`, `GOOGLE_*`, `SMTP_*`, and in HA `REDIS_URL` (carries the Redis AUTH token). Plain env for non-secrets: `ENVIRONMENT=production`, `TRUST_PROXY_HEADERS=true` (behind ALB), `FRONTEND_ORIGIN`, cookie settings (`REFRESH_COOKIE_SECURE=true`, `REFRESH_COOKIE_SAMESITE=none`).
+- **Migration task:** same image, its own task definition (`<prefix>-migrate`) that runs `alembic upgrade head`. It alone receives the RDS owner login, plus the app role's credentials so it can create or update that role.
+- **The service ignores task-definition changes** (so Terraform never undoes a CI deploy). `terraform apply` alone does not move running tasks onto a new revision — `make up`/`make roll` and CI deploys do.
 
-**Frontend container: none.** The SPA builds to static `dist/` and is served from S3/CloudFront — no web Dockerfile needed for prod (the existing `web/Dockerfile` is dev-only). Build-time `VITE_API_URL=/api/v1` (same-origin via CloudFront).
+**Frontend:** the SPA builds to static `dist/` and is served from S3/CloudFront. `web/Dockerfile` also produces an nginx (unprivileged, port 8080) image as a container fallback; `docker compose` uses only its Node `builder` stage for the Vite dev server.
 
-**Note — rate limiting:** it's in-process (`api/app/core/rate_limit.py`), no Redis. Keep the Fargate service at **1 task** for the demo so limits behave globally. (Multi-task would make limits per-task; out of scope for a 1hr demo.)
+**Rate limiting:** in-memory per task by default; in HA mode (`make up HA=true`) limits and login backoff are shared through ElastiCache Redis (TLS + AUTH), so they hold across autoscaled tasks. HA autoscaling tracks CPU and concurrent connections per task.
 
 ---
 
 ## 4. Cost — the whole point
 
 Approximate **us-east-1** on-demand pricing. Everything below is destroyed by `terraform destroy`.
+
+> These are the original planning estimates at the smallest sizes. The stack now defaults to `db.t4g.small` and 0.5 vCPU / 1 GB tasks in ap-southeast-1, so real numbers are higher; the Infracost gate posts the current estimate on every infrastructure PR.
 
 | Resource | Rate | ~1 hour | If left a month |
 |----------|------|--------|-----------------|
@@ -138,16 +149,18 @@ Approximate **us-east-1** on-demand pricing. Everything below is destroyed by `t
 
 ---
 
-## 5. Files to create (when the infra is built)
+## 5. Where it lives
 
-- `infra/terraform/` — `vpc.tf`, `rds.tf`, `ecs.tf`, `alb.tf`, `cloudfront.tf`, `secrets.tf`, `ecr.tf`, `variables.tf`, `outputs.tf`.
-- A lean prod stage in `api/Dockerfile`.
-- A `Makefile` with `deploy` / `destroy` targets.
+- `infra/terraform/layer1_persistent/` — ECR, S3 + CloudFront, Secrets Manager, budget, and the GitHub OIDC deploy role.
+- `infra/terraform/layer2_ephemeral/` — VPC, NAT, ALB, ECS (API + migrate task definitions), RDS, Redis (HA), alarms, dashboard.
+- `infra/terraform/modules/` — `vpc`, `security_groups`, `rds`, `ecs`.
+- `Makefile` — `base-up`, `image`, `up` (apply → migrate → roll), `migrate`, `roll`, `web`, `down`, `verify-clean`.
+- `.github/workflows/deploy.yml` — gates (Checkov, Infracost, Trivy), publish, migrate, deploy.
 
-## 6. Verification (when infra is built)
+## 6. Verification
 
-1. `terraform apply` completes; note the CloudFront domain output.
-2. `curl https://<cloudfront>/health` → `{"status":"ok"}` (via `GET /health`).
-3. Migration task logs in CloudWatch show `alembic upgrade head` + `CREATE EXTENSION vector` success.
+1. `make up` finishes with "Service stable." (the migration exited 0 and the new tasks passed `/health/ready`).
+2. `curl <api_alb_url>/health/ready` → `{"status":"ready"}`.
+3. The `migrate` log stream in CloudWatch shows `alembic upgrade head` and `CREATE EXTENSION vector` succeeding.
 4. Open the CloudFront URL → SPA loads → sign up / chat works (exercises DB, pgvector, DeepSeek egress through NAT).
-5. `terraform destroy` → confirm in Cost Explorer / console that NAT GW, ALB, and RDS are gone.
+5. `make down` → `verify-clean` passes; confirm in the console that the NAT gateway, ALB and RDS are gone.

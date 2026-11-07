@@ -1,7 +1,7 @@
 from datetime import datetime
 from typing import TYPE_CHECKING
 
-from sqlalchemy import DateTime, String
+from sqlalchemy import ColumnElement, DateTime, Index, String
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from sqlalchemy.sql import func
 
@@ -14,6 +14,17 @@ if TYPE_CHECKING:
     from app.models.note import Note
     from app.models.refresh_token import RefreshToken
     from app.models.task import Task
+
+
+def normalize_email(email: str) -> str:
+    """The canonical form an address is stored and compared in.
+
+    Mail providers treat the local part case-insensitively in practice, so
+    "Alice@x.com" and "alice@x.com" are one person. Comparing them as different
+    strings let both register as separate accounts, and made a reset requested
+    with the "wrong" capitalisation silently do nothing.
+    """
+    return (email or "").strip().lower()
 
 
 class User(Base):
@@ -51,3 +62,14 @@ class User(Base):
     @property
     def email_verified(self) -> bool:
         return self.email_verified_at is not None
+
+    @classmethod
+    def email_is(cls, email: str) -> ColumnElement[bool]:
+        """Case-insensitive match, so legacy mixed-case rows are still found."""
+        return func.lower(cls.email) == normalize_email(email)
+
+
+# Enforced by the database, not just by the normalising schemas: rows written
+# before normalisation existed keep their original casing, and this is what
+# stops a differently-cased duplicate being inserted next to one.
+Index("uq_users_email_lower", func.lower(User.email), unique=True)

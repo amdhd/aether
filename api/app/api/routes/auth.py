@@ -71,7 +71,7 @@ async def register(
     background: BackgroundTasks,
     db: AsyncSession = Depends(get_db),
 ) -> User:
-    existing = await db.scalar(select(User).where(User.email == user_in.email))
+    existing = await db.scalar(select(User).where(User.email_is(user_in.email)))
     if existing is not None:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Email already registered")
 
@@ -123,7 +123,7 @@ async def login(
             headers={"Retry-After": str(retry_after)},
         )
 
-    user = await db.scalar(select(User).where(User.email == form_data.username))
+    user = await db.scalar(select(User).where(User.email_is(form_data.username)))
     # Run a bcrypt comparison on both branches so a missing account and a wrong
     # password are indistinguishable by timing (prevents email enumeration).
     if user is None:
@@ -246,7 +246,7 @@ async def forgot_password(
     minting a token and sending mail — happens after the response is dispatched,
     so the timing does not give it away either.
     """
-    user = await db.scalar(select(User).where(User.email == payload.email))
+    user = await db.scalar(select(User).where(User.email_is(payload.email)))
     if user is not None:
         issued = await email_tokens.issue(db, user, EmailTokenPurpose.password_reset)
         await db.commit()

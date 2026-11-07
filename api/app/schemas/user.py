@@ -1,8 +1,18 @@
 from datetime import datetime
+from typing import Annotated
 
-from pydantic import BaseModel, ConfigDict, EmailStr, Field, field_validator
+from pydantic import AfterValidator, BaseModel, BeforeValidator, ConfigDict, EmailStr, Field, field_validator
 
 from app.core.security import MAX_PASSWORD_BYTES, password_exceeds_max_bytes
+from app.models.user import normalize_email
+
+# An address as the client typed it, reduced to the one form it is stored and
+# looked up in. Used on every *input* that names an account.
+NormalizedEmail = Annotated[
+    EmailStr,
+    BeforeValidator(lambda value: value.strip() if isinstance(value, str) else value),
+    AfterValidator(normalize_email),
+]
 
 
 class UserBase(BaseModel):
@@ -11,6 +21,7 @@ class UserBase(BaseModel):
 
 
 class UserCreate(UserBase):
+    email: NormalizedEmail
     # The ceiling is bcrypt's, and it is 72 *bytes* — a character limit alone
     # would still let a passphrase of accented or emoji characters through to a
     # hash call that raises. Advertising 128 here is what made a long

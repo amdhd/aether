@@ -75,6 +75,8 @@ locals {
   # Secret env vars resolved by ECS from Secrets Manager at task start
   # (valueFrom → ARN; principle #2). DATABASE_URL is the whole ephemeral secret;
   # the rest pull individual JSON keys out of the persistent app secret.
+  # The API connects as the DML-only app role. The owner login and the app
+  # role's credentials go only to the migration task (migration_secrets).
   container_secrets = {
     DATABASE_URL         = aws_secretsmanager_secret.db_url.arn
     SECRET_KEY           = "${local.app_secret_arn}:SECRET_KEY::"
@@ -96,6 +98,13 @@ locals {
 resource "random_password" "db" {
   length  = 32
   special = false # keep the URL clean (no escaping in the connection string)
+}
+
+# The API's own login. Letters and digits only: ensure_app_role writes it into
+# CREATE/ALTER ROLE and refuses anything else.
+resource "random_password" "db_app" {
+  length  = 32
+  special = false
 }
 
 module "vpc" {
@@ -120,6 +129,7 @@ module "rds" {
   instance_class    = var.db_instance_class
   allocated_storage = var.db_allocated_storage
   master_password   = random_password.db.result
+  app_password      = random_password.db_app.result
   high_availability = var.high_availability
 }
 
@@ -131,7 +141,22 @@ resource "aws_secretsmanager_secret" "db_url" {
 
 resource "aws_secretsmanager_secret_version" "db_url" {
   secret_id     = aws_secretsmanager_secret.db_url.id
-  secret_string = module.rds.database_url
+  secret_string = module.rds.app_database_url
+}
+
+# Migration-only: the owner login, plus the app role it creates/updates.
+resource "aws_secretsmanager_secret" "db_migrate" {
+  name                    = "${var.name_prefix}/database-migrate"
+  recovery_window_in_days = 0
+}
+
+resource "aws_secretsmanager_secret_version" "db_migrate" {
+  secret_id = aws_secretsmanager_secret.db_migrate.id
+  secret_string = jsonencode({
+    DATABASE_URL    = module.rds.database_url
+    APP_DB_USER     = "aether_app"
+    APP_DB_PASSWORD = random_password.db_app.result
+  })
 }
 
 module "ecs" {
@@ -150,7 +175,12 @@ module "ecs" {
 
   environment = local.container_environment
   secrets     = local.container_secrets
-  secret_arns = [local.app_secret_arn, aws_secretsmanager_secret.db_url.arn]
+  secret_arns = [local.app_secret_arn, aws_secretsmanager_secret.db_url.arn, aws_secretsmanager_secret.db_migrate.arn]
+  migration_secrets = {
+    DATABASE_URL    = "${aws_secretsmanager_secret.db_migrate.arn}:DATABASE_URL::"
+    APP_DB_USER     = "${aws_secretsmanager_secret.db_migrate.arn}:APP_DB_USER::"
+    APP_DB_PASSWORD = "${aws_secretsmanager_secret.db_migrate.arn}:APP_DB_PASSWORD::"
+  }
 
   # enable_https is plan-time (drives the listener's count); certificate_arn is
   # the apply-time value it uses.

@@ -1,4 +1,5 @@
 import asyncio
+import os
 from logging.config import fileConfig
 
 from alembic import context
@@ -7,6 +8,7 @@ from sqlalchemy.engine import Connection
 from sqlalchemy.ext.asyncio import async_engine_from_config
 
 from app.core.config import settings
+from app.db.app_role import ensure_app_role
 from app.db.base import Base
 from app.models import *  # noqa: F401,F403
 
@@ -37,6 +39,12 @@ def do_run_migrations(connection: Connection) -> None:
 
     with context.begin_transaction():
         context.run_migrations()
+        # The deployed migration task passes these; the API service never gets
+        # them. Applied in the same transaction, so a failed grant fails the
+        # migration rather than leaving the app unable to read a new table.
+        app_user, app_password = os.getenv("APP_DB_USER"), os.getenv("APP_DB_PASSWORD")
+        if app_user or app_password:
+            ensure_app_role(connection, app_user or "", app_password or "")
 
 
 async def run_migrations_online() -> None:

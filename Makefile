@@ -97,13 +97,12 @@ up:
 migrate:
 	@echo "Running alembic upgrade head as a one-off Fargate task..."
 	@cluster=$$(cd $(L2) && $(TF) output -raw ecs_cluster); \
-	 taskdef=$$(cd $(L2) && $(TF) output -raw task_definition_arn); \
+	 taskdef=$$(cd $(L2) && $(TF) output -raw migrate_task_definition_arn); \
 	 subnets=$$(cd $(L2) && $(TF) output -json app_subnet_ids | tr -d '[]"' ); \
 	 sg=$$(cd $(L2) && $(TF) output -raw api_security_group_id); \
 	 aws ecs run-task --cluster $$cluster --task-definition $$taskdef \
 	   --launch-type FARGATE --region $(REGION) \
-	   --network-configuration "awsvpcConfiguration={subnets=[$$subnets],securityGroups=[$$sg],assignPublicIp=DISABLED}" \
-	   --overrides '{"containerOverrides":[{"name":"api","command":["alembic","upgrade","head"]}]}'
+	   --network-configuration "awsvpcConfiguration={subnets=[$$subnets],securityGroups=[$$sg],assignPublicIp=DISABLED}"
 
 down:
 	cd $(L2) && $(TF) destroy $(TFVARS)

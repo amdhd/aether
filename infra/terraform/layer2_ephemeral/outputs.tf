@@ -38,3 +38,8 @@ output "app_subnet_ids" {
 output "api_security_group_id" {
   value = module.security_groups.api_sg_id
 }
+
+output "migrate_task_definition_arn" {
+  description = "One-off migration task (owner DB login); `make migrate` runs it."
+  value       = module.ecs.migrate_task_definition_arn
+}

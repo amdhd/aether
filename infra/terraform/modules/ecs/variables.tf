@@ -115,3 +115,9 @@ variable "adot_image" {
   type        = string
   default     = "public.ecr.aws/aws-observability/aws-otel-collector:v0.43.2"
 }
+
+variable "migration_secrets" {
+  description = "Secrets for the one-off migration task, merged over `secrets` (e.g. DATABASE_URL = the owner login, APP_DB_USER/APP_DB_PASSWORD). Never given to the API service."
+  type        = map(string)
+  default     = {}
+}

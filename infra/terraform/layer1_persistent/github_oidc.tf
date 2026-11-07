@@ -24,6 +24,7 @@ locals {
   ecs_cluster    = var.name_prefix
   ecs_service    = "${var.name_prefix}-api"
   ecs_family     = "${var.name_prefix}-api"
+  ecs_migrate    = "${var.name_prefix}-migrate"
   ecs_arn_prefix = "arn:aws:ecs:${var.aws_region}:${local.account_id}"
 }
 
@@ -107,7 +108,7 @@ data "aws_iam_policy_document" "github_deploy" {
   statement {
     sid       = "RunMigrationTask"
     actions   = ["ecs:RunTask"]
-    resources = ["${local.ecs_arn_prefix}:task-definition/${local.ecs_family}:*"]
+    resources = ["${local.ecs_arn_prefix}:task-definition/${local.ecs_migrate}:*"]
     condition {
       test     = "ArnEquals"
       variable = "ecs:cluster"

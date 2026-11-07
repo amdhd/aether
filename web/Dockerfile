@@ -27,12 +27,18 @@ RUN npm run build
 #
 # nginx-unprivileged runs the master process as uid 101 rather than root, which
 # is why it listens on 8080: binding below 1024 needs root.
-FROM nginxinc/nginx-unprivileged:1.30.5-alpine@sha256:56b8272e43a0525f67aed68d1e0794a712d10e3e45a563e118e9a77c817e6f86 AS runtime
+FROM nginxinc/nginx-unprivileged:1.30.6-alpine@sha256:f5116ed4606f3eb015dd4a8e28cb9b351476dc0ad4bc6e9f93b19cec130cdf03 AS runtime
 
 # SPA history fallback: unknown routes return index.html so client-side routing
 # works on refresh/deep-link. Written as root, then back to the image's user.
+#
+# `apk upgrade` applies Alpine security fixes published since the base image
+# was built (musl, zlib, expat, … — the same reason the API image runs
+# `apt-get upgrade`), so the Trivy gate tracks upstream fixes rather than the
+# age of the base tag.
 USER root
-RUN printf 'server {\n\
+RUN apk upgrade --no-cache \
+    && printf 'server {\n\
     listen 8080;\n\
     server_name _;\n\
     root /usr/share/nginx/html;\n\

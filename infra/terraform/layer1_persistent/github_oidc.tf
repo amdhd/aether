@@ -23,7 +23,6 @@ locals {
   account_id     = data.aws_caller_identity.current.account_id
   ecs_cluster    = var.name_prefix
   ecs_service    = "${var.name_prefix}-api"
-  ecs_family     = "${var.name_prefix}-api"
   ecs_migrate    = "${var.name_prefix}-migrate"
   ecs_arn_prefix = "arn:aws:ecs:${var.aws_region}:${local.account_id}"
 }

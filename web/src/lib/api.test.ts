@@ -31,3 +31,45 @@ it('retries a short pre-rotation rate limit once and recovers', async () => {
   expect(await refreshAccessToken()).toBe('new')
   expect(fetch).toHaveBeenCalledTimes(2)
 })
+
+it('serialises refreshes across tabs so the shared cookie is never sent twice', async () => {
+  // A Web Locks stand-in shared by two "tabs" (two copies of the module).
+  let held: Promise<unknown> = Promise.resolve()
+  const names: string[] = []
+  vi.stubGlobal('navigator', {
+    locks: {
+      request: (name: string, work: () => Promise<unknown>) => {
+        names.push(name)
+        const run = held.then(work)
+        held = run.catch(() => undefined)
+        return run
+      },
+    },
+  })
+
+  let inFlight = 0
+  let maxInFlight = 0
+  let issued = 0
+  vi.stubGlobal('fetch', vi.fn(async () => {
+    inFlight += 1
+    maxInFlight = Math.max(maxInFlight, inFlight)
+    await new Promise((resolve) => setTimeout(resolve, 5))
+    inFlight -= 1
+    issued += 1
+    return new Response(JSON.stringify({ access_token: `t${issued}` }), { status: 200 })
+  }))
+
+  const tabA = await import('./api?tab=a' as string)
+  const tabB = await import('./api?tab=b' as string)
+  const tokens = await Promise.all([tabA.refreshAccessToken(), tabB.refreshAccessToken()])
+
+  expect(maxInFlight).toBe(1)
+  expect(tokens.sort()).toEqual(['t1', 't2'])
+  expect(names).toEqual(['aether-auth-refresh', 'aether-auth-refresh'])
+})
+
+it('still refreshes where the Web Locks API is unavailable', async () => {
+  vi.stubGlobal('navigator', {})
+  vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(JSON.stringify({ access_token: 'solo' }), { status: 200 })))
+  expect(await refreshAccessToken()).toBe('solo')
+})

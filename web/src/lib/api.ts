@@ -26,13 +26,31 @@ export class ApiError extends Error {
 
 let refreshPromise: Promise<string | null> | null = null
 
+// Refresh tokens are single-use: the server rotates the cookie on every refresh
+// and treats a second use of the old one as theft, revoking every session the
+// user has. `refreshPromise` stops one tab refreshing twice, but two tabs share
+// the cookie and not that variable — so when both tabs' access tokens expire
+// together (back from a break, or a second tab opening), both sent the same
+// cookie and the loser signed the user out everywhere.
+//
+// A Web Lock is shared by every tab of this origin, so refreshes now run one at
+// a time across tabs. The tab that waited sends the cookie the first tab's
+// refresh just replaced, which is a valid, unused token. Browsers without the
+// Locks API fall back to the per-tab guard alone.
+export const REFRESH_LOCK = 'aether-auth-refresh'
+
+function acrossTabs<T>(work: () => Promise<T>): Promise<T> {
+  const locks = typeof navigator !== 'undefined' ? navigator.locks : undefined
+  return locks?.request ? locks.request(REFRESH_LOCK, work) : work()
+}
+
 export async function refreshAccessToken(): Promise<string | null> {
   const { setAccessToken, logout } = useAuthStore.getState()
 
   // The refresh token rides along as an HttpOnly cookie (credentials:'include'),
   // so there is nothing to read from the store or send in the body.
   if (!refreshPromise) {
-    refreshPromise = (async () => {
+    refreshPromise = acrossTabs(async () => {
       try {
         const request = () => fetch(`${API_URL}${API_PREFIX}/auth/refresh`, {
           method: 'POST', credentials: 'include', headers: CSRF_HEADERS,
@@ -59,7 +77,7 @@ export async function refreshAccessToken(): Promise<string | null> {
       } finally {
         refreshPromise = null
       }
-    })()
+    })
   }
 
   return refreshPromise

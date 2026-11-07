@@ -103,9 +103,16 @@ def _create_token(
     return jwt.encode(to_encode, settings.SECRET_KEY, algorithm=settings.ALGORITHM)
 
 
-def create_access_token(subject: str, token_version: int) -> str:
+def create_access_token(subject: str, token_version: int, family_id: str) -> str:
+    """`fam` names the sign-in (refresh-token family) this token belongs to, so
+    signing out one browser can end that session's access tokens without
+    touching the user's other devices."""
     return _create_token(
-        subject, token_version, timedelta(minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES), "access"
+        subject,
+        token_version,
+        timedelta(minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES),
+        "access",
+        extra_claims={"fam": family_id},
     )
 
 

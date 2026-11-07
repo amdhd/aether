@@ -51,7 +51,7 @@ def _stage_token_pair(db: AsyncSession, user: User, family_id: str | None = None
         )
     )
     return IssuedTokens(
-        access_token=create_access_token(str(user.id), user.token_version),
+        access_token=create_access_token(str(user.id), user.token_version, family),
         refresh_token=create_refresh_token(str(user.id), user.token_version, jti, family),
     )
 
@@ -123,6 +123,35 @@ async def rotate_refresh_token(db: AsyncSession, raw_token: str) -> IssuedTokens
     tokens = _stage_token_pair(db, user, family_id=family_id)
     await db.commit()
     return tokens
+
+
+async def revoke_family(db: AsyncSession, user: User, family_id: str) -> None:
+    """End one sign-in: revoke its refresh tokens, which also ends its access
+    tokens (get_current_user requires a live family). The user's other sessions
+    are untouched — that is what revoke_all_for_user is for."""
+    await db.execute(
+        update(RefreshToken)
+        .where(RefreshToken.user_id == user.id, RefreshToken.family_id == family_id)
+        .values(revoked=True)
+    )
+    await db.commit()
+
+
+async def family_is_active(db: AsyncSession, user_id: int, family_id: str) -> bool:
+    """Whether this sign-in still has a live refresh token.
+
+    Rotation revokes a token only together with inserting its successor, so a
+    session in use always has one unrevoked row; logout, replay detection and
+    password changes revoke them all."""
+    return await db.scalar(
+        select(RefreshToken.id)
+        .where(
+            RefreshToken.user_id == user_id,
+            RefreshToken.family_id == family_id,
+            RefreshToken.revoked.is_(False),
+        )
+        .limit(1)
+    ) is not None
 
 
 async def revoke_all_for_user(db: AsyncSession, user: User, *, commit: bool = True) -> None:

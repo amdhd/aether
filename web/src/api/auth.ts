@@ -31,9 +31,14 @@ export async function login(input: { email: string; password: string }): Promise
 }
 
 export function logout() {
-  // The refresh cookie is sent automatically (credentials:'include' in apiFetch)
-  // and cleared by the server.
+  // Ends this browser's session only. The refresh cookie is sent automatically
+  // (credentials:'include' in apiFetch) and cleared by the server.
   return apiFetch<void>(`${API_PREFIX}/auth/logout`, { method: 'POST' })
+}
+
+export function logoutEverywhere() {
+  // Ends every session on every device.
+  return apiFetch<void>(`${API_PREFIX}/auth/logout-all`, { method: 'POST' })
 }
 
 export function getMe() {

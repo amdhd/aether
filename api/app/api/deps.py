@@ -9,6 +9,7 @@ from app.core.config import settings
 from app.core.security import decode_token
 from app.db.session import get_db
 from app.models.user import User
+from app.services import refresh_tokens
 
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl=f"{settings.API_V1_PREFIX}/auth/login")
 
@@ -44,6 +45,7 @@ async def require_csrf_header(request: Request) -> None:
 
 
 async def get_current_user(
+    request: Request,
     token: str = Depends(oauth2_scheme),
     db: AsyncSession = Depends(get_db),
 ) -> User:
@@ -56,7 +58,8 @@ async def get_current_user(
         payload = decode_token(token, "access")
         user_id = payload.get("sub")
         token_version = payload.get("ver")
-        if user_id is None or token_version is None:
+        family_id = payload.get("fam")
+        if user_id is None or token_version is None or not family_id:
             raise credentials_exception
     except JWTError:
         raise credentials_exception
@@ -64,6 +67,12 @@ async def get_current_user(
     user = await db.get(User, int(user_id))
     if user is None or user.token_version != token_version:
         raise credentials_exception
+    # The sign-in this token came from must still be live, so signing out one
+    # browser ends its access tokens immediately rather than up to 15 minutes
+    # later, without bumping token_version (which would end every device).
+    if not await refresh_tokens.family_is_active(db, user.id, family_id):
+        raise credentials_exception
+    request.state.session_family = family_id
     return user
 
 

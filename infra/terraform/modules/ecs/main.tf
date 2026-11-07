@@ -321,8 +321,12 @@ resource "aws_ecs_service" "api" {
     rollback = true
   }
 
-  # Ignore image-tag drift (CD registers new task-def revisions out of band) and
-  # desired_count (auto scaling owns it when HA is on).
+  # task_definition: CD registers new revisions out of band (deploy.yml), and
+  # Terraform must not roll the service back to its own. The consequence: an
+  # apply that changes the task definition (secrets, env, image) registers a
+  # new revision but does NOT move the running service onto it. `make up` does
+  # that explicitly (`make roll`); a CI deploy picks it up because it copies
+  # the family's latest revision. desired_count: auto scaling owns it in HA.
   lifecycle {
     ignore_changes = [task_definition, desired_count]
   }

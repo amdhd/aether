@@ -45,6 +45,17 @@ RUN apt-get update \
     libpq5 curl \
     && rm -rf /var/lib/apt/lists/*
 
+# Amazon RDS root CAs, so the app can verify the database's certificate rather
+# than accept whatever answers on 5432. The RDS URL asks for ssl=verify-full and
+# asyncpg reads the CA bundle from PGSSLROOTCERT. The checksum pins this exact
+# bundle; when AWS publishes a new one the build fails until it is bumped:
+#   curl -s https://truststore.pki.rds.amazonaws.com/global/global-bundle.pem | shasum -a 256
+ADD --checksum=sha256:90a6f1a7978a1b1b096dca6c57511ca48d3b8cf052f8e704baf358f34ea2f21b \
+    --chmod=0644 \
+    https://truststore.pki.rds.amazonaws.com/global/global-bundle.pem \
+    /etc/ssl/certs/rds-global-bundle.pem
+ENV PGSSLROOTCERT=/etc/ssl/certs/rds-global-bundle.pem
+
 # Non-root user — Fargate and reviewers expect the container not to run as root.
 RUN useradd --create-home --uid 10001 app
 WORKDIR /app

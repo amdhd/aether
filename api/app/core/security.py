@@ -52,6 +52,35 @@ def fake_verify_password() -> None:
     verify_password("timing-equalization-placeholder", _DUMMY_PASSWORD_HASH)
 
 
+# Every token this service signs shares one key, so what stops one kind being
+# accepted as another is in the claims. Each purpose gets its own audience, and
+# decoding names the purpose it expects: PyJWT then rejects a token minted for a
+# different purpose before the code even reads `type`. The issuer pins tokens to
+# this service, and the required claims mean a token missing `exp` (which PyJWT
+# would otherwise simply not check) is refused rather than trusted forever.
+TOKEN_ISSUER = "aether-api"
+TokenPurpose = Literal["access", "refresh", "oauth_state"]
+_REQUIRED_CLAIMS = ["exp", "iat", "sub", "type", "aud", "iss"]
+
+
+def _audience(purpose: TokenPurpose) -> str:
+    return f"aether:{purpose}"
+
+
+def _decode(token: str, purpose: TokenPurpose) -> dict[str, Any]:
+    payload = jwt.decode(
+        token,
+        settings.SECRET_KEY,
+        algorithms=[settings.ALGORITHM],
+        audience=_audience(purpose),
+        issuer=TOKEN_ISSUER,
+        options={"require": _REQUIRED_CLAIMS},
+    )
+    if payload.get("type") != purpose:
+        raise jwt.InvalidTokenError("Token type does not match its audience")
+    return payload
+
+
 def _create_token(
     subject: str,
     token_version: int,
@@ -64,6 +93,8 @@ def _create_token(
         "sub": subject,
         "ver": token_version,
         "type": token_type,
+        "aud": _audience(token_type),
+        "iss": TOKEN_ISSUER,
         "iat": now,
         "exp": now + expires_delta,
     }
@@ -90,8 +121,12 @@ def create_refresh_token(subject: str, token_version: int, jti: str, family_id: 
     )
 
 
-def decode_token(token: str) -> dict[str, Any]:
-    return jwt.decode(token, settings.SECRET_KEY, algorithms=[settings.ALGORITHM])
+def decode_token(token: str, purpose: Literal["access", "refresh"]) -> dict[str, Any]:
+    """Verify a session token for the one purpose the caller accepts.
+
+    Raises jwt.InvalidTokenError for a bad signature, an expired token, a
+    missing required claim, or a token minted for any other purpose."""
+    return _decode(token, purpose)
 
 
 def create_oauth_state_token(user_id: int) -> str:
@@ -103,6 +138,8 @@ def create_oauth_state_token(user_id: int) -> str:
     to_encode: dict[str, Any] = {
         "sub": str(user_id),
         "type": "oauth_state",
+        "aud": _audience("oauth_state"),
+        "iss": TOKEN_ISSUER,
         "jti": secrets.token_urlsafe(32),
         "iat": now,
         "exp": now + timedelta(minutes=settings.OAUTH_STATE_EXPIRE_MINUTES),
@@ -113,7 +150,10 @@ def create_oauth_state_token(user_id: int) -> str:
 def verify_oauth_state_token(token: str) -> int:
     """Returns the user id encoded in an OAuth state token, or raises
     jwt.InvalidTokenError / ValueError if it's invalid, expired, or the wrong type."""
-    payload = jwt.decode(token, settings.SECRET_KEY, algorithms=[settings.ALGORITHM])
-    if payload.get("type") != "oauth_state":
-        raise ValueError("Invalid state token type")
+    try:
+        payload = _decode(token, "oauth_state")
+    except jwt.InvalidAudienceError:
+        # Kept distinct so a session token offered as OAuth state is reported
+        # as the wrong kind of token, not as merely malformed.
+        raise ValueError("Invalid state token type") from None
     return int(payload["sub"])

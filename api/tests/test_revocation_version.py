@@ -18,9 +18,9 @@ async def test_stale_user_snapshot_cannot_reuse_revocation_version():
         earlier = await refresh_tokens.issue_token_pair(first, a)
         await refresh_tokens.revoke_all_for_user(second, b, commit=False)
         later = await refresh_tokens.issue_token_pair(second, b)
-        assert decode_token(later.access_token)["ver"] > decode_token(earlier.access_token)["ver"]
+        assert decode_token(later.access_token, "access")["ver"] > decode_token(earlier.access_token, "access")["ver"]
     async with TestingSessionLocal() as db:
-        assert (await db.get(User, user_id)).token_version == decode_token(later.access_token)["ver"]
+        assert (await db.get(User, user_id)).token_version == decode_token(later.access_token, "access")["ver"]
 
 
 async def test_uncommitted_revocation_and_password_change_roll_back_together():

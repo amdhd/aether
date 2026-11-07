@@ -8,7 +8,7 @@ from tests.conftest import TestingSessionLocal
 
 @pytest.mark.parametrize("failure", ["disabled", "budget", "provider"])
 async def test_edit_clears_stale_vector_and_preserves_new_text(client, auth_headers, monkeypatch, failure):
-    user_id = int(decode_token(auth_headers["Authorization"].split()[1])["sub"])
+    user_id = int(decode_token(auth_headers["Authorization"].split()[1], "access")["sub"])
     old_vector = [0.1] * note_search.settings.EMBEDDING_DIMENSIONS
     async with TestingSessionLocal() as db:
         note = Note(user_id=user_id, title="Old", content="Old meaning", embedding=old_vector)
@@ -36,7 +36,7 @@ async def test_edit_clears_stale_vector_and_preserves_new_text(client, auth_head
 
 
 async def test_noop_edit_keeps_vector_but_missing_vector_can_be_retried(client, auth_headers, monkeypatch):
-    user_id = int(decode_token(auth_headers["Authorization"].split()[1])["sub"])
+    user_id = int(decode_token(auth_headers["Authorization"].split()[1], "access")["sub"])
     vector = [0.0] * note_search.settings.EMBEDDING_DIMENSIONS
     vector[0] = 1.0
     async with TestingSessionLocal() as db:
@@ -72,7 +72,7 @@ async def test_invalidation_is_written_when_session_originally_saw_null(client, 
     """A stale ORM snapshot must not omit NULL while another writer sets a vector."""
     from sqlalchemy import update
 
-    user_id = int(decode_token(auth_headers["Authorization"].split()[1])["sub"])
+    user_id = int(decode_token(auth_headers["Authorization"].split()[1], "access")["sub"])
     monkeypatch.setattr(note_search.embeddings, "embeddings_enabled", lambda: False)
     async with TestingSessionLocal() as db:
         note = Note(user_id=user_id, title="Original", content="Original")
@@ -93,7 +93,7 @@ async def test_invalidation_is_written_when_session_originally_saw_null(client, 
 
 
 async def test_successful_edit_replaces_old_vector(client, auth_headers, monkeypatch):
-    user_id = int(decode_token(auth_headers["Authorization"].split()[1])["sub"])
+    user_id = int(decode_token(auth_headers["Authorization"].split()[1], "access")["sub"])
     old = [0.0] * note_search.settings.EMBEDDING_DIMENSIONS
     new = old.copy()
     old[0], new[1] = 1.0, 1.0

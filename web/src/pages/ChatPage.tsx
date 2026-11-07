@@ -48,6 +48,7 @@ import { Skeleton } from '@/components/ui/skeleton'
 import { useCrudMutations } from '@/hooks/useCrudMutations'
 import { cn } from '@/lib/utils'
 import { ActionApproval } from '@/components/chat/ActionApproval'
+import { MarkdownLink } from '@/components/chat/MarkdownLink'
 import { actionLabel, toolLabel } from '@/lib/toolLabels'
 import type { ActionProgress } from '@/types'
 import type { Conversation, ConversationCreateInput, MessageRole, Persona } from '@/types'
@@ -116,6 +117,7 @@ const PROSE =
   'text-[15px] leading-7 [&_a]:font-medium [&_a]:text-foreground [&_a]:underline [&_a]:underline-offset-2 [&_code]:rounded [&_code]:bg-surface-muted [&_code]:px-1.5 [&_code]:py-0.5 [&_code]:text-[13px] [&_h1]:mb-2 [&_h1]:mt-4 [&_h1]:text-lg [&_h1]:font-semibold [&_h2]:mb-2 [&_h2]:mt-4 [&_h2]:text-base [&_h2]:font-semibold [&_h3]:mb-1.5 [&_h3]:mt-3 [&_h3]:font-semibold [&_li]:mb-1 [&_ol]:mb-3 [&_ol]:list-decimal [&_ol]:pl-5 [&_p:last-child]:mb-0 [&_p]:mb-3 [&_pre]:mb-3 [&_pre]:overflow-x-auto [&_pre]:rounded-lg [&_pre]:border [&_pre]:border-border [&_pre]:bg-surface-muted [&_pre]:p-3 [&_pre]:text-[13px] [&_pre_code]:bg-transparent [&_pre_code]:p-0 [&_ul]:mb-3 [&_ul]:list-disc [&_ul]:pl-5'
 
 const MARKDOWN_COMPONENTS = {
+  a: MarkdownLink,
   table: ({ children, ...props }: React.ComponentPropsWithoutRef<'table'>) => (
     <div className="mb-3 w-full overflow-x-auto rounded-lg border border-border">
       <table className="w-full border-collapse text-[13px]" {...props}>

@@ -24,6 +24,35 @@ export class ApiError extends Error {
   }
 }
 
+/**
+ * The server's own explanation of a failed request, fit to show a user, or null
+ * when there is none (a network failure, an empty or unexpected body).
+ *
+ * FastAPI answers an HTTPException with `detail` as a string ("You're saving
+ * notes too quickly…") and a validation failure with `detail` as a list of
+ * `{loc, msg}` — the first of which names the field and the rule it broke.
+ */
+export function apiErrorDetail(error: unknown): string | null {
+  if (!(error instanceof ApiError)) return null
+  const detail = (error.body as { detail?: unknown } | null)?.detail
+  if (typeof detail === 'string' && detail.trim()) return detail.trim()
+  if (Array.isArray(detail) && detail.length > 0) {
+    const first = detail[0] as { loc?: unknown[]; msg?: unknown }
+    if (typeof first?.msg === 'string') {
+      const field = Array.isArray(first.loc) ? first.loc[first.loc.length - 1] : undefined
+      return typeof field === 'string' && field !== 'body'
+        ? `${field.replaceAll('_', ' ')}: ${first.msg}`
+        : first.msg
+    }
+  }
+  return null
+}
+
+/** Whether trying the same request again could succeed. */
+export function isRetryable(error: unknown): boolean {
+  return !(error instanceof ApiError) || error.status === 429 || error.status >= 500
+}
+
 let refreshPromise: Promise<string | null> | null = null
 
 // Refresh tokens are single-use: the server rotates the cookie on every refresh

@@ -1,6 +1,8 @@
 import { useMutation, useQueryClient, type QueryKey } from '@tanstack/react-query'
 import { toast } from 'sonner'
 
+import { apiErrorDetail, isRetryable } from '@/lib/api'
+
 interface CrudMutationsOptions<TEntity, TCreateInput, TUpdateInput> {
   queryKey: QueryKey
   create: (input: TCreateInput) => Promise<TEntity>
@@ -34,8 +36,15 @@ export function useCrudMutations<TEntity, TCreateInput, TUpdateInput = TCreateIn
   const notifySuccess = (pastTense: string) => {
     if (entityName && toastSuccess) toast.success(`${entityName} ${pastTense}`)
   }
-  const notifyError = (verb: string) =>
-    toast.error(`Couldn't ${verb} ${entityName?.toLowerCase() ?? 'item'}. Please try again.`)
+  // Say why, when the server said why. "Please try again" is only offered when a
+  // retry could work: a note that is too long fails identically every time.
+  const notifyError = (verb: string, error: unknown) => {
+    const parts = [`Couldn't ${verb} ${entityName?.toLowerCase() ?? 'item'}.`]
+    const detail = apiErrorDetail(error)
+    if (detail) parts.push(/[.!?]$/.test(detail) ? detail : `${detail}.`)
+    if (isRetryable(error) && !(detail && /try again/i.test(detail))) parts.push('Please try again.')
+    toast.error(parts.join(' '))
+  }
 
   const createMutation = useMutation({
     mutationFn: (input: TCreateInput) => create(input),
@@ -44,7 +53,7 @@ export function useCrudMutations<TEntity, TCreateInput, TUpdateInput = TCreateIn
       notifySuccess('created')
       onCreateSuccess?.(created)
     },
-    onError: () => notifyError('create'),
+    onError: (error) => notifyError('create', error),
   })
 
   const updateMutation = useMutation({
@@ -53,7 +62,7 @@ export function useCrudMutations<TEntity, TCreateInput, TUpdateInput = TCreateIn
       queryClient.invalidateQueries({ queryKey })
       notifySuccess('updated')
     },
-    onError: () => notifyError('update'),
+    onError: (error) => notifyError('update', error),
   })
 
   const deleteMutation = useMutation({
@@ -63,7 +72,7 @@ export function useCrudMutations<TEntity, TCreateInput, TUpdateInput = TCreateIn
       notifySuccess('deleted')
       onDeleteSuccess?.(deletedId)
     },
-    onError: () => notifyError('delete'),
+    onError: (error) => notifyError('delete', error),
   })
 
   return { createMutation, updateMutation, deleteMutation }

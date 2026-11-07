@@ -87,6 +87,7 @@ data "aws_iam_policy_document" "github_deploy" {
     sid = "EcrPushApiImage"
     actions = [
       "ecr:DescribeRepositories",
+      "ecr:DescribeImages",
       "ecr:BatchCheckLayerAvailability",
       "ecr:InitiateLayerUpload",
       "ecr:UploadLayerPart",

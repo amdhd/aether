@@ -31,8 +31,8 @@ The stacks keep **separate state**; `layer2` reads `layer1`'s outputs via a
 ```sh
 make base-up          # apply layer1 once (persistent)
 # put real values in the aether/app secret (SECRET_KEY, ENCRYPTION_KEY, DEEPSEEK_API_KEY, …)
-make image            # build+push the ARM64 API image to ECR
-make up               # apply layer2 + run DB migrations
+make image            # build+push the ARM64 API image to ECR, tagged with the commit
+make up               # apply layer2, run DB migrations (and wait), roll the service
 make web              # build the SPA against the live ALB URL, sync to S3, invalidate
 # ... demo ...
 make down             # destroy layer2 → hourly billing stops; runs verify-clean
@@ -56,6 +56,20 @@ autoscaling, ElastiCache Redis) from the same code — the single
 - **Secrets** are injected into the task via `valueFrom` ARNs (never baked into
   the image or fetched in an entrypoint). Real values live in Secrets Manager,
   set out-of-band; Terraform only manages the container + an ignored placeholder.
+- **The ECS service ignores task-definition changes.** CI registers its own
+  revisions (new image, same family), and Terraform must not roll the service
+  back to its own. So `terraform apply` alone registers a new revision when
+  secrets, env or the image change but leaves running tasks on the old one.
+  `make up` moves the service explicitly (`make roll`); a CI deploy picks the
+  change up because it copies the family's latest revision. If you apply by
+  hand, run `make roll` afterwards.
+- **Images are tagged by commit, and tags are immutable.** `make image` and
+  `make up` use the current commit (with `-dirty` for uncommitted `api/`
+  changes); `latest` is refused. `make up` checks the tag exists in ECR first.
+- **Readiness gates tasks.** The container health check calls `/health/ready`
+  (database reachable), so a task that can't reach the database is replaced
+  and a bad release trips the circuit breaker. The ALB checks `/health`, so a
+  brief database blip doesn't flap routing.
 - **Graviton (ARM64)** Fargate tasks — cheaper than x86 for equivalent perf.
   Build the image with `--platform linux/arm64` (the Makefile does).
 - **Teardown safety** (RDS `skip_final_snapshot`/no deletion protection in demo,

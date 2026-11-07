@@ -22,7 +22,7 @@ output "ecs_service" {
 }
 
 output "task_definition_arn" {
-  description = "Used by the one-off `alembic upgrade head` migration task."
+  description = "The API task definition Terraform last registered; `make roll` moves the service onto it (the service ignores task-definition changes)."
   value       = module.ecs.task_definition_arn
 }
 

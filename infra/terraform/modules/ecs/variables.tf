@@ -121,3 +121,9 @@ variable "migration_secrets" {
   type        = map(string)
   default     = {}
 }
+
+variable "connections_per_task_target" {
+  description = "Target concurrent ALB connections per healthy API task (HA autoscaling). Open chat streams hold one each; tune from the dashboard."
+  type        = number
+  default     = 50
+}

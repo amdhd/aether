@@ -86,8 +86,11 @@ resource "aws_route53_record" "frontend_www" {
 
 # --- ECR: API image ---
 resource "aws_ecr_repository" "api" {
-  name                 = "${var.name_prefix}-api"
-  image_tag_mutability = "MUTABLE"
+  name = "${var.name_prefix}-api"
+  # Immutable: a tag names one image forever. With mutable tags, `latest`
+  # meant whatever was pushed last, so `make up` could silently replace the
+  # SHA-tagged release CI had just deployed. Images are tagged by commit.
+  image_tag_mutability = "IMMUTABLE"
   force_delete         = true # allow teardown even with images present
 
   image_scanning_configuration {

@@ -7,7 +7,11 @@ PREFIX      ?= aether
 L1          := infra/terraform/layer1_persistent
 L2          := infra/terraform/layer2_ephemeral
 TF          := terraform
-IMAGE_TAG   ?= latest
+# Images are tagged by commit (ECR tags are immutable). A dirty tree gets a
+# -dirty suffix so an uncommitted build can never take a clean commit's tag;
+# being immutable, a second dirty push of the same commit is refused — commit,
+# or set IMAGE_TAG explicitly.
+IMAGE_TAG   ?= $(shell git rev-parse --short=12 HEAD)$(shell git diff --quiet HEAD -- api || echo -dirty)
 
 # Pull values out of layer1 state so the other targets don't hardcode them.
 ECR_URL      = $(shell cd $(L1) && $(TF) output -raw ecr_repository_url 2>/dev/null)
@@ -17,7 +21,7 @@ CF_DOMAIN    = $(shell cd $(L1) && $(TF) output -raw cloudfront_domain_name 2>/d
 FRONTEND_URL = $(shell cd $(L1) && $(TF) output -raw frontend_url 2>/dev/null)
 ALB_URL      = $(shell cd $(L2) && $(TF) output -raw api_alb_url 2>/dev/null)
 
-.PHONY: help fmt validate init base-up image web up migrate down verify-clean destroy-all eval lock
+.PHONY: help fmt validate init base-up image web up migrate roll down verify-clean destroy-all eval lock
 
 help:
 	@echo "eval          run the RAG eval harness (RAGAS-equivalent metrics)"
@@ -26,7 +30,8 @@ help:
 	@echo "image         build+push the ARM64 API image to ECR"
 	@echo "web           build the SPA and sync to S3 + invalidate CloudFront"
 	@echo "up            apply layer2 (VPC/ALB/ECS/RDS) then run migrations"
-	@echo "migrate       run 'alembic upgrade head' as a one-off ECS task"
+	@echo "migrate       run 'alembic upgrade head' as a one-off ECS task and wait for it"
+	@echo "roll          move the service onto Terraform's task definition and wait"
 	@echo "down          destroy layer2 (stops all hourly billing)"
 	@echo "verify-clean  assert no orphan Elastic IPs / ENIs remain"
 	@echo "HA:  make up HA=true   (Multi-AZ RDS + autoscaling + Redis)"
@@ -90,9 +95,20 @@ web:
 	@echo "Frontend: $(FRONTEND_URL)"
 
 # --- Ephemeral stack ---
+# Order matters: the service's tasks connect as the app DB role, which the
+# migration creates, and their health check requires a working database. So
+# migrate (and wait for it), then roll the service onto the task definition
+# Terraform just registered — the service ignores task-definition changes
+# (CI registers its own revisions), so without this step an apply that changes
+# secrets, env or the image would not reach the running tasks.
 up:
+	@aws ecr describe-images --repository-name $(PREFIX)-api --region $(REGION) \
+	   --image-ids imageTag=$(IMAGE_TAG) >/dev/null 2>&1 || { \
+	   echo "ERROR: no image tagged $(IMAGE_TAG) in ECR — run 'make image' first"; \
+	   echo "       (or pass IMAGE_TAG=<an existing commit tag>)."; exit 1; }
 	cd $(L2) && $(TF) init -backend-config=backend.hcl && $(TF) apply $(TFVARS)
 	$(MAKE) migrate
+	$(MAKE) roll
 
 migrate:
 	@echo "Running alembic upgrade head as a one-off Fargate task..."
@@ -100,9 +116,29 @@ migrate:
 	 taskdef=$$(cd $(L2) && $(TF) output -raw migrate_task_definition_arn); \
 	 subnets=$$(cd $(L2) && $(TF) output -json app_subnet_ids | tr -d '[]"' ); \
 	 sg=$$(cd $(L2) && $(TF) output -raw api_security_group_id); \
-	 aws ecs run-task --cluster $$cluster --task-definition $$taskdef \
+	 task=$$(aws ecs run-task --cluster $$cluster --task-definition $$taskdef \
 	   --launch-type FARGATE --region $(REGION) \
-	   --network-configuration "awsvpcConfiguration={subnets=[$$subnets],securityGroups=[$$sg],assignPublicIp=DISABLED}"
+	   --network-configuration "awsvpcConfiguration={subnets=[$$subnets],securityGroups=[$$sg],assignPublicIp=DISABLED}" \
+	   --query 'tasks[0].taskArn' --output text); \
+	 test -n "$$task" -a "$$task" != None || { echo "ERROR: migration task did not start"; exit 1; }; \
+	 echo "Waiting for $$task ..."; \
+	 aws ecs wait tasks-stopped --cluster $$cluster --tasks $$task --region $(REGION); \
+	 code=$$(aws ecs describe-tasks --cluster $$cluster --tasks $$task --region $(REGION) \
+	   --query 'tasks[0].containers[0].exitCode' --output text); \
+	 echo "migration exit code: $$code"; \
+	 test "$$code" = "0" || { echo "ERROR: migration failed — see the 'migrate' log stream"; exit 1; }
+
+# Point the service at Terraform's current task definition and wait until the
+# new tasks pass their (database-readiness) health check.
+roll:
+	@cluster=$$(cd $(L2) && $(TF) output -raw ecs_cluster); \
+	 service=$$(cd $(L2) && $(TF) output -raw ecs_service); \
+	 taskdef=$$(cd $(L2) && $(TF) output -raw task_definition_arn); \
+	 echo "Rolling $$service onto $$taskdef ..."; \
+	 aws ecs update-service --cluster $$cluster --service $$service \
+	   --task-definition $$taskdef --region $(REGION) >/dev/null && \
+	 aws ecs wait services-stable --cluster $$cluster --services $$service --region $(REGION) && \
+	 echo "Service stable."
 
 down:
 	cd $(L2) && $(TF) destroy $(TFVARS)

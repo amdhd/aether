@@ -64,9 +64,12 @@ variable "redis_node_type" {
 
 # --- Image + remote state wiring ---
 variable "image_tag" {
-  description = "Tag of the API image in ECR to run."
+  description = "Commit tag of the API image in ECR to run (make passes the current commit). Tags are immutable, so this names one exact build."
   type        = string
-  default     = "latest"
+  validation {
+    condition     = var.image_tag != "" && var.image_tag != "latest"
+    error_message = "image_tag must name a specific build (a commit SHA), not \"latest\"."
+  }
 }
 
 variable "layer1_state_bucket" {
@@ -154,4 +157,10 @@ variable "enable_vpc_endpoints" {
   description = "Create VPC interface endpoints (ECR api/dkr, Secrets Manager, CloudWatch Logs) so those calls use PrivateLink instead of NAT. On in both demo and HA; set false to trim cost."
   type        = bool
   default     = true
+}
+
+variable "connections_per_task_target" {
+  description = "HA autoscaling: target concurrent ALB connections per healthy API task (open chat streams hold one each)."
+  type        = number
+  default     = 50
 }

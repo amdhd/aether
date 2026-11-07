@@ -137,3 +137,17 @@ async def test_a_redis_timeout_degrades_to_in_memory() -> None:
 
     assert await rate_limit.check_tool_rate_limit(1, "web_search", 1) is True
     assert await rate_limit.check_tool_rate_limit(1, "web_search", 1) is False
+
+
+def test_the_redis_auth_token_in_rediss_url_reaches_the_client() -> None:
+    """The deployed REDIS_URL is rediss://:<token>@host:6379 (ElastiCache AUTH
+    over TLS). Pin that the limiter's client actually authenticates with it."""
+    from redis.asyncio.connection import SSLConnection
+
+    from app.core.rate_limit import _RedisLimiter
+
+    limiter = _RedisLimiter.from_url("rediss://:Tok3nWithOnlyLettersAndDigits0123456789@cache.internal:6379")
+    pool = limiter._redis.connection_pool
+    assert pool.connection_class is SSLConnection
+    assert pool.connection_kwargs["password"] == "Tok3nWithOnlyLettersAndDigits0123456789"
+    assert pool.connection_kwargs["host"] == "cache.internal"

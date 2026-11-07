@@ -60,9 +60,11 @@ locals {
   # reads REDIS_URL and enforces limits globally across tasks when it's set, so
   # limits hold once autoscaling runs >1 task (in-memory per-instance otherwise).
   # rediss:// = TLS (transit encryption is on); the app connects to the primary.
-  redis_environment = var.high_availability ? {
-    REDIS_URL = "rediss://${aws_elasticache_replication_group.redis[0].primary_endpoint_address}:6379"
+  # The URL carries the AUTH token, so it is a secret (below), not plain env.
+  redis_secrets = var.high_availability ? {
+    REDIS_URL = aws_secretsmanager_secret.redis_url[0].arn
   } : {}
+  redis_secret_arns = var.high_availability ? [aws_secretsmanager_secret.redis_url[0].arn] : []
 
   # Point the app at the in-task ADOT sidecar (loopback) when tracing is on.
   tracing_environment = var.enable_tracing ? {
@@ -70,14 +72,14 @@ locals {
     OTEL_EXPORTER_OTLP_ENDPOINT = "http://localhost:4317"
   } : {}
 
-  container_environment = merge(local.base_environment, local.redis_environment, local.tracing_environment)
+  container_environment = merge(local.base_environment, local.tracing_environment)
 
   # Secret env vars resolved by ECS from Secrets Manager at task start
   # (valueFrom → ARN; principle #2). DATABASE_URL is the whole ephemeral secret;
   # the rest pull individual JSON keys out of the persistent app secret.
   # The API connects as the DML-only app role. The owner login and the app
   # role's credentials go only to the migration task (migration_secrets).
-  container_secrets = {
+  container_secrets = merge(local.redis_secrets, {
     DATABASE_URL         = aws_secretsmanager_secret.db_url.arn
     SECRET_KEY           = "${local.app_secret_arn}:SECRET_KEY::"
     ENCRYPTION_KEY       = "${local.app_secret_arn}:ENCRYPTION_KEY::"
@@ -91,7 +93,7 @@ locals {
     SMTP_USERNAME        = "${local.app_secret_arn}:SMTP_USERNAME::"
     SMTP_PASSWORD        = "${local.app_secret_arn}:SMTP_PASSWORD::"
     SMTP_FROM            = "${local.app_secret_arn}:SMTP_FROM::"
-  }
+  })
 }
 
 # --- Database credentials (ephemeral, lives with RDS) ---
@@ -175,7 +177,10 @@ module "ecs" {
 
   environment = local.container_environment
   secrets     = local.container_secrets
-  secret_arns = [local.app_secret_arn, aws_secretsmanager_secret.db_url.arn, aws_secretsmanager_secret.db_migrate.arn]
+  secret_arns = concat(
+    [local.app_secret_arn, aws_secretsmanager_secret.db_url.arn, aws_secretsmanager_secret.db_migrate.arn],
+    local.redis_secret_arns,
+  )
   migration_secrets = {
     DATABASE_URL    = "${aws_secretsmanager_secret.db_migrate.arn}:DATABASE_URL::"
     APP_DB_USER     = "${aws_secretsmanager_secret.db_migrate.arn}:APP_DB_USER::"
@@ -275,8 +280,38 @@ resource "aws_elasticache_replication_group" "redis" {
   at_rest_encryption_enabled = true
   transit_encryption_enabled = true
 
+  # Redis AUTH. TLS alone authenticates nobody: anything that can reach the
+  # node in the VPC could read or reset every rate-limit and login-backoff
+  # counter. The token is generated here and reaches the app only inside the
+  # REDIS_URL secret. A cluster created with a token (every `make up`) requires
+  # AUTH from the start. Adding one to a cluster that had none must go through
+  # ROTATE, which still admits unauthenticated clients: after that apply, set
+  # this to "SET" and apply again to enforce it.
+  auth_token                 = random_password.redis_auth[0].result
+  auth_token_update_strategy = "ROTATE"
+
   apply_immediately = true
   tags              = { Name = "${var.name_prefix}-redis" }
+}
+
+# ElastiCache AUTH tokens: 16-128 printable characters, no @ " or /.
+# Letters and digits also keep the token URL-safe inside REDIS_URL.
+resource "random_password" "redis_auth" {
+  count   = var.high_availability ? 1 : 0
+  length  = 64
+  special = false
+}
+
+resource "aws_secretsmanager_secret" "redis_url" {
+  count                   = var.high_availability ? 1 : 0
+  name                    = "${var.name_prefix}/redis-url"
+  recovery_window_in_days = 0
+}
+
+resource "aws_secretsmanager_secret_version" "redis_url" {
+  count         = var.high_availability ? 1 : 0
+  secret_id     = aws_secretsmanager_secret.redis_url[0].id
+  secret_string = "rediss://:${random_password.redis_auth[0].result}@${aws_elasticache_replication_group.redis[0].primary_endpoint_address}:6379"
 }
 
 # --- VPC interface endpoints (PrivateLink) ---

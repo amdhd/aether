@@ -234,7 +234,7 @@ async def test_get_valid_access_token_refreshes_when_expired(
     from tests.conftest import TestingSessionLocal
 
     token = auth_headers["Authorization"].split(" ", 1)[1]
-    user_id = int(decode_token(token)["sub"])
+    user_id = int(decode_token(token, "access")["sub"])
     connect = await client.get("/api/v1/integrations/google/connect", headers=auth_headers)
     state = parse_qs(urlparse(connect.json()["authorization_url"]).query)["state"][0]
 

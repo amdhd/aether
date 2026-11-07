@@ -33,3 +33,7 @@ output "task_definition_arn" {
 output "log_group_name" {
   value = aws_cloudwatch_log_group.api.name
 }
+
+output "migrate_task_definition_arn" {
+  value = aws_ecs_task_definition.migrate.arn
+}

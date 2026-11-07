@@ -30,7 +30,7 @@ async def test_model_cannot_approve_its_own_action(name, monkeypatch):
 
 
 async def proposal(client, auth_headers, *, expired=False):
-    user_id = int(decode_token(auth_headers["Authorization"].split()[1])["sub"])
+    user_id = int(decode_token(auth_headers["Authorization"].split()[1], "access")["sub"])
     async with TestingSessionLocal() as db:
         task = Task(user_id=user_id, title="Keep unless explicitly approved")
         conversation = Conversation(user_id=user_id, title="Approval test")
@@ -87,7 +87,7 @@ async def test_another_user_cannot_approve_action(client, auth_headers):
 
 
 async def _task_for(auth_headers, **fields):
-    user_id = int(decode_token(auth_headers["Authorization"].split()[1])["sub"])
+    user_id = int(decode_token(auth_headers["Authorization"].split()[1], "access")["sub"])
     async with TestingSessionLocal() as db:
         task = Task(user_id=user_id, **fields)
         conversation = Conversation(user_id=user_id, title="Update approval")

@@ -154,10 +154,31 @@ jobs:
         run: npm run test
 
   frontend-image:
-    name: Frontend image (patched Node build)
+    name: Frontend image (build + Trivy)
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    env:
+      # Keep in step with deploy.yml's build-scan job.
+      TRIVY_VERSION: "0.76.1"
+      TRIVY_SHA256: c7cbe3137fb8a48a17574bede3dd6beb16742d1e9772929940fc90082c39d9c0
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Build with fresh base images and verify Node runtime
         run: docker build --pull --no-cache --progress=plain -t aether-web:ci web
+
+      - name: Install Trivy (pinned, checksum-verified)
+        run: |
+          archive="trivy_${TRIVY_VERSION}_Linux-64bit.tar.gz"
+          curl -fsSLo "$RUNNER_TEMP/$archive" \
+            "https://github.com/aquasecurity/trivy/releases/download/v${TRIVY_VERSION}/${archive}"
+          echo "${TRIVY_SHA256}  $RUNNER_TEMP/$archive" | sha256sum --check --strict
+          sudo tar -xzf "$RUNNER_TEMP/$archive" -C /usr/local/bin trivy
+
+      # The same gate the API image passes before it ships.
+      - name: Trivy scan (blocks on HIGH/CRITICAL)
+        run: |
+          trivy image --scanners vuln --severity HIGH,CRITICAL \
+            --ignore-unfixed --exit-code 1 --no-progress aether-web:ci
+
+      - name: Image does not run as root
+        run: test "$(docker image inspect aether-web:ci --format '{{.Config.User}}')" = "101"

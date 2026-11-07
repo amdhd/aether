@@ -138,6 +138,46 @@ locals {
   ]
 }
 
+# --- Migration task definition ---
+# Same image, run once per deploy with `alembic upgrade head`. It is the only
+# thing that receives the database owner login, so the long-running API task
+# never holds credentials that can change the schema.
+resource "aws_ecs_task_definition" "migrate" {
+  family                   = "${var.name_prefix}-migrate"
+  requires_compatibilities = ["FARGATE"]
+  network_mode             = "awsvpc"
+  cpu                      = 256
+  memory                   = 512
+  execution_role_arn       = aws_iam_role.execution.arn
+  task_role_arn            = aws_iam_role.task.arn
+
+  runtime_platform {
+    cpu_architecture        = "ARM64"
+    operating_system_family = "LINUX"
+  }
+
+  container_definitions = jsonencode([{
+    name      = "api"
+    image     = var.image
+    essential = true
+    command   = ["alembic", "upgrade", "head"]
+    # Migrations write nothing to disk (the image sets PYTHONDONTWRITEBYTECODE).
+    readonlyRootFilesystem = true
+    environment            = [for k, v in var.environment : { name = k, value = v }]
+    secrets                = [for k, v in merge(var.secrets, var.migration_secrets) : { name = k, valueFrom = v }]
+    logConfiguration = {
+      logDriver = "awslogs"
+      options = {
+        "awslogs-group"         = aws_cloudwatch_log_group.api.name
+        "awslogs-region"        = data.aws_region.current.region
+        "awslogs-stream-prefix" = "migrate"
+      }
+    }
+  }])
+
+  tags = { Name = "${var.name_prefix}-migrate" }
+}
+
 # --- Task definition ---
 resource "aws_ecs_task_definition" "api" {
   family                   = "${var.name_prefix}-api"

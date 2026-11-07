@@ -52,7 +52,9 @@ class Settings(BaseSettings):
     REFRESH_COOKIE_SAMESITE: Literal["lax", "strict", "none"] = "lax"  # "lax" for same-site dev, "none" cross-site prod
     REFRESH_COOKIE_DOMAIN: str = ""  # e.g. ".example.com" to share across subdomains
 
-    # Encryption (Fernet key for OAuth tokens at rest)
+    # Encryption (Fernet key for OAuth tokens at rest). One key, or several
+    # comma-separated to rotate: the first encrypts, all decrypt. See
+    # app.core.crypto for the rotation procedure.
     ENCRYPTION_KEY: str = ""
 
     # CORS. Also the base for links mailed to users (first entry — see
@@ -209,10 +211,14 @@ class Settings(BaseSettings):
                     or self.SECRET_KEY == INSECURE_SECRET_KEY
                     or self.SECRET_KEY.lower().startswith(("change-me", "replace_me", "dev-secret"))):
                 raise ValueError("SECRET_KEY must be a randomly generated signing key of sufficient length")
+            keys = [key.strip() for key in self.ENCRYPTION_KEY.split(",") if key.strip()]
             try:
-                Fernet(self.ENCRYPTION_KEY.encode("ascii"))
+                if not keys:
+                    raise ValueError
+                for key in keys:
+                    Fernet(key.encode("ascii"))
             except (ValueError, UnicodeError):
-                raise ValueError("ENCRYPTION_KEY must be a valid Fernet key") from None
+                raise ValueError("ENCRYPTION_KEY must be one or more valid Fernet keys, comma-separated") from None
             if not self.REFRESH_COOKIE_SECURE:
                 raise ValueError("REFRESH_COOKIE_SECURE must be true in production and staging")
             # Without a mail transport, password reset and address verification

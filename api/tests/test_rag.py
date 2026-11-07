@@ -299,3 +299,23 @@ def test_embedding_client_has_explicit_timeouts_and_bounded_retries(monkeypatch)
         assert captured["timeout"].read == 5.0
     finally:
         embeddings._client.cache_clear()
+
+
+@pytest.mark.parametrize("query,expected", [
+    ("%", ["Discount: 50%"]),        # a lone wildcard must not match every note
+    ("_", ["snake_case naming"]),
+    ("%_%_%_%", []),
+    ("\\", ["C:\\temp path"]),
+])
+async def test_keyword_fallback_treats_like_wildcards_literally(
+    user: User, monkeypatch: pytest.MonkeyPatch, query: str, expected: list[str]
+) -> None:
+    # Punctuation-only queries have no word terms, so they reach the
+    # whole-string fallback, where % and _ used to act as LIKE wildcards.
+    monkeypatch.setattr(embeddings.settings, "OPENAI_API_KEY", "")
+    async with TestingSessionLocal() as db:
+        for title in ["Discount: 50%", "snake_case naming", "C:\\temp path", "Plain note"]:
+            db.add(Note(user_id=user.id, title=title, content="body"))
+        await db.commit()
+        results = await note_search.search_notes(db, user, query, limit=10)
+        assert sorted(n.title for n in results) == expected

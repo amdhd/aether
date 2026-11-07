@@ -53,7 +53,7 @@ def test_tool_size_limit_preserves_valid_json_and_pagination_cursor():
 
 
 async def test_tool_pages_are_bounded_and_owner_scoped(client, auth_headers):
-    user_id = int(decode_token(auth_headers["Authorization"].split()[1])["sub"])
+    user_id = int(decode_token(auth_headers["Authorization"].split()[1], "access")["sub"])
     async with TestingSessionLocal() as db:
         other = User(email="private@example.com", name="Other", password_hash="unused")
         db.add(other)

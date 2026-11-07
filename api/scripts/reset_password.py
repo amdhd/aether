@@ -38,7 +38,7 @@ async def _reset(email: str) -> int:
         return 1
 
     async with AsyncSessionLocal() as db:
-        user = await db.scalar(select(User).where(User.email == email))
+        user = await db.scalar(select(User).where(User.email_is(email)))
         if user is None:
             print(f"No user found with email {email!r}.")
             return 1

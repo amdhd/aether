@@ -14,8 +14,16 @@ from app.db.session import engine, get_db
 configure_logging()
 
 # Interactive API docs (/docs, /redoc, /openapi.json) are useful in dev but leak
-# the full API surface publicly, so turn them off in production.
-_docs_enabled = settings.ENVIRONMENT != "production"
+# the full API surface publicly. An allowlist, so staging — reachable from the
+# internet like production — and any new environment name are covered too.
+DOCS_ENVIRONMENTS = frozenset({"development", "test"})
+
+
+def docs_enabled(environment: str) -> bool:
+    return environment in DOCS_ENVIRONMENTS
+
+
+_docs_enabled = docs_enabled(settings.ENVIRONMENT)
 
 app = FastAPI(
     title=settings.PROJECT_NAME,

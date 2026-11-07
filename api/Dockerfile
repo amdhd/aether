@@ -1,9 +1,11 @@
 # syntax=docker/dockerfile:1
 
+# Base images are pinned by digest as well as tag: a tag can be re-pointed at
+# different bytes, a digest cannot. Dependabot (docker ecosystem) proposes the
+# digest bumps, so security rebuilds of the base still arrive — as reviewed PRs.
+
 # --- Builder: compile dependencies into wheels ---
-# Pinned digest-free tag is fine here because the builder is discarded; the
-# runtime stage below is what ships.
-FROM python:3.12-slim AS builder
+FROM python:3.12-slim@sha256:4840d514c583a4d3d8cad3940e68dee6f0f6f3635c12fcd0a3d74c21a5b93a54 AS builder
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
@@ -24,7 +26,7 @@ RUN pip wheel --require-hashes --wheel-dir /wheels -r requirements.txt
 
 
 # --- Runtime: slim image with just the app + prebuilt wheels ---
-FROM python:3.12-slim AS runtime
+FROM python:3.12-slim@sha256:4840d514c583a4d3d8cad3940e68dee6f0f6f3635c12fcd0a3d74c21a5b93a54 AS runtime
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
@@ -34,9 +36,9 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 # image was last rebuilt. Without it the image inherits whatever was fixed
 # upstream but not yet rolled into the python:3.12-slim tag, and the Trivy gate
 # fails on CVEs in packages we never asked for — util-linux, most recently — with
-# no change on our side to explain it. Pinning a digest would make the drift
-# visible but not fix it; this actually resolves it, at the cost of the layer not
-# being byte-reproducible.
+# no change on our side to explain it. The digest pin above fixes which base we
+# start from; this still applies fixes published since, at the cost of the layer
+# not being byte-reproducible.
 #
 # libpq5 is the runtime shared lib asyncpg/psycopg need; curl is for HEALTHCHECK.
 RUN apt-get update \
@@ -44,6 +46,17 @@ RUN apt-get update \
     && apt-get install -y --no-install-recommends \
     libpq5 curl \
     && rm -rf /var/lib/apt/lists/*
+
+# Amazon RDS root CAs, so the app can verify the database's certificate rather
+# than accept whatever answers on 5432. The RDS URL asks for ssl=verify-full and
+# asyncpg reads the CA bundle from PGSSLROOTCERT. The checksum pins this exact
+# bundle; when AWS publishes a new one the build fails until it is bumped:
+#   curl -s https://truststore.pki.rds.amazonaws.com/global/global-bundle.pem | shasum -a 256
+ADD --checksum=sha256:90a6f1a7978a1b1b096dca6c57511ca48d3b8cf052f8e704baf358f34ea2f21b \
+    --chmod=0644 \
+    https://truststore.pki.rds.amazonaws.com/global/global-bundle.pem \
+    /etc/ssl/certs/rds-global-bundle.pem
+ENV PGSSLROOTCERT=/etc/ssl/certs/rds-global-bundle.pem
 
 # Non-root user — Fargate and reviewers expect the container not to run as root.
 RUN useradd --create-home --uid 10001 app

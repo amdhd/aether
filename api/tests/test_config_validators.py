@@ -111,3 +111,15 @@ def test_deployed_environments_refuse_to_boot_without_mail(environment, missing)
 
 def test_deployed_environment_with_mail_configured_boots():
     assert Settings(**PRODUCTION, FRONTEND_ORIGIN="https://aether.example.com")
+
+
+def test_several_encryption_keys_are_accepted_for_rotation():
+    second = "Xk8Qm3c7bVw5pY2rT9uN4zL6aD1sF0gH8jK5eR2tY7o="
+    assert Settings(**{**PRODUCTION, "ENCRYPTION_KEY": f"{PRODUCTION['ENCRYPTION_KEY']}, {second}"},
+                    FRONTEND_ORIGIN="https://app.example.com")
+
+
+@pytest.mark.parametrize("value", ["", " , ", "jNi4_f4xMY-2e7ddrk7jghfP_pblo7NtEYsp3X065Jk=,not-fernet"])
+def test_any_invalid_rotation_key_fails_closed(value):
+    with pytest.raises(ValidationError, match="ENCRYPTION_KEY"):
+        Settings(**{**PRODUCTION, "ENCRYPTION_KEY": value}, FRONTEND_ORIGIN="https://app.example.com")

@@ -53,9 +53,7 @@ async def get_current_user(
         headers={"WWW-Authenticate": "Bearer"},
     )
     try:
-        payload = decode_token(token)
-        if payload.get("type") != "access":
-            raise credentials_exception
+        payload = decode_token(token, "access")
         user_id = payload.get("sub")
         token_version = payload.get("ver")
         if user_id is None or token_version is None:

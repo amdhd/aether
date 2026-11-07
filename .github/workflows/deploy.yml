@@ -278,6 +278,19 @@ jobs:
             --query 'taskDefinition.taskDefinitionArn' --output text)
           echo "arn=$arn" >> "$GITHUB_OUTPUT"
 
+          # The migration task is a separate family: it alone holds the database
+          # owner login. Same image swap.
+          aws ecs describe-task-definition --task-definition "${NAME_PREFIX}-migrate" \
+            --query 'taskDefinition' --output json > migrate-current.json
+          jq --arg IMAGE "$image" '
+            .containerDefinitions[0].image = $IMAGE
+            | del(.taskDefinitionArn, .revision, .status, .requiresAttributes,
+                  .compatibilities, .registeredAt, .registeredBy)
+          ' migrate-current.json > migrate-new.json
+          migrate_arn=$(aws ecs register-task-definition --cli-input-json file://migrate-new.json \
+            --query 'taskDefinition.taskDefinitionArn' --output text)
+          echo "migrate_arn=$migrate_arn" >> "$GITHUB_OUTPUT"
+
       - name: Run migrations (one-off task)
         run: |
           net=$(aws ecs describe-services --cluster "$NAME_PREFIX" --services "${NAME_PREFIX}-api" \
@@ -285,11 +298,11 @@ jobs:
           subnets=$(echo "$net" | jq -r '.subnets | join(",")')
           sgs=$(echo "$net" | jq -r '.securityGroups | join(",")')
 
+          # The migrate task definition runs `alembic upgrade head` itself.
           task=$(aws ecs run-task --cluster "$NAME_PREFIX" \
-            --task-definition "${{ steps.taskdef.outputs.arn }}" \
+            --task-definition "${{ steps.taskdef.outputs.migrate_arn }}" \
             --launch-type FARGATE \
             --network-configuration "awsvpcConfiguration={subnets=[$subnets],securityGroups=[$sgs],assignPublicIp=DISABLED}" \
-            --overrides '{"containerOverrides":[{"name":"api","command":["alembic","upgrade","head"]}]}' \
             --query 'tasks[0].taskArn' --output text)
 
           aws ecs wait tasks-stopped --cluster "$NAME_PREFIX" --tasks "$task"

@@ -60,9 +60,11 @@ locals {
   # reads REDIS_URL and enforces limits globally across tasks when it's set, so
   # limits hold once autoscaling runs >1 task (in-memory per-instance otherwise).
   # rediss:// = TLS (transit encryption is on); the app connects to the primary.
-  redis_environment = var.high_availability ? {
-    REDIS_URL = "rediss://${aws_elasticache_replication_group.redis[0].primary_endpoint_address}:6379"
+  # The URL carries the AUTH token, so it is a secret (below), not plain env.
+  redis_secrets = var.high_availability ? {
+    REDIS_URL = aws_secretsmanager_secret.redis_url[0].arn
   } : {}
+  redis_secret_arns = var.high_availability ? [aws_secretsmanager_secret.redis_url[0].arn] : []
 
   # Point the app at the in-task ADOT sidecar (loopback) when tracing is on.
   tracing_environment = var.enable_tracing ? {
@@ -70,12 +72,14 @@ locals {
     OTEL_EXPORTER_OTLP_ENDPOINT = "http://localhost:4317"
   } : {}
 
-  container_environment = merge(local.base_environment, local.redis_environment, local.tracing_environment)
+  container_environment = merge(local.base_environment, local.tracing_environment)
 
   # Secret env vars resolved by ECS from Secrets Manager at task start
   # (valueFrom → ARN; principle #2). DATABASE_URL is the whole ephemeral secret;
   # the rest pull individual JSON keys out of the persistent app secret.
-  container_secrets = {
+  # The API connects as the DML-only app role. The owner login and the app
+  # role's credentials go only to the migration task (migration_secrets).
+  container_secrets = merge(local.redis_secrets, {
     DATABASE_URL         = aws_secretsmanager_secret.db_url.arn
     SECRET_KEY           = "${local.app_secret_arn}:SECRET_KEY::"
     ENCRYPTION_KEY       = "${local.app_secret_arn}:ENCRYPTION_KEY::"
@@ -89,13 +93,20 @@ locals {
     SMTP_USERNAME        = "${local.app_secret_arn}:SMTP_USERNAME::"
     SMTP_PASSWORD        = "${local.app_secret_arn}:SMTP_PASSWORD::"
     SMTP_FROM            = "${local.app_secret_arn}:SMTP_FROM::"
-  }
+  })
 }
 
 # --- Database credentials (ephemeral, lives with RDS) ---
 resource "random_password" "db" {
   length  = 32
   special = false # keep the URL clean (no escaping in the connection string)
+}
+
+# The API's own login. Letters and digits only: ensure_app_role writes it into
+# CREATE/ALTER ROLE and refuses anything else.
+resource "random_password" "db_app" {
+  length  = 32
+  special = false
 }
 
 module "vpc" {
@@ -120,6 +131,7 @@ module "rds" {
   instance_class    = var.db_instance_class
   allocated_storage = var.db_allocated_storage
   master_password   = random_password.db.result
+  app_password      = random_password.db_app.result
   high_availability = var.high_availability
 }
 
@@ -131,7 +143,22 @@ resource "aws_secretsmanager_secret" "db_url" {
 
 resource "aws_secretsmanager_secret_version" "db_url" {
   secret_id     = aws_secretsmanager_secret.db_url.id
-  secret_string = module.rds.database_url
+  secret_string = module.rds.app_database_url
+}
+
+# Migration-only: the owner login, plus the app role it creates/updates.
+resource "aws_secretsmanager_secret" "db_migrate" {
+  name                    = "${var.name_prefix}/database-migrate"
+  recovery_window_in_days = 0
+}
+
+resource "aws_secretsmanager_secret_version" "db_migrate" {
+  secret_id = aws_secretsmanager_secret.db_migrate.id
+  secret_string = jsonencode({
+    DATABASE_URL    = module.rds.database_url
+    APP_DB_USER     = "aether_app"
+    APP_DB_PASSWORD = random_password.db_app.result
+  })
 }
 
 module "ecs" {
@@ -150,7 +177,15 @@ module "ecs" {
 
   environment = local.container_environment
   secrets     = local.container_secrets
-  secret_arns = [local.app_secret_arn, aws_secretsmanager_secret.db_url.arn]
+  secret_arns = concat(
+    [local.app_secret_arn, aws_secretsmanager_secret.db_url.arn, aws_secretsmanager_secret.db_migrate.arn],
+    local.redis_secret_arns,
+  )
+  migration_secrets = {
+    DATABASE_URL    = "${aws_secretsmanager_secret.db_migrate.arn}:DATABASE_URL::"
+    APP_DB_USER     = "${aws_secretsmanager_secret.db_migrate.arn}:APP_DB_USER::"
+    APP_DB_PASSWORD = "${aws_secretsmanager_secret.db_migrate.arn}:APP_DB_PASSWORD::"
+  }
 
   # enable_https is plan-time (drives the listener's count); certificate_arn is
   # the apply-time value it uses.
@@ -245,8 +280,38 @@ resource "aws_elasticache_replication_group" "redis" {
   at_rest_encryption_enabled = true
   transit_encryption_enabled = true
 
+  # Redis AUTH. TLS alone authenticates nobody: anything that can reach the
+  # node in the VPC could read or reset every rate-limit and login-backoff
+  # counter. The token is generated here and reaches the app only inside the
+  # REDIS_URL secret. A cluster created with a token (every `make up`) requires
+  # AUTH from the start. Adding one to a cluster that had none must go through
+  # ROTATE, which still admits unauthenticated clients: after that apply, set
+  # this to "SET" and apply again to enforce it.
+  auth_token                 = random_password.redis_auth[0].result
+  auth_token_update_strategy = "ROTATE"
+
   apply_immediately = true
   tags              = { Name = "${var.name_prefix}-redis" }
+}
+
+# ElastiCache AUTH tokens: 16-128 printable characters, no @ " or /.
+# Letters and digits also keep the token URL-safe inside REDIS_URL.
+resource "random_password" "redis_auth" {
+  count   = var.high_availability ? 1 : 0
+  length  = 64
+  special = false
+}
+
+resource "aws_secretsmanager_secret" "redis_url" {
+  count                   = var.high_availability ? 1 : 0
+  name                    = "${var.name_prefix}/redis-url"
+  recovery_window_in_days = 0
+}
+
+resource "aws_secretsmanager_secret_version" "redis_url" {
+  count         = var.high_availability ? 1 : 0
+  secret_id     = aws_secretsmanager_secret.redis_url[0].id
+  secret_string = "rediss://:${random_password.redis_auth[0].result}@${aws_elasticache_replication_group.redis[0].primary_endpoint_address}:6379"
 }
 
 # --- VPC interface endpoints (PrivateLink) ---

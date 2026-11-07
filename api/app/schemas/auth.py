@@ -1,8 +1,9 @@
 from typing import Annotated
 
-from pydantic import BaseModel, EmailStr, Field, field_validator
+from pydantic import BaseModel, Field, field_validator
 
 from app.core.security import MAX_PASSWORD_BYTES, password_exceeds_max_bytes
+from app.schemas.user import NormalizedEmail
 
 
 class AccessToken(BaseModel):
@@ -41,7 +42,7 @@ class PasswordChangeRequest(BaseModel):
 
 
 class PasswordForgotRequest(BaseModel):
-    email: EmailStr
+    email: NormalizedEmail
 
 
 class PasswordResetRequest(BaseModel):

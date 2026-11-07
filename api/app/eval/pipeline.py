@@ -53,7 +53,7 @@ async def seed_corpus(db: AsyncSession) -> User:
     SQLite/keyless this just stores the text and retrieval uses the keyword
     fallback; on Postgres with a key it populates the pgvector column.
     """
-    existing = await db.scalar(select(User).where(User.email == EVAL_USER_EMAIL))
+    existing = await db.scalar(select(User).where(User.email_is(EVAL_USER_EMAIL)))
     if existing is not None:
         # Delete notes explicitly rather than relying on FK cascade, which isn't
         # enforced on SQLite unless the foreign_keys pragma is on.

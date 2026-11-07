@@ -111,12 +111,32 @@ def _is_postgres(db: AsyncSession) -> bool:
     return bind.dialect.name == "postgresql"
 
 
+_LIKE_ESCAPE = "\\"
+
+
+def _contains_pattern(text: str) -> str:
+    """A LIKE pattern matching `text` literally anywhere in a column.
+
+    `%` and `_` are LIKE wildcards: passed through, a query such as "100%" or
+    "a_b" would match far more than it says, and a query built from them
+    ("%_%_%_%…") turns the scan into heavy backtracking. Escaped, they match
+    themselves.
+    """
+    escaped = (
+        text.replace(_LIKE_ESCAPE, _LIKE_ESCAPE * 2).replace("%", _LIKE_ESCAPE + "%").replace("_", _LIKE_ESCAPE + "_")
+    )
+    return f"%{escaped}%"
+
+
 async def _keyword_search(db: AsyncSession, user: User, query: str, limit: int) -> list[Note]:
     terms = _keyword_terms(query)
     # No usable terms (query was all stopwords/punctuation): fall back to the
     # whole-string match so a query like "C#" or a stopword phrase still runs.
-    patterns = [f"%{t}%" for t in terms] if terms else [f"%{query.strip()}%"]
-    conditions = [or_(Note.title.ilike(p), Note.content.ilike(p)) for p in patterns]
+    patterns = [_contains_pattern(t) for t in terms] if terms else [_contains_pattern(query.strip())]
+    conditions = [
+        or_(Note.title.ilike(p, escape=_LIKE_ESCAPE), Note.content.ilike(p, escape=_LIKE_ESCAPE))
+        for p in patterns
+    ]
     stmt = (
         select(Note)
         .where(Note.user_id == user.id)

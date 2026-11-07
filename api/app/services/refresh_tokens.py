@@ -68,9 +68,7 @@ async def rotate_refresh_token(db: AsyncSession, raw_token: str) -> IssuedTokens
     """Validate and rotate a refresh token, returning a fresh token pair.
     Raises RefreshError on any problem (and revokes the family on replay)."""
     try:
-        payload = decode_token(raw_token)
-        if payload.get("type") != "refresh":
-            raise RefreshError("Not a refresh token")
+        payload = decode_token(raw_token, "refresh")
         jti = payload["jti"]
         family_id = payload["fam"]
         user_id = int(payload["sub"])

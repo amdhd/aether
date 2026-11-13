@@ -27,7 +27,7 @@ RUN npm run build
 #
 # nginx-unprivileged runs the master process as uid 101 rather than root, which
 # is why it listens on 8080: binding below 1024 needs root.
-FROM nginxinc/nginx-unprivileged:1.30.6-alpine@sha256:f5116ed4606f3eb015dd4a8e28cb9b351476dc0ad4bc6e9f93b19cec130cdf03 AS runtime
+FROM nginxinc/nginx-unprivileged:1.31.7-alpine@sha256:b5047b9b76845eac124358373c6852377c52e4b05834a47647e955dd91cb8f1e AS runtime
 
 # SPA history fallback: unknown routes return index.html so client-side routing
 # works on refresh/deep-link. Written as root, then back to the image's user.

@@ -5,13 +5,11 @@ export type Theme = 'light' | 'dark'
 const STORAGE_KEY = 'aether-theme'
 
 function getInitialTheme(): Theme {
-  if (typeof window === 'undefined') return 'light'
+  if (typeof window === 'undefined') return 'dark'
   const stored = window.localStorage.getItem(STORAGE_KEY)
   if (stored === 'light' || stored === 'dark') return stored
-  const prefersDark =
-    typeof window.matchMedia === 'function' &&
-    window.matchMedia('(prefers-color-scheme: dark)').matches
-  return prefersDark ? 'dark' : 'light'
+  // Dusk's slate is the default; light is opt-in via the toggle.
+  return 'dark'
 }
 
 function applyTheme(theme: Theme): void {

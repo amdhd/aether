@@ -9,7 +9,6 @@ import {
   Plus,
   Send,
   Smile,
-  Sparkles,
   Square,
   X,
   Zap,
@@ -74,7 +73,7 @@ function PersonaPicker({
     <div
       role="group"
       aria-label="Assistant persona"
-      className="inline-flex flex-wrap items-center justify-center gap-1 rounded-full border border-border bg-surface-muted p-1"
+      className="inline-flex flex-wrap items-center justify-center gap-1.5"
     >
       {PERSONA_OPTIONS.map(({ value: personaValue, label, Icon }) => {
         const active = personaValue === value
@@ -86,10 +85,10 @@ function PersonaPicker({
             disabled={disabled}
             onClick={() => onSelect(personaValue)}
             className={cn(
-              'inline-flex items-center gap-2 rounded-full px-4 py-2 text-sm font-medium transition-colors focus-ring disabled:cursor-not-allowed disabled:opacity-60',
+              'inline-flex items-center gap-2 rounded-full border px-3.5 py-1.5 text-sm font-medium transition-colors duration-150 focus-ring disabled:cursor-not-allowed disabled:opacity-60',
               active
-                ? 'bg-foreground text-background shadow-sm'
-                : 'text-muted-foreground hover:text-foreground',
+                ? 'border-accent/40 bg-accent/10 text-foreground [&>svg]:text-accent-text'
+                : 'border-border text-muted-foreground hover:bg-light/[0.04] hover:text-foreground',
             )}
           >
             <Icon className="h-4 w-4" />
@@ -114,25 +113,25 @@ const COUNTER_VISIBLE_FROM = Math.floor(MAX_MESSAGE_CHARS * 0.9)
 const ATTACHMENT_LIMIT_LABEL = `${Math.round(MAX_ATTACHMENT_BYTES / 1000)} KB`
 
 const PROSE =
-  'text-[15px] leading-7 [&_a]:font-medium [&_a]:text-foreground [&_a]:underline [&_a]:underline-offset-2 [&_code]:rounded [&_code]:bg-surface-muted [&_code]:px-1.5 [&_code]:py-0.5 [&_code]:text-[13px] [&_h1]:mb-2 [&_h1]:mt-4 [&_h1]:text-lg [&_h1]:font-semibold [&_h2]:mb-2 [&_h2]:mt-4 [&_h2]:text-base [&_h2]:font-semibold [&_h3]:mb-1.5 [&_h3]:mt-3 [&_h3]:font-semibold [&_li]:mb-1 [&_ol]:mb-3 [&_ol]:list-decimal [&_ol]:pl-5 [&_p:last-child]:mb-0 [&_p]:mb-3 [&_pre]:mb-3 [&_pre]:overflow-x-auto [&_pre]:rounded-lg [&_pre]:border [&_pre]:border-border [&_pre]:bg-surface-muted [&_pre]:p-3 [&_pre]:text-[13px] [&_pre_code]:bg-transparent [&_pre_code]:p-0 [&_ul]:mb-3 [&_ul]:list-disc [&_ul]:pl-5'
+  'text-[15.5px] leading-7 text-foreground-2 [&_strong]:font-semibold [&_strong]:text-foreground [&_a]:font-medium [&_a]:text-accent-text [&_a]:underline [&_a]:decoration-accent/40 [&_a]:underline-offset-[0.18em] [&_code]:rounded-md [&_code]:bg-light/[0.07] [&_code]:text-foreground [&_code]:px-1.5 [&_code]:py-0.5 [&_code]:text-[13px] [&_h1]:mb-2 [&_h1]:mt-5 [&_h1]:text-xl [&_h1]:text-foreground [&_h2]:mb-2 [&_h2]:mt-5 [&_h2]:text-lg [&_h2]:text-foreground [&_h3]:mb-1.5 [&_h3]:mt-4 [&_h3]:text-base [&_h3]:text-foreground [&_li]:marker:text-muted-foreground [&_li]:mb-1 [&_ol]:mb-3 [&_ol]:list-decimal [&_ol]:pl-5 [&_p:last-child]:mb-0 [&_p]:mb-3 [&_pre]:mb-3 [&_pre]:overflow-x-auto [&_pre]:rounded-inner [&_pre]:border [&_pre]:border-border [&_pre]:bg-light/[0.04] [&_pre]:p-3.5 [&_pre]:text-[13px] [&_pre_code]:bg-transparent [&_pre_code]:p-0 [&_ul]:mb-3 [&_ul]:list-disc [&_ul]:pl-5'
 
 const MARKDOWN_COMPONENTS = {
   a: MarkdownLink,
   table: ({ children, ...props }: React.ComponentPropsWithoutRef<'table'>) => (
-    <div className="mb-3 w-full overflow-x-auto rounded-lg border border-border">
-      <table className="w-full border-collapse text-[13px]" {...props}>
+    <div className="mb-3 w-full overflow-x-auto rounded-inner border border-border">
+      <table className="w-full border-collapse text-[13px] tabular-nums" {...props}>
         {children}
       </table>
     </div>
   ),
   thead: ({ children, ...props }: React.ComponentPropsWithoutRef<'thead'>) => (
-    <thead className="bg-surface-muted" {...props}>
+    <thead className="bg-light/[0.04]" {...props}>
       {children}
     </thead>
   ),
   th: ({ children, ...props }: React.ComponentPropsWithoutRef<'th'>) => (
     <th
-      className="whitespace-nowrap border-b border-border px-3 py-2 text-left font-semibold"
+      className="whitespace-nowrap border-b border-border px-3 py-2 text-left font-medium text-muted-foreground"
       {...props}
     >
       {children}
@@ -167,14 +166,14 @@ function ThinkingBlock({ content }: { content: string }) {
         <ChevronRight className="h-3.5 w-3.5 transition-transform group-open/think:rotate-90" />
         Thought process
       </summary>
-      <p className="mt-2 whitespace-pre-wrap border-l border-border pl-3 leading-6">{content}</p>
+      <p className="mt-2 whitespace-pre-wrap border-l-2 border-accent/30 pl-3 leading-6">{content}</p>
     </details>
   )
 }
 
 function AttachmentChip({ name }: { name: string }) {
   return (
-    <span className="inline-flex max-w-full items-center gap-1.5 rounded-md border border-border bg-surface px-2 py-1 text-xs text-muted-foreground">
+    <span className="inline-flex max-w-full items-center gap-1.5 rounded-full border border-border bg-light/[0.04] px-2.5 py-1 text-xs text-muted-foreground">
       <Paperclip className="h-3 w-3 shrink-0" />
       <span className="truncate">{name}</span>
     </span>
@@ -196,7 +195,7 @@ function Message({
     return (
       <div className="flex flex-col items-end gap-1.5">
         {attachmentName && <AttachmentChip name={attachmentName} />}
-        <div className="max-w-[80%] whitespace-pre-wrap rounded-2xl rounded-br-sm bg-surface-muted px-4 py-2.5 text-[15px] leading-7">
+        <div className="max-w-[80%] whitespace-pre-wrap rounded-card rounded-br-md bg-light/[0.07] px-4 py-2.5 text-[15.5px] leading-7 text-foreground lit-edge">
           {content}
         </div>
       </div>
@@ -207,11 +206,11 @@ function Message({
     <div className="flex gap-3">
       <div
         aria-hidden
-        className="mt-0.5 flex h-7 w-7 shrink-0 select-none items-center justify-center rounded-full bg-foreground text-[13px] font-semibold text-background"
+        className="mt-0.5 flex h-8 w-8 shrink-0 select-none items-center justify-center rounded-full border border-border bg-light/[0.03] font-display text-[13px] font-medium text-foreground-2"
       >
         A
       </div>
-      <div className="min-w-0 flex-1 pt-0.5">
+      <div className="min-w-0 flex-1 pt-1">
         {reasoningContent && <ThinkingBlock content={reasoningContent} />}
         <MessageContent content={content} />
       </div>
@@ -638,10 +637,10 @@ export function ChatPage() {
         aria-hidden
         onChange={handleFileSelect}
       />
-      <div className="relative rounded-2xl border border-border bg-surface shadow-sm transition-colors focus-within:border-foreground/25">
+      <div className="glass relative rounded-[26px] border border-transparent transition-[border-color] duration-150 focus-within:border-accent/45">
         {attachedFile && (
           <div className="flex px-3 pt-3">
-            <span className="inline-flex max-w-full items-center gap-1.5 rounded-md border border-border bg-surface-muted px-2 py-1 text-xs text-muted-foreground">
+            <span className="inline-flex max-w-full items-center gap-1.5 rounded-full border border-border bg-light/[0.04] px-2.5 py-1 text-xs text-muted-foreground">
               <Paperclip className="h-3 w-3 shrink-0" />
               <span className="truncate">{attachedFile.name}</span>
               <button
@@ -665,12 +664,12 @@ export function ChatPage() {
           // Keep the draft stable while creating its conversation.
           disabled={starting || createMutation.isPending || conversationsLoading || conversationsFailed}
           rows={1}
-          className="block max-h-40 min-h-[52px] w-full resize-none overflow-y-auto rounded-2xl bg-transparent py-3.5 pl-12 pr-14 text-[15px] leading-6 placeholder:text-muted-foreground focus:outline-none disabled:cursor-not-allowed disabled:opacity-60"
+          className="block max-h-40 min-h-[56px] w-full resize-none overflow-y-auto rounded-[26px] bg-transparent py-4 pl-13 pr-15 text-[15.5px] leading-6 placeholder:text-muted-foreground focus:outline-none disabled:cursor-not-allowed disabled:opacity-60"
         />
         <Button
           variant="ghost"
           size="icon"
-          className="absolute bottom-2.5 left-2.5 h-9 w-9 rounded-lg text-muted-foreground"
+          className="absolute bottom-2.5 left-2.5 h-9 w-9 text-muted-foreground"
           aria-label="Attach CSV file"
           onClick={() => fileInputRef.current?.click()}
           disabled={starting || createMutation.isPending || conversationsLoading || conversationsFailed}
@@ -681,7 +680,7 @@ export function ChatPage() {
           <Button
             variant="outline"
             size="icon"
-            className="absolute bottom-2.5 right-2.5 h-9 w-9 rounded-lg"
+            className="absolute bottom-2.5 right-2.5 h-9 w-9"
             aria-label="Stop generating"
             onClick={handleStop}
           >
@@ -690,7 +689,7 @@ export function ChatPage() {
         ) : (
           <Button
             size="icon"
-            className="absolute bottom-2.5 right-2.5 h-9 w-9 rounded-lg"
+            className="absolute bottom-2.5 right-2.5 h-9 w-9"
             aria-label="Send message"
             onClick={() => void handleSend()}
             disabled={starting || createMutation.isPending || conversationsLoading || conversationsFailed || !draft.trim() || isStreaming || overLimit}
@@ -700,13 +699,13 @@ export function ChatPage() {
         )}
       </div>
       {attachError?.id === draftId && (
-        <p className="px-1 pt-1 text-xs text-red-600 dark:text-red-400">{attachError.message}</p>
+        <p className="px-2 pt-1.5 text-xs text-danger">{attachError.message}</p>
       )}
       {draft.length >= COUNTER_VISIBLE_FROM && (
         <p
           className={cn(
             'px-1 pt-1 text-right text-xs tabular-nums',
-            overLimit ? 'text-red-600 dark:text-red-400' : 'text-muted-foreground',
+            overLimit ? 'text-danger' : 'text-muted-foreground',
           )}
         >
           {draft.trim().length.toLocaleString()} / {MAX_MESSAGE_CHARS.toLocaleString()}
@@ -737,10 +736,10 @@ export function ChatPage() {
       // rather than interrupting as an alert.
       role={notice.kind === 'error' ? 'alert' : 'status'}
       className={cn(
-        'mt-4 rounded-md border px-3 py-2 text-sm',
+        'mt-4 rounded-inner border px-3.5 py-2.5 text-sm',
         notice.kind === 'error'
-          ? 'border-red-200 bg-red-50 text-red-700 dark:border-red-900/50 dark:bg-red-950/40 dark:text-red-300'
-          : 'border-border bg-surface-muted text-muted-foreground',
+          ? 'border-danger/30 bg-danger/10 text-danger'
+          : 'border-border bg-light/[0.04] text-muted-foreground',
       )}
     >
       {notice.message}
@@ -751,7 +750,7 @@ export function ChatPage() {
     <div className="flex h-full flex-col">
       <div className="flex min-h-0 flex-1 flex-col">
         <div className="flex shrink-0 items-center justify-between gap-2 pb-4">
-          <h1 className="min-w-0 truncate text-base font-semibold tracking-tight">
+          <h1 className="min-w-0 truncate text-lg">
             {conversation?.title ?? 'Chat'}
           </h1>
           <div className="flex shrink-0 items-center gap-2">
@@ -789,13 +788,13 @@ export function ChatPage() {
         </Dialog>
 
         {actions.length > 0 && (
-          <details className="mb-4 max-h-48 shrink-0 overflow-y-auto rounded-lg border border-border bg-surface p-3" open>
-            <summary className="cursor-pointer text-sm font-medium focus-ring">Action activity</summary>
-            <ul className="mt-2 space-y-2" aria-live="polite">
+          <details className="mx-auto mb-4 max-h-48 w-full max-w-3xl shrink-0 overflow-y-auto rounded-card border border-border bg-surface p-4 lit-edge" open>
+            <summary className="cursor-pointer text-sm font-medium text-muted-foreground focus-ring">Action activity</summary>
+            <ul className="mt-2 divide-y divide-border" aria-live="polite">
               {actions.map((action) => (
-                <li key={action.id} className="flex flex-wrap justify-between gap-2 text-sm">
+                <li key={action.id} className="flex flex-wrap items-center justify-between gap-2 py-2 text-sm">
                   <span>{action.status === 'completed' ? toolLabel(action.name) : actionLabel(action.name)}</span>
-                  <span className={cn('font-medium', action.status === 'failed' && 'text-red-600 dark:text-red-400')}>
+                  <span className={cn('text-sm font-medium', action.status === 'failed' ? 'text-danger' : action.status === 'completed' ? 'text-accent-text' : action.status === 'running' || action.status === 'pending' ? 'text-signal' : 'text-muted-foreground')}>
                     {action.status === 'running' ? 'Running' : action.status === 'completed' ? 'Completed' : action.status === 'failed' ? 'Failed' : action.status === 'pending' ? 'Awaiting approval' : action.status === 'rejected' ? 'Rejected' : action.status === 'expired' ? 'Expired' : 'Outcome unconfirmed — check before retrying'}
                   </span>
                   {action.status === 'pending' && conversation && (() => {
@@ -814,20 +813,17 @@ export function ChatPage() {
           <div className="flex min-h-0 flex-1 flex-col items-center justify-center overflow-y-auto pb-[12vh]">
             <div className="w-full max-w-3xl px-1 py-6">
               <div className="flex flex-col items-center text-center">
-                <div className="flex items-center gap-3">
-                  <Sparkles className="h-7 w-7 shrink-0 text-foreground" aria-hidden />
-                  <h2 className="text-2xl font-semibold tracking-tight">What would you like Aether to get done?</h2>
-                </div>
-                <p className="mt-2 max-w-md text-sm text-muted-foreground">
+                <h2 className="max-w-[18ch] text-balance text-[2.074rem] leading-[1.08]">What would you like Aether to get done?</h2>
+                <p className="mt-3 max-w-md text-base text-muted-foreground">
                   Analyze campaign data, research a topic, or turn a goal into tasks.
                 </p>
-                <div className="mt-6 grid w-full gap-2 sm:grid-cols-3">
+                <div className="mt-7 flex w-full flex-wrap justify-center gap-2">
                   {[
                     ['Analyze campaign performance', 'Analyze my campaign CSV, identify what is working, and recommend next steps.'],
                     ['Research a competitor', 'Research a competitor and prepare a brief with sources. Ask me which competitor.'],
                     ['Plan my week', 'Review my tasks and help me prioritize this week.'],
                   ].map(([label, prompt]) => (
-                    <Button key={label} variant="outline" className="h-auto whitespace-normal py-3"
+                    <Button key={label} variant="outline" className="h-auto whitespace-normal px-4 py-2.5 text-foreground-2 hover:text-foreground"
                       disabled={starting || createMutation.isPending || isStreaming}
                       onClick={() => {
                         setDraftFor(draftId, prompt)
@@ -837,8 +833,8 @@ export function ChatPage() {
                     </Button>
                   ))}
                 </div>
-                <details className="mt-4 text-sm text-muted-foreground">
-                  <summary className="cursor-pointer focus-ring">Assistant style</summary>
+                <details className="mt-5 text-sm text-muted-foreground">
+                  <summary className="cursor-pointer rounded-full px-2 transition-colors hover:text-foreground focus-ring">Assistant style</summary>
                   <div className="mt-3">
                     <PersonaPicker
                       value={activeId === null ? landingPersona : activePersona}
@@ -851,7 +847,7 @@ export function ChatPage() {
                   </div>
                 </details>
               </div>
-              <div className="mt-8">{composer}</div>
+              <div className="mt-9">{composer}</div>
               {conversationsFailed && (
                 <div role="alert" className="mt-3 text-center text-sm">
                   <p>Couldn’t load conversations.</p>
@@ -876,7 +872,7 @@ export function ChatPage() {
                     </div>
                   ) : conversationFailed ? (
                     <div className="flex min-h-[50vh] flex-col items-center justify-center text-center">
-                      <h2 className="text-lg font-semibold tracking-tight">Couldn’t load this conversation</h2>
+                      <h2 className="text-xl">Couldn’t load this conversation</h2>
                       <p className="mt-2 max-w-md text-sm text-muted-foreground">
                         Its messages and persona are unavailable right now.
                       </p>
@@ -890,7 +886,7 @@ export function ChatPage() {
                       </Button>
                     </div>
                   ) : (
-                    <div className="space-y-6 pt-2">
+                    <div className="space-y-7 pt-2">
                       {visibleMessages.map((message) => (
                         <Message
                           key={message.id}
@@ -911,7 +907,7 @@ export function ChatPage() {
                         <div className="flex gap-3">
                           <div
                             aria-hidden
-                            className="mt-0.5 flex h-7 w-7 shrink-0 select-none items-center justify-center rounded-full bg-foreground text-[13px] font-semibold text-background"
+                            className="mt-0.5 flex h-8 w-8 shrink-0 select-none items-center justify-center rounded-full border border-border bg-light/[0.03] font-display text-[13px] font-medium text-foreground-2"
                           >
                             A
                           </div>
@@ -929,10 +925,9 @@ export function ChatPage() {
                               <MessageContent content={streamingContent} />
                             ) : (
                               !streamingReasoning && (
-                                <p className="flex items-center gap-1 py-1 text-sm text-muted-foreground">
-                                  <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-muted-foreground [animation-delay:-0.3s]" />
-                                  <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-muted-foreground [animation-delay:-0.15s]" />
-                                  <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-muted-foreground" />
+                                <p className="flex items-center gap-2 py-1.5 text-sm text-muted-foreground">
+                                  <span aria-hidden className="breathe h-2 w-2 rounded-full bg-signal" />
+                                  Working on it
                                 </p>
                               )
                             )}
@@ -952,7 +947,7 @@ export function ChatPage() {
                 <Button
                   variant="outline"
                   size="icon"
-                  className="absolute inset-x-0 bottom-3 mx-auto h-8 w-8 rounded-full bg-surface shadow-md"
+                  className="glass absolute inset-x-0 bottom-3 mx-auto h-9 w-9 border-transparent"
                   aria-label="Jump to latest"
                   onClick={scrollToBottom}
                 >

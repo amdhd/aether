@@ -16,7 +16,7 @@ function Fields({ values }: { values: Record<string, unknown> }) {
   return (
     <dl className="space-y-1 break-all">
       {Object.entries(values).map(([key, value]) => (
-        <div key={key}><dt className="font-medium">{key.replaceAll('_', ' ')}</dt><dd className="whitespace-pre-wrap">{value == null || value === '' ? '—' : typeof value === 'string' ? value : JSON.stringify(value)}</dd></div>
+        <div key={key}><dt className="text-muted-foreground">{key.replaceAll('_', ' ')}</dt><dd className="whitespace-pre-wrap">{value == null || value === '' ? '—' : typeof value === 'string' ? value : JSON.stringify(value)}</dd></div>
       ))}
     </dl>
   )
@@ -37,16 +37,16 @@ export function ActionApproval({ conversationId, message }: { conversationId: nu
   const target = Object.fromEntries(Object.entries(proposal.target ?? {}).filter(([key]) => key !== 'kind'))
   const hasTarget = proposal.target != null
   return (
-    <div className="w-full space-y-2 rounded border border-border p-3">
+    <div className="w-full space-y-3 rounded-inner border border-signal/35 bg-signal/[0.06] p-3.5">
       <p>Review this action before approving. {expired ? 'Approval expired.' : 'Approval expires in 10 minutes from creation.'}</p>
       {hasTarget && (
         <section aria-label="Affected item" className="space-y-1">
-          <h3 className="text-xs font-semibold uppercase text-muted-foreground">Affects</h3>
+          <h3 className="font-sans text-xs font-medium tracking-normal text-muted-foreground">Affects</h3>
           <Fields values={target} />
         </section>
       )}
       <section aria-label="Requested change" className="space-y-1">
-        {hasTarget && <h3 className="text-xs font-semibold uppercase text-muted-foreground">Requested change</h3>}
+        {hasTarget && <h3 className="font-sans text-xs font-medium tracking-normal text-muted-foreground">Requested change</h3>}
         <Fields values={proposal.arguments ?? {}} />
       </section>
       <div className="flex gap-2">

@@ -17,7 +17,7 @@ export function UserAvatar({ name, className }: UserAvatarProps) {
     <div
       aria-hidden
       className={cn(
-        'flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-brand-100 text-sm font-semibold text-brand-700 dark:bg-brand-500/20 dark:text-brand-200',
+        'flex h-9 w-9 shrink-0 items-center justify-center rounded-full border border-border bg-light/[0.04] text-sm font-medium text-foreground-2',
         className,
       )}
     >

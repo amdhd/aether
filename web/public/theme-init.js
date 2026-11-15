@@ -1,4 +1,4 @@
-// Apply the persisted (or system) theme before paint to avoid a flash.
+// Apply the persisted (or default dark) theme before paint to avoid a flash.
 //
 // This lives in its own file rather than inline in index.html so the CSP can say
 // `script-src 'self'` with no 'unsafe-inline' and no hash. A hash would work too,
@@ -7,9 +7,8 @@
 ;(function () {
   try {
     var stored = localStorage.getItem('aether-theme')
-    var dark = stored
-      ? stored === 'dark'
-      : window.matchMedia('(prefers-color-scheme: dark)').matches
+    // Dark (Dusk's slate) unless the user has picked light.
+    var dark = stored !== 'light'
     if (dark) document.documentElement.classList.add('dark')
   } catch (e) {}
 })()

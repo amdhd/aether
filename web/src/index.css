@@ -1,56 +1,60 @@
+/* Hallmark · shape: app screen · genre: modern-minimal · theme: Dusk (by request)
+ * nav: the project's own sidebar, slate on slate-2 · signature: the transcript, smoked-glass composer under it · states: loading, empty, error, streaming, full · dusk: fog/periwinkle-apricot/glass
+ * waive 29: smoked glass is Dusk's named product surface (themes/dusk.md § Surfaces), used once per screen on slate, never glass on glass
+ * axes: dark/grotesk-sans/cool · posture: committed · contrast: pass · v2.0.0 */
+/* Hallmark · pre-emit critique: P4 H4 E4 S3 R4 V4 · weakest: S, no photograph on an app screen (flow.md § App screens), so glass sits on plain slate and carries the lit edge alone */
 @import "tailwindcss";
+@import "@fontsource-variable/wix-madefor-display";
+@import "@fontsource-variable/wix-madefor-text";
+@import "./tokens.css";
 
-/* Class-based dark mode: toggled by adding `.dark` to <html>. */
+/* Class-based dark mode: toggled by adding `.dark` to <html>. Dark is Dusk's
+   slate; light is its day side, bone wells under the same periwinkle. */
 @custom-variant dark (&:where(.dark, .dark *));
 
 @theme {
-  --font-sans: "Inter", ui-sans-serif, system-ui, -apple-system, sans-serif;
+  --font-sans: "Wix Madefor Text Variable", ui-sans-serif, system-ui, sans-serif;
+  --font-display: "Wix Madefor Display Variable", ui-sans-serif, system-ui, sans-serif;
 
-  /* Monochrome accent scale (neutral zinc). Kept under the `brand-*` names so
-     existing utilities resolve without churn; the app now reads black/white
-     rather than indigo. */
-  --color-brand-50: #f4f4f5;
-  --color-brand-100: #e4e4e7;
-  --color-brand-200: #d4d4d8;
-  --color-brand-300: #d4d4d8;
-  --color-brand-400: #a1a1aa;
-  --color-brand-500: #71717a;
-  --color-brand-600: #18181b;
-  --color-brand-700: #18181b;
-  --color-brand-800: #27272a;
-  --color-brand-900: #18181b;
+  /* Kept under the `brand-*` names so existing utilities resolve without
+     churn; they now walk Dusk's periwinkle, light to deep. */
+  --color-brand-50: oklch(95% 0.02 274);
+  --color-brand-100: oklch(91% 0.038 274);
+  --color-brand-200: oklch(84% 0.085 274);
+  --color-brand-300: oklch(80% 0.1 274);
+  --color-brand-400: oklch(77% 0.1 274);
+  --color-brand-500: oklch(70% 0.11 274);
+  --color-brand-600: oklch(52% 0.13 274);
+  --color-brand-700: oklch(44% 0.13 274);
+  --color-brand-800: oklch(34% 0.1 274);
+  --color-brand-900: oklch(24% 0.06 274);
 
-  --radius-card: 0.75rem;
+  --radius-card: 18px;
+  --radius-inner: 10px;
+
+  --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
 }
 
-/* Semantic surface/text tokens. The `inline` indirection lets the same
-   utilities (bg-surface, text-foreground, …) resolve to different raw values
-   in light vs dark mode via the variables redefined on :root / .dark below. */
+/* Semantic tokens. The `inline` indirection lets the same utilities resolve
+   to different raw values in light vs dark via the variables below. */
 @theme inline {
   --color-background: var(--background);
   --color-surface: var(--surface);
   --color-surface-muted: var(--surface-muted);
   --color-foreground: var(--foreground);
+  --color-foreground-2: var(--foreground-2);
   --color-muted-foreground: var(--muted-foreground);
   --color-border: var(--border);
-}
-
-:root {
-  --background: #fafafa; /* zinc-50 */
-  --surface: #ffffff;
-  --surface-muted: #f4f4f5; /* zinc-100 */
-  --foreground: #18181b; /* zinc-900 */
-  --muted-foreground: #71717a; /* zinc-500 */
-  --border: #e4e4e7; /* zinc-200 */
-}
-
-.dark {
-  --background: #161616; /* neutral near-black */
-  --surface: #1f1f1f;
-  --surface-muted: #2a2a2a;
-  --foreground: #f4f4f5; /* zinc-100 */
-  --muted-foreground: #a1a1aa; /* zinc-400 */
-  --border: #2e2e2e;
+  /* Two signals, two jobs: periwinkle is done, on and selected; apricot is
+     open, waiting or running. Neither is ever a large fill. */
+  --color-accent: var(--accent);
+  --color-accent-hi: var(--accent-hi);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-accent-text: var(--accent-text);
+  --color-signal: var(--signal);
+  --color-danger: var(--danger);
+  --color-light: var(--light);
+  --color-shade: var(--shade);
 }
 
 @layer base {
@@ -60,8 +64,33 @@
     height: 100%;
   }
 
+  html,
+  body {
+    overflow-x: clip;
+  }
+
+  html {
+    scrollbar-color: var(--muted-foreground) var(--background);
+  }
+
   body {
     @apply bg-background text-foreground font-sans antialiased;
+    caret-color: var(--accent);
+  }
+
+  h1,
+  h2,
+  h3 {
+    font-family: var(--font-display);
+    font-weight: 500;
+    letter-spacing: -0.022em;
+    overflow-wrap: break-word;
+    min-width: 0;
+    text-wrap: balance;
+  }
+
+  ::selection {
+    background: color-mix(in oklab, var(--accent) 28%, transparent);
   }
 
   * {
@@ -69,8 +98,51 @@
   }
 }
 
+@layer components {
+  /* The product's surface: smoked glass with its lit edge, never on glass. */
+  .glass {
+    background: var(--glass);
+    -webkit-backdrop-filter: blur(22px) saturate(1.35);
+    backdrop-filter: blur(22px) saturate(1.35);
+    box-shadow: var(--glass-hi), var(--shadow-card);
+  }
+
+  /* A lit top edge for flat slate panels (cards, the sidebar's account well). */
+  .lit-edge {
+    box-shadow: var(--glass-hi);
+  }
+
+  /* An in-progress mark that breathes; still under reduced motion. */
+  .breathe {
+    animation: breathe 1.6s var(--ease-out) infinite;
+  }
+}
+
 @layer utilities {
   .focus-ring {
-    @apply outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-2 focus-visible:ring-offset-background;
+    @apply outline-none focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-offset-2 focus-visible:ring-offset-background;
+  }
+}
+
+@keyframes breathe {
+  0%,
+  100% {
+    opacity: 0.35;
+    transform: scale(0.85);
+  }
+  50% {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
   }
 }

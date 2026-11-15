@@ -88,13 +88,15 @@ export function ConversationList({ limit, onSelect }: ConversationListProps) {
           <div
             key={c.id}
             className={cn(
-              'group flex items-center gap-1 rounded-md transition-colors',
-              c.id === activeId ? 'bg-surface-muted' : 'hover:bg-surface-muted/60',
+              'group relative flex items-center gap-1 rounded-full transition-colors duration-150',
+              c.id === activeId
+                ? 'bg-light/[0.05] before:absolute before:left-0 before:top-1/2 before:h-1.5 before:w-1.5 before:-translate-x-[9px] before:-translate-y-1/2 before:rounded-full before:bg-accent'
+                : 'hover:bg-light/[0.04]',
             )}
           >
             <button
               className={cn(
-                'min-w-0 flex-1 truncate rounded-md px-3 py-1.5 text-left text-sm focus-ring',
+                'min-w-0 flex-1 truncate rounded-full px-3 py-1.5 text-left text-sm focus-ring',
                 c.id === activeId ? 'font-medium text-foreground' : 'text-muted-foreground',
               )}
               onClick={() => {
@@ -109,10 +111,10 @@ export function ConversationList({ limit, onSelect }: ConversationListProps) {
               // Revealed on hover on pointer devices, but a touch screen has no
               // hover to reveal it with — so below `sm`, where the list is only
               // ever reached by touch, it simply stays visible.
-              className="mr-1 shrink-0 rounded p-1 focus-ring sm:opacity-0 sm:group-hover:opacity-100"
+              className="mr-1 shrink-0 rounded-full p-1 focus-ring sm:opacity-0 sm:group-hover:opacity-100 sm:focus-visible:opacity-100"
               onClick={() => setDeletingId(c.id)}
             >
-              <Trash2 className="h-3.5 w-3.5 text-muted-foreground hover:text-red-600" />
+              <Trash2 className="h-3.5 w-3.5 text-muted-foreground hover:text-danger" />
             </button>
           </div>
         ))
@@ -121,7 +123,7 @@ export function ConversationList({ limit, onSelect }: ConversationListProps) {
       {!isLoading && hasMore && (
         <button
           type="button"
-          className="w-full rounded-md px-3 py-1.5 text-left text-xs font-medium text-muted-foreground transition-colors hover:text-foreground focus-ring"
+          className="w-full rounded-full px-3 py-1.5 text-left text-xs font-medium text-muted-foreground transition-colors hover:text-foreground focus-ring"
           onClick={() => setShowAll((prev) => !prev)}
         >
           {showAll ? 'Show less' : `Show all (${allConversations.length})`}

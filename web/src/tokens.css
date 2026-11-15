@@ -1,0 +1,53 @@
+/* Dusk tokens (Hallmark theme: dusk), both sides. Every colour the app
+   draws resolves through these; index.css maps them onto Tailwind. */
+
+/* Day: bone wells, white cards, slate ink. */
+:root {
+  color-scheme: light;
+  --background: oklch(95.5% 0.008 75);
+  --surface: oklch(99.5% 0.003 75);
+  --surface-muted: oklch(92% 0.01 75);
+  --foreground: oklch(21% 0.016 268);
+  --foreground-2: oklch(32% 0.018 266);
+  --muted-foreground: oklch(47% 0.016 265);
+  --border: oklch(87.5% 0.009 75);
+  --accent: oklch(77% 0.1 274);
+  --accent-hi: oklch(84% 0.085 274);
+  --accent-foreground: oklch(19% 0.035 274);
+  --accent-text: oklch(44% 0.13 274);
+  --signal: oklch(62% 0.13 55);
+  --danger: oklch(52% 0.17 27);
+  --light: oklch(21% 0.016 268);
+  --glass: oklch(99.5% 0.003 75 / 0.86);
+  --glass-hi: inset 0 0 0 1px oklch(87.5% 0.009 75);
+  --shadow-card: 0 1px 2px oklch(21% 0.016 268 / 0.04), 0 24px 48px -28px oklch(21% 0.016 268 / 0.22);
+}
+
+/* Dusk: slate paper, smoked glass with a lit top edge. */
+:root.dark {
+  color-scheme: dark;
+  --background: oklch(17.5% 0.014 268);
+  --surface: oklch(21% 0.016 268);
+  --surface-muted: oklch(25% 0.017 268);
+  --foreground: oklch(96% 0.006 75);
+  --foreground-2: oklch(85% 0.01 262);
+  --muted-foreground: oklch(70% 0.016 262);
+  --border: oklch(30% 0.016 266);
+  --accent: oklch(77% 0.1 274);
+  --accent-hi: oklch(84% 0.085 274);
+  --accent-foreground: oklch(19% 0.035 274);
+  --accent-text: oklch(80% 0.1 274);
+  --signal: oklch(83% 0.095 62);
+  --danger: oklch(72% 0.15 27);
+  --light: oklch(100% 0 0);
+  --glass: oklch(22% 0.018 268 / 0.58);
+  --glass-hi: inset 0 1px 0 oklch(100% 0 0 / 0.1), inset 0 0 0 1px oklch(100% 0 0 / 0.06);
+  --shadow-card: 0 1px 0 oklch(100% 0 0 / 0.06) inset, 0 40px 80px -32px oklch(8% 0.02 268 / 0.7);
+}
+
+/* Mode-free tokens shared by both sides. */
+:root {
+  --shade: oklch(10% 0.022 268);
+  --btn-edge: inset 0 1px 0 oklch(100% 0 0 / 0.35);
+  --btn-ring: 0 0 0 4px oklch(77% 0.1 274 / 0.22);
+}

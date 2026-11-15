@@ -40,8 +40,8 @@ export function AppShell() {
 
   return (
     <div className="flex h-screen overflow-hidden">
-      <aside className="hidden w-60 shrink-0 flex-col overflow-y-auto border-r border-border bg-surface p-4 sm:flex">
-        <div className="mb-6 px-2 text-xl font-bold text-brand-700 dark:text-brand-300">Aether</div>
+      <aside className="hidden w-64 shrink-0 flex-col overflow-y-auto border-r border-border bg-surface px-3 py-5 sm:flex">
+        <div className="mb-7 px-3 font-display text-xl font-medium tracking-[-0.022em] text-foreground">Aether</div>
         <nav className="flex flex-1 flex-col gap-1" aria-label="Primary">
           {navItems.map(({ to, label, icon: Icon, end }) => (
             <div key={to}>
@@ -50,10 +50,10 @@ export function AppShell() {
                 end={end}
                 className={({ isActive }) =>
                   cn(
-                    'flex items-center gap-3 rounded-md px-3 py-2 text-sm font-medium transition-colors focus-ring',
+                    'group/nav flex items-center gap-3 rounded-full px-3 py-2 text-sm font-medium transition-colors duration-150 focus-ring',
                     isActive
-                      ? 'bg-brand-50 text-brand-700 dark:bg-brand-500/15 dark:text-brand-200'
-                      : 'text-muted-foreground hover:bg-surface-muted hover:text-foreground',
+                      ? 'bg-light/[0.06] text-foreground lit-edge [&>svg]:text-accent-text'
+                      : 'text-muted-foreground hover:bg-light/[0.04] hover:text-foreground',
                   )
                 }
               >
@@ -64,7 +64,7 @@ export function AppShell() {
             </div>
           ))}
         </nav>
-        <div className="mt-auto border-t border-border pt-4">
+        <div className="mt-auto rounded-card bg-light/[0.03] p-3 lit-edge">
           <div className="mb-3 flex items-center gap-3 px-1">
             {user && (
               <>
@@ -85,7 +85,7 @@ export function AppShell() {
 
       <div className="flex min-w-0 flex-1 flex-col overflow-hidden">
         <header className="flex shrink-0 items-center justify-between border-b border-border bg-surface px-4 py-3 sm:hidden">
-          <span className="text-lg font-bold text-brand-700 dark:text-brand-300">Aether</span>
+          <span className="font-display text-lg font-medium tracking-[-0.022em]">Aether</span>
           <div className="flex items-center gap-2">
             <ThemeToggle />
             <Button variant="outline" size="sm" onClick={handleLogout}>
@@ -100,7 +100,7 @@ export function AppShell() {
         </main>
 
         <nav
-          className="fixed inset-x-0 bottom-0 z-40 grid grid-cols-6 border-t border-border bg-surface pb-[env(safe-area-inset-bottom)] sm:hidden"
+          className="glass fixed inset-x-0 bottom-0 z-40 grid grid-cols-6 border-t border-border pb-[env(safe-area-inset-bottom)] sm:hidden"
           aria-label="Primary"
         >
           {navItems.map(({ to, label, icon: Icon, end }) => (
@@ -112,7 +112,7 @@ export function AppShell() {
                 cn(
                   'flex flex-col items-center justify-center gap-0.5 py-2 text-[11px] font-medium transition-colors focus-ring',
                   isActive
-                    ? 'text-brand-700 dark:text-brand-300'
+                    ? 'text-accent-text'
                     : 'text-muted-foreground hover:text-foreground',
                 )
               }

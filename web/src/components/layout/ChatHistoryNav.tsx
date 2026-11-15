@@ -17,7 +17,7 @@ export function ChatHistoryNav() {
         type="button"
         aria-expanded={open}
         onClick={() => setOpen((prev) => !prev)}
-        className="flex w-full items-center gap-1.5 rounded-md px-3 py-1.5 text-xs font-medium text-muted-foreground transition-colors hover:text-foreground focus-ring"
+        className="flex w-full items-center gap-1.5 rounded-full px-3 py-1.5 text-xs font-medium text-muted-foreground transition-colors hover:text-foreground focus-ring"
       >
         <ChevronDown className={cn('h-3.5 w-3.5 transition-transform', !open && '-rotate-90')} />
         Recent chats

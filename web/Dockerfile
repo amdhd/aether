@@ -36,8 +36,18 @@ FROM nginxinc/nginx-unprivileged:1.30.6-alpine@sha256:f5116ed4606f3eb015dd4a8e28
 # was built (musl, zlib, expat, … — the same reason the API image runs
 # `apt-get upgrade`), so the Trivy gate tracks upstream fixes rather than the
 # age of the base tag.
+#
+# nginx itself is the exception: the base image installs it without an entry in
+# apk's world file, and its dynamic modules are pinned to the exact nginx
+# version, so `apk upgrade` silently skips the whole set and the image keeps the
+# nginx it shipped with. That fails the Trivy gate whenever Alpine publishes a
+# fix before nginx-unprivileged republishes. The modules are unused here (no
+# load_module; this only serves static files), so remove them and upgrade nginx
+# by name. Drop this once the base tag ships the fixed nginx.
 USER root
 RUN apk upgrade --no-cache \
+    && apk del --no-cache nginx-module-geoip nginx-module-image-filter nginx-module-njs nginx-module-xslt \
+    && apk add --no-cache --upgrade nginx \
     && printf 'server {\n\
     listen 8080;\n\
     server_name _;\n\

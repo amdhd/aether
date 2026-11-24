@@ -3,12 +3,12 @@ uvicorn[standard]==0.54.0
 # OpenTelemetry SQLAlchemy instrumentation currently requires SQLAlchemy < 2.1.
 sqlalchemy==2.0.54
 asyncpg==0.32.0
-alembic==1.20.0
-pydantic==2.14.1
+alembic==1.20.1
+pydantic==2.14.3
 pydantic-settings==2.15.0
 bcrypt==5.0.0
 PyJWT[crypto]==2.15.1
-python-multipart==0.0.32
+python-multipart==0.0.34
 httpx==0.28.1
 # Transactional email (password reset, address verification) over plain SMTP, so
 # any provider works and the ECS task role needs no AWS permissions. Unused

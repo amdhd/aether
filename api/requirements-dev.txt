@@ -368,9 +368,9 @@ email-validator==2.3.0 \
     --hash=sha256:80f13f623413e6b197ae73bb10bf4eb0908faf509ad8362c5edeb0be7fd450b4 \
     --hash=sha256:9fc05c37f2f6cf439ff414f8fc46d917929974a82244c20eb10231ba60c54426
     # via -r requirements.in
-fakeredis==2.39.0 \
-    --hash=sha256:acd1450575259634db2942d5bae93e383aac32bb9968aab29fe7b0c2ab880bb8 \
-    --hash=sha256:e89c3410f290330042638ff5cca3e22788fa267dcaf28a64b4f483e14577208d
+fakeredis==2.40.0 \
+    --hash=sha256:16eb05a3e97c37a033c73d1da7e885eb2aa47ba7604cc377144339efa2780a02 \
+    --hash=sha256:b155ef2442134372eb1cc5664cf5638ccbe0a6dde9d1942153708e2782f315c9
     # via -r requirements-dev.in
 fastapi==0.143.0 \
     --hash=sha256:1acffe48206a80917cf7dac21992b5c44b25384e8902bf745c1fd9dabcf6c51f \
